@@ -68,7 +68,7 @@ type ReportHistoryItem = {
   };
   createdAt: string;
 };
-const API_BASE = 'https://business-ai-platform-backend.vercel.app';
+const API_BASE = 'https://backend-six-pied-39.vercel.app';
 const fallbackInsights: InsightResponse = {
   metrics: [
     { label: 'Automations live', value: 0, trend: '0%' },
