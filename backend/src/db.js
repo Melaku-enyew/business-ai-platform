@@ -716,7 +716,7 @@ async function loadDevStore() {
 
 async function saveDevStore(store) {
   await mkdir(dirname(devStoreFile), { recursive: true });
-  await writeFile(devStoreFile, JSON.stringify(store, null, 2));
+  // await writeFile(devStoreFile, JSON.stringify(store, null, 2));
 }
 
 function rowToSession(row) {
