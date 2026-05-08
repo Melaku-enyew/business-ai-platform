@@ -1,0 +1,147 @@
+[
+{
+    "id":  "d56f77d9-cf5a-431f-bfa3-693934967ca7",
+    "fileName":  "sales-data.csv",
+    "uploadedAt":  "2026-05-08T17:02:59.622Z",
+    "rows":  6,
+    "columns":  4,
+    "headers":  [
+                    "Month",
+                    "Revenue",
+                    "Customers",
+                    "Expenses"
+                ],
+    "preview":  [
+                    {
+                        "Month":  "January",
+                        "Revenue":  "12000",
+                        "Customers":  "120",
+                        "Expenses":  "7000"
+                    },
+                    {
+                        "Month":  "February",
+                        "Revenue":  "15000",
+                        "Customers":  "140",
+                        "Expenses":  "8500"
+                    },
+                    {
+                        "Month":  "March",
+                        "Revenue":  "18000",
+                        "Customers":  "165",
+                        "Expenses":  "9200"
+                    },
+                    {
+                        "Month":  "April",
+                        "Revenue":  "17000",
+                        "Customers":  "158",
+                        "Expenses":  "8800"
+                    },
+                    {
+                        "Month":  "May",
+                        "Revenue":  "21000",
+                        "Customers":  "190",
+                        "Expenses":  "10500"
+                    },
+                    {
+                        "Month":  "June",
+                        "Revenue":  "25000",
+                        "Customers":  "230",
+                        "Expenses":  "12000"
+                    }
+                ],
+    "records":  [
+                    {
+                        "Month":  "January",
+                        "Revenue":  "12000",
+                        "Customers":  "120",
+                        "Expenses":  "7000"
+                    },
+                    {
+                        "Month":  "February",
+                        "Revenue":  "15000",
+                        "Customers":  "140",
+                        "Expenses":  "8500"
+                    },
+                    {
+                        "Month":  "March",
+                        "Revenue":  "18000",
+                        "Customers":  "165",
+                        "Expenses":  "9200"
+                    },
+                    {
+                        "Month":  "April",
+                        "Revenue":  "17000",
+                        "Customers":  "158",
+                        "Expenses":  "8800"
+                    },
+                    {
+                        "Month":  "May",
+                        "Revenue":  "21000",
+                        "Customers":  "190",
+                        "Expenses":  "10500"
+                    },
+                    {
+                        "Month":  "June",
+                        "Revenue":  "25000",
+                        "Customers":  "230",
+                        "Expenses":  "12000"
+                    }
+                ],
+    "chartColumn":  "Revenue",
+    "labelColumn":  "Month",
+    "chart":  [
+                  {
+                      "label":  "January",
+                      "value":  12000
+                  },
+                  {
+                      "label":  "February",
+                      "value":  15000
+                  },
+                  {
+                      "label":  "March",
+                      "value":  18000
+                  },
+                  {
+                      "label":  "April",
+                      "value":  17000
+                  },
+                  {
+                      "label":  "May",
+                      "value":  21000
+                  },
+                  {
+                      "label":  "June",
+                      "value":  25000
+                  }
+              ],
+    "numericSummary":  [
+                           {
+                               "column":  "Revenue",
+                               "total":  108000,
+                               "average":  18000,
+                               "max":  25000,
+                               "min":  12000
+                           },
+                           {
+                               "column":  "Customers",
+                               "total":  1003,
+                               "average":  167.16666666666666,
+                               "max":  230,
+                               "min":  120
+                           },
+                           {
+                               "column":  "Expenses",
+                               "total":  56000,
+                               "average":  9333.333333333334,
+                               "max":  12000,
+                               "min":  7000
+                           }
+                       ],
+    "insights":  [
+                     "The file contains 6 rows across 4 columns.",
+                     "3 columns look numeric and chart-ready.",
+                     "This dataset is compact enough for quick review and cleanup."
+                 ]
+}
+]

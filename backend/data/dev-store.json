@@ -1,0 +1,1528 @@
+{
+  "users": [
+    {
+      "id": "79ceccae-7fd2-45d3-86a3-b05a2402bc7b",
+      "name": "Workspace Analyst",
+      "email": "analyst+c618e7c5@businessai.com",
+      "role": "user",
+      "passwordHash": "scrypt:AxGISCfLfoEqlI8PjVigZw:3BITn9Myszq1rRxnadNWJ2J97k87wTCDuXN-kskS9bIhP-vQi5StCfXnw6tJJWyxMKMASz1yvQSq2MdfveEPmg",
+      "createdAt": "2026-05-08T18:53:40.800Z"
+    },
+    {
+      "id": "faa8cba5-a1b5-44c8-90c1-5aaba20bed7e",
+      "name": "Workspace Analyst",
+      "email": "analyst+b24758ae@businessai.com",
+      "role": "user",
+      "passwordHash": "scrypt:F11FGvxl4Kobc0WfWpPp6w:_kuihDGqCS-3rFhPBKpvTJf9ktp4QZmPOrccSwSp2tjj9tWZd9Ne4JOOpQVjaeoKPuxMNvB3zdw2Q7ivKnD38A",
+      "createdAt": "2026-05-08T18:52:47.698Z"
+    },
+    {
+      "id": "demo-admin-user",
+      "name": "Demo Admin",
+      "email": "admin@businessai.com",
+      "role": "admin",
+      "passwordHash": "scrypt:9-3Siyt7Xc9oYSISOswjTg:8Y_J0zeR70WcRoc2AItKEStZu3CvYtWKbaJqfxhXJQYydkQdD1RVUJFdE_tEn477YGqmm6bCWM3r0b8zUaHuNw",
+      "createdAt": "2026-05-08T18:52:47.598Z"
+    },
+    {
+      "id": "684cf586-6055-4981-a90a-19f8dd485867",
+      "name": "Melaku Enyew",
+      "email": "menyew41@gmail.com",
+      "passwordHash": "scrypt:YpG5IhG5F0R5OApVQOSJcg:73sl8eEB2taXEfnjs7qoPuI6VUKBRkdy4JIa2v3uwHRZC8N1x4ejeO6MR18l4JzkiCB5UXw4I6yJ8k0ly55Vaw",
+      "createdAt": "2026-05-08T18:46:36.103Z"
+    }
+  ],
+  "sessions": [
+    {
+      "id": "8c10d7a6-cd49-453a-919a-8e8400a84e6e",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:59:14.420Z",
+      "expiresAt": "2026-05-09T18:59:14.418Z",
+      "revokedAt": null
+    },
+    {
+      "id": "08a429df-29ad-4263-b436-d958f4d64b50",
+      "userId": "684cf586-6055-4981-a90a-19f8dd485867",
+      "createdAt": "2026-05-08T18:58:16.465Z",
+      "expiresAt": "2026-05-09T18:58:16.464Z",
+      "revokedAt": null
+    },
+    {
+      "id": "5895ae50-fcb0-4863-8f9c-c5465003bef9",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:57:48.362Z",
+      "expiresAt": "2026-05-09T18:57:48.360Z",
+      "revokedAt": null
+    },
+    {
+      "id": "8b8bab2d-67f0-4bdf-895b-990fe9cf3022",
+      "userId": "684cf586-6055-4981-a90a-19f8dd485867",
+      "createdAt": "2026-05-08T18:57:06.886Z",
+      "expiresAt": "2026-05-09T18:57:06.885Z",
+      "revokedAt": null
+    },
+    {
+      "id": "a8ee437b-cf8f-49a8-a892-aae58d61a5b2",
+      "userId": "684cf586-6055-4981-a90a-19f8dd485867",
+      "createdAt": "2026-05-08T18:57:02.899Z",
+      "expiresAt": "2026-05-09T18:57:02.898Z",
+      "revokedAt": null
+    },
+    {
+      "id": "f52144df-1c2a-4009-a581-f8fdb39bd2dc",
+      "userId": "79ceccae-7fd2-45d3-86a3-b05a2402bc7b",
+      "createdAt": "2026-05-08T18:53:40.811Z",
+      "expiresAt": "2026-05-09T18:53:40.801Z",
+      "revokedAt": null
+    },
+    {
+      "id": "d3760e5b-cd3e-426e-a375-e85226d132ff",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:53:40.736Z",
+      "expiresAt": "2026-05-09T18:53:40.736Z",
+      "revokedAt": null
+    },
+    {
+      "id": "31d8786d-127c-4087-8359-7016cd22503b",
+      "userId": "faa8cba5-a1b5-44c8-90c1-5aaba20bed7e",
+      "createdAt": "2026-05-08T18:52:47.710Z",
+      "expiresAt": "2026-05-09T18:52:47.700Z",
+      "revokedAt": null
+    },
+    {
+      "id": "9e50c6f2-3dc5-4525-b76e-0fe1972af3e5",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:52:47.614Z",
+      "expiresAt": "2026-05-09T18:52:47.600Z",
+      "revokedAt": null
+    },
+    {
+      "id": "75953013-51ff-45d1-92fa-b2b98a710204",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:48:20.290Z",
+      "expiresAt": "2026-05-09T18:48:20.290Z",
+      "revokedAt": null
+    },
+    {
+      "id": "57125657-7b95-4b3d-85a7-90f57c6fc060",
+      "userId": "684cf586-6055-4981-a90a-19f8dd485867",
+      "createdAt": "2026-05-08T18:46:36.106Z",
+      "expiresAt": "2026-05-09T18:46:36.105Z",
+      "revokedAt": null
+    },
+    {
+      "id": "a98f853f-2fb7-467c-b245-cab5675e8beb",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:44:57.273Z",
+      "expiresAt": "2026-05-09T18:44:57.272Z",
+      "revokedAt": null
+    },
+    {
+      "id": "0818bc13-bba2-403c-9798-001f844df446",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:43:47.890Z",
+      "expiresAt": "2026-05-09T18:43:47.889Z",
+      "revokedAt": null
+    },
+    {
+      "id": "d0b8445c-51b9-4aa1-a9b9-dddcf40fbecf",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:36:52.947Z",
+      "expiresAt": "2026-05-09T18:36:52.946Z",
+      "revokedAt": null
+    },
+    {
+      "id": "228453a1-5316-436b-a5ff-fd46636bd5af",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:34:38.984Z",
+      "expiresAt": "2026-05-09T18:34:38.983Z",
+      "revokedAt": null
+    },
+    {
+      "id": "f2a27881-9978-4735-a29c-b8f1f08c0bea",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:29:59.083Z",
+      "expiresAt": "2026-05-09T18:29:59.083Z",
+      "revokedAt": "2026-05-08T18:29:59.112Z"
+    },
+    {
+      "id": "26f4fc8b-6164-4da0-a754-cfd646705a0e",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:18:36.435Z",
+      "expiresAt": "2026-05-09T18:18:36.435Z",
+      "revokedAt": "2026-05-08T18:18:36.454Z"
+    },
+    {
+      "id": "36b4d760-c3dc-43f8-bfc9-fd6f916cfc3d",
+      "userId": "demo-admin-user",
+      "createdAt": "2026-05-08T18:17:30.873Z",
+      "expiresAt": "2026-05-09T18:17:30.873Z",
+      "revokedAt": "2026-05-08T18:17:30.893Z"
+    }
+  ],
+  "datasets": [
+    {
+      "id": "d56f77d9-cf5a-431f-bfa3-693934967ca7",
+      "fileName": "sales-data.csv",
+      "uploadedAt": "2026-05-08T17:02:59.622Z",
+      "rows": 6,
+      "columns": 4,
+      "headers": [
+        "Month",
+        "Revenue",
+        "Customers",
+        "Expenses"
+      ],
+      "preview": [
+        {
+          "Month": "January",
+          "Revenue": "12000",
+          "Customers": "120",
+          "Expenses": "7000"
+        },
+        {
+          "Month": "February",
+          "Revenue": "15000",
+          "Customers": "140",
+          "Expenses": "8500"
+        },
+        {
+          "Month": "March",
+          "Revenue": "18000",
+          "Customers": "165",
+          "Expenses": "9200"
+        },
+        {
+          "Month": "April",
+          "Revenue": "17000",
+          "Customers": "158",
+          "Expenses": "8800"
+        },
+        {
+          "Month": "May",
+          "Revenue": "21000",
+          "Customers": "190",
+          "Expenses": "10500"
+        },
+        {
+          "Month": "June",
+          "Revenue": "25000",
+          "Customers": "230",
+          "Expenses": "12000"
+        }
+      ],
+      "records": [
+        {
+          "Month": "January",
+          "Revenue": "12000",
+          "Customers": "120",
+          "Expenses": "7000"
+        },
+        {
+          "Month": "February",
+          "Revenue": "15000",
+          "Customers": "140",
+          "Expenses": "8500"
+        },
+        {
+          "Month": "March",
+          "Revenue": "18000",
+          "Customers": "165",
+          "Expenses": "9200"
+        },
+        {
+          "Month": "April",
+          "Revenue": "17000",
+          "Customers": "158",
+          "Expenses": "8800"
+        },
+        {
+          "Month": "May",
+          "Revenue": "21000",
+          "Customers": "190",
+          "Expenses": "10500"
+        },
+        {
+          "Month": "June",
+          "Revenue": "25000",
+          "Customers": "230",
+          "Expenses": "12000"
+        }
+      ],
+      "chartColumn": "Revenue",
+      "labelColumn": "Month",
+      "chart": [
+        {
+          "label": "January",
+          "value": 12000
+        },
+        {
+          "label": "February",
+          "value": 15000
+        },
+        {
+          "label": "March",
+          "value": 18000
+        },
+        {
+          "label": "April",
+          "value": 17000
+        },
+        {
+          "label": "May",
+          "value": 21000
+        },
+        {
+          "label": "June",
+          "value": 25000
+        }
+      ],
+      "numericSummary": [
+        {
+          "column": "Revenue",
+          "total": 108000,
+          "average": 18000,
+          "max": 25000,
+          "min": 12000
+        },
+        {
+          "column": "Customers",
+          "total": 1003,
+          "average": 167.16666666666666,
+          "max": 230,
+          "min": 120
+        },
+        {
+          "column": "Expenses",
+          "total": 56000,
+          "average": 9333.333333333334,
+          "max": 12000,
+          "min": 7000
+        }
+      ],
+      "insights": [
+        "The file contains 6 rows across 4 columns.",
+        "3 columns look numeric and chart-ready.",
+        "This dataset is compact enough for quick review and cleanup."
+      ],
+      "userId": "local-dev-user"
+    },
+    {
+      "id": "bdbd71aa-e470-4260-a647-c0e813e4f892",
+      "fileName": "role-test.csv",
+      "uploadedAt": "2026-05-08T18:53:40.876Z",
+      "rows": 2,
+      "columns": 2,
+      "headers": [
+        "Month",
+        "Revenue"
+      ],
+      "preview": [
+        {
+          "Month": "Jan",
+          "Revenue": "100"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "140"
+        }
+      ],
+      "records": [
+        {
+          "Month": "Jan",
+          "Revenue": "100"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "140"
+        }
+      ],
+      "userId": "79ceccae-7fd2-45d3-86a3-b05a2402bc7b",
+      "chartColumn": "Revenue",
+      "labelColumn": "Month",
+      "chart": [
+        {
+          "label": "Jan",
+          "value": 100
+        },
+        {
+          "label": "Feb",
+          "value": 140
+        }
+      ],
+      "numericSummary": [
+        {
+          "column": "Revenue",
+          "total": 240,
+          "average": 120,
+          "max": 140,
+          "min": 100,
+          "highest": {
+            "index": 1,
+            "label": "Feb",
+            "value": 140
+          },
+          "lowest": {
+            "index": 0,
+            "label": "Jan",
+            "value": 100
+          },
+          "first": {
+            "index": 0,
+            "label": "Jan",
+            "value": 100
+          },
+          "last": {
+            "index": 1,
+            "label": "Feb",
+            "value": 140
+          },
+          "change": 40,
+          "changePercent": 40
+        }
+      ],
+      "insights": [
+        "The file contains 2 rows across 2 columns.",
+        "1 column look numeric and chart-ready.",
+        "Revenue increased by 40 from Jan to Feb."
+      ]
+    },
+    {
+      "id": "431b7fc1-2fef-445e-b07e-3bcd3749b367",
+      "fileName": "role-test.csv",
+      "uploadedAt": "2026-05-08T18:52:47.775Z",
+      "rows": 2,
+      "columns": 2,
+      "headers": [
+        "Month",
+        "Revenue"
+      ],
+      "preview": [
+        {
+          "Month": "Jan",
+          "Revenue": "100"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "140"
+        }
+      ],
+      "records": [
+        {
+          "Month": "Jan",
+          "Revenue": "100"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "140"
+        }
+      ],
+      "userId": "faa8cba5-a1b5-44c8-90c1-5aaba20bed7e",
+      "chartColumn": "Revenue",
+      "labelColumn": "Month",
+      "chart": [
+        {
+          "label": "Jan",
+          "value": 100
+        },
+        {
+          "label": "Feb",
+          "value": 140
+        }
+      ],
+      "numericSummary": [
+        {
+          "column": "Revenue",
+          "total": 240,
+          "average": 120,
+          "max": 140,
+          "min": 100,
+          "highest": {
+            "index": 1,
+            "label": "Feb",
+            "value": 140
+          },
+          "lowest": {
+            "index": 0,
+            "label": "Jan",
+            "value": 100
+          },
+          "first": {
+            "index": 0,
+            "label": "Jan",
+            "value": 100
+          },
+          "last": {
+            "index": 1,
+            "label": "Feb",
+            "value": 140
+          },
+          "change": 40,
+          "changePercent": 40
+        }
+      ],
+      "insights": [
+        "The file contains 2 rows across 2 columns.",
+        "1 column look numeric and chart-ready.",
+        "Revenue increased by 40 from Jan to Feb."
+      ]
+    },
+    {
+      "id": "46a1681f-daed-409d-9d13-a684368d2e9b",
+      "fileName": "mvp-revenue.csv",
+      "uploadedAt": "2026-05-08T18:43:48.058Z",
+      "rows": 3,
+      "columns": 3,
+      "headers": [
+        "Month",
+        "Revenue",
+        "Cost"
+      ],
+      "preview": [
+        {
+          "Month": "Jan",
+          "Revenue": "1200",
+          "Cost": "700"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "1550",
+          "Cost": "800"
+        },
+        {
+          "Month": "Mar",
+          "Revenue": "1425",
+          "Cost": "780"
+        }
+      ],
+      "records": [
+        {
+          "Month": "Jan",
+          "Revenue": "1200",
+          "Cost": "700"
+        },
+        {
+          "Month": "Feb",
+          "Revenue": "1550",
+          "Cost": "800"
+        },
+        {
+          "Month": "Mar",
+          "Revenue": "1425",
+          "Cost": "780"
+        }
+      ],
+      "userId": "demo-admin-user",
+      "chartColumn": "Revenue",
+      "labelColumn": "Month",
+      "chart": [
+        {
+          "label": "Jan",
+          "value": 1200
+        },
+        {
+          "label": "Feb",
+          "value": 1550
+        },
+        {
+          "label": "Mar",
+          "value": 1425
+        }
+      ],
+      "numericSummary": [
+        {
+          "column": "Revenue",
+          "total": 4175,
+          "average": 1391.6666666666667,
+          "max": 1550,
+          "min": 1200,
+          "highest": {
+            "index": 1,
+            "label": "Feb",
+            "value": 1550
+          },
+          "lowest": {
+            "index": 0,
+            "label": "Jan",
+            "value": 1200
+          },
+          "first": {
+            "index": 0,
+            "label": "Jan",
+            "value": 1200
+          },
+          "last": {
+            "index": 2,
+            "label": "Mar",
+            "value": 1425
+          },
+          "change": 225,
+          "changePercent": 18.75
+        },
+        {
+          "column": "Cost",
+          "total": 2280,
+          "average": 760,
+          "max": 800,
+          "min": 700,
+          "highest": {
+            "index": 1,
+            "label": "Feb",
+            "value": 800
+          },
+          "lowest": {
+            "index": 0,
+            "label": "Jan",
+            "value": 700
+          },
+          "first": {
+            "index": 0,
+            "label": "Jan",
+            "value": 700
+          },
+          "last": {
+            "index": 2,
+            "label": "Mar",
+            "value": 780
+          },
+          "change": 80,
+          "changePercent": 11.428571428571429
+        }
+      ],
+      "insights": [
+        "The file contains 3 rows across 3 columns.",
+        "2 columns look numeric and chart-ready.",
+        "Revenue increased by 225 from Jan to Mar."
+      ]
+    },
+    {
+      "id": "7aff4da5-293a-429b-a1cb-035499eacd9c",
+      "fileName": "sales-data.csv",
+      "uploadedAt": "2026-05-08T18:37:44.955Z",
+      "rows": 6,
+      "columns": 4,
+      "headers": [
+        "Month",
+        "Revenue",
+        "Customers",
+        "Expenses"
+      ],
+      "preview": [
+        {
+          "Month": "January",
+          "Revenue": "12000",
+          "Customers": "120",
+          "Expenses": "7000"
+        },
+        {
+          "Month": "February",
+          "Revenue": "15000",
+          "Customers": "140",
+          "Expenses": "8500"
+        },
+        {
+          "Month": "March",
+          "Revenue": "18000",
+          "Customers": "165",
+          "Expenses": "9200"
+        },
+        {
+          "Month": "April",
+          "Revenue": "17000",
+          "Customers": "158",
+          "Expenses": "8800"
+        },
+        {
+          "Month": "May",
+          "Revenue": "21000",
+          "Customers": "190",
+          "Expenses": "10500"
+        },
+        {
+          "Month": "June",
+          "Revenue": "25000",
+          "Customers": "230",
+          "Expenses": "12000"
+        }
+      ],
+      "records": [
+        {
+          "Month": "January",
+          "Revenue": "12000",
+          "Customers": "120",
+          "Expenses": "7000"
+        },
+        {
+          "Month": "February",
+          "Revenue": "15000",
+          "Customers": "140",
+          "Expenses": "8500"
+        },
+        {
+          "Month": "March",
+          "Revenue": "18000",
+          "Customers": "165",
+          "Expenses": "9200"
+        },
+        {
+          "Month": "April",
+          "Revenue": "17000",
+          "Customers": "158",
+          "Expenses": "8800"
+        },
+        {
+          "Month": "May",
+          "Revenue": "21000",
+          "Customers": "190",
+          "Expenses": "10500"
+        },
+        {
+          "Month": "June",
+          "Revenue": "25000",
+          "Customers": "230",
+          "Expenses": "12000"
+        }
+      ],
+      "userId": "demo-admin-user",
+      "chartColumn": "Revenue",
+      "labelColumn": "Month",
+      "chart": [
+        {
+          "label": "January",
+          "value": 12000
+        },
+        {
+          "label": "February",
+          "value": 15000
+        },
+        {
+          "label": "March",
+          "value": 18000
+        },
+        {
+          "label": "April",
+          "value": 17000
+        },
+        {
+          "label": "May",
+          "value": 21000
+        },
+        {
+          "label": "June",
+          "value": 25000
+        }
+      ],
+      "numericSummary": [
+        {
+          "column": "Revenue",
+          "total": 108000,
+          "average": 18000,
+          "max": 25000,
+          "min": 12000,
+          "highest": {
+            "index": 5,
+            "label": "June",
+            "value": 25000
+          },
+          "lowest": {
+            "index": 0,
+            "label": "January",
+            "value": 12000
+          },
+          "first": {
+            "index": 0,
+            "label": "January",
+            "value": 12000
+          },
+          "last": {
+            "index": 5,
+            "label": "June",
+            "value": 25000
+          },
+          "change": 13000,
+          "changePercent": 108.33333333333333
+        },
+        {
+          "column": "Customers",
+          "total": 1003,
+          "average": 167.16666666666666,
+          "max": 230,
+          "min": 120,
+          "highest": {
+            "index": 5,
+            "label": "June",
+            "value": 230
+          },
+          "lowest": {
+            "index": 0,
+            "label": "January",
+            "value": 120
+          },
+          "first": {
+            "index": 0,
+            "label": "January",
+            "value": 120
+          },
+          "last": {
+            "index": 5,
+            "label": "June",
+            "value": 230
+          },
+          "change": 110,
+          "changePercent": 91.66666666666666
+        },
+        {
+          "column": "Expenses",
+          "total": 56000,
+          "average": 9333.333333333334,
+          "max": 12000,
+          "min": 7000,
+          "highest": {
+            "index": 5,
+            "label": "June",
+            "value": 12000
+          },
+          "lowest": {
+            "index": 0,
+            "label": "January",
+            "value": 7000
+          },
+          "first": {
+            "index": 0,
+            "label": "January",
+            "value": 7000
+          },
+          "last": {
+            "index": 5,
+            "label": "June",
+            "value": 12000
+          },
+          "change": 5000,
+          "changePercent": 71.42857142857143
+        }
+      ],
+      "insights": [
+        "The file contains 6 rows across 4 columns.",
+        "3 columns look numeric and chart-ready.",
+        "Revenue increased by 13,000 from January to June."
+      ]
+    }
+  ],
+  "dashboards": [
+    {
+      "createdAt": "2026-05-08T18:53:40.897Z",
+      "updatedAt": "2026-05-08T18:53:40.897Z",
+      "id": "62de3c00-d290-4683-be17-e7e21e1a28f0",
+      "userId": "79ceccae-7fd2-45d3-86a3-b05a2402bc7b",
+      "name": "Role test dashboard",
+      "datasetId": "bdbd71aa-e470-4260-a647-c0e813e4f892",
+      "chartType": "bar",
+      "config": {},
+      "snapshot": {
+        "dataset": {
+          "id": "bdbd71aa-e470-4260-a647-c0e813e4f892",
+          "fileName": "role-test.csv",
+          "uploadedAt": "2026-05-08T18:53:40.876Z",
+          "rows": 2,
+          "columns": 2,
+          "headers": [
+            "Month",
+            "Revenue"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "100"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "140"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 100
+            },
+            {
+              "label": "Feb",
+              "value": 140
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 240,
+              "average": 120,
+              "max": 140,
+              "min": 100,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "last": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "change": 40,
+              "changePercent": 40
+            }
+          ],
+          "insights": [
+            "The file contains 2 rows across 2 columns.",
+            "1 column look numeric and chart-ready.",
+            "Revenue increased by 40 from Jan to Feb."
+          ]
+        },
+        "chartType": "bar",
+        "savedAt": "2026-05-08T18:53:40.895Z",
+        "metrics": {
+          "rows": 2,
+          "columns": 2,
+          "chartColumn": "Revenue",
+          "labelColumn": "Month"
+        },
+        "chart": [
+          {
+            "label": "Jan",
+            "value": 100
+          },
+          {
+            "label": "Feb",
+            "value": 140
+          }
+        ],
+        "insights": [
+          "The file contains 2 rows across 2 columns.",
+          "1 column look numeric and chart-ready.",
+          "Revenue increased by 40 from Jan to Feb."
+        ],
+        "numericSummary": [
+          {
+            "column": "Revenue",
+            "total": 240,
+            "average": 120,
+            "max": 140,
+            "min": 100,
+            "highest": {
+              "index": 1,
+              "label": "Feb",
+              "value": 140
+            },
+            "lowest": {
+              "index": 0,
+              "label": "Jan",
+              "value": 100
+            },
+            "first": {
+              "index": 0,
+              "label": "Jan",
+              "value": 100
+            },
+            "last": {
+              "index": 1,
+              "label": "Feb",
+              "value": 140
+            },
+            "change": 40,
+            "changePercent": 40
+          }
+        ]
+      }
+    },
+    {
+      "createdAt": "2026-05-08T18:52:47.795Z",
+      "updatedAt": "2026-05-08T18:52:47.795Z",
+      "id": "695514bd-2d78-490c-a992-5968620a9bea",
+      "userId": "faa8cba5-a1b5-44c8-90c1-5aaba20bed7e",
+      "name": "Role test dashboard",
+      "datasetId": "431b7fc1-2fef-445e-b07e-3bcd3749b367",
+      "chartType": "bar",
+      "config": {},
+      "snapshot": {
+        "dataset": {
+          "id": "431b7fc1-2fef-445e-b07e-3bcd3749b367",
+          "fileName": "role-test.csv",
+          "uploadedAt": "2026-05-08T18:52:47.775Z",
+          "rows": 2,
+          "columns": 2,
+          "headers": [
+            "Month",
+            "Revenue"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "100"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "140"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 100
+            },
+            {
+              "label": "Feb",
+              "value": 140
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 240,
+              "average": 120,
+              "max": 140,
+              "min": 100,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "last": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "change": 40,
+              "changePercent": 40
+            }
+          ],
+          "insights": [
+            "The file contains 2 rows across 2 columns.",
+            "1 column look numeric and chart-ready.",
+            "Revenue increased by 40 from Jan to Feb."
+          ]
+        },
+        "chartType": "bar",
+        "savedAt": "2026-05-08T18:52:47.794Z",
+        "metrics": {
+          "rows": 2,
+          "columns": 2,
+          "chartColumn": "Revenue",
+          "labelColumn": "Month"
+        },
+        "chart": [
+          {
+            "label": "Jan",
+            "value": 100
+          },
+          {
+            "label": "Feb",
+            "value": 140
+          }
+        ],
+        "insights": [
+          "The file contains 2 rows across 2 columns.",
+          "1 column look numeric and chart-ready.",
+          "Revenue increased by 40 from Jan to Feb."
+        ],
+        "numericSummary": [
+          {
+            "column": "Revenue",
+            "total": 240,
+            "average": 120,
+            "max": 140,
+            "min": 100,
+            "highest": {
+              "index": 1,
+              "label": "Feb",
+              "value": 140
+            },
+            "lowest": {
+              "index": 0,
+              "label": "Jan",
+              "value": 100
+            },
+            "first": {
+              "index": 0,
+              "label": "Jan",
+              "value": 100
+            },
+            "last": {
+              "index": 1,
+              "label": "Feb",
+              "value": 140
+            },
+            "change": 40,
+            "changePercent": 40
+          }
+        ]
+      }
+    },
+    {
+      "createdAt": "2026-05-08T18:43:48.090Z",
+      "updatedAt": "2026-05-08T18:43:48.090Z",
+      "id": "1c5cf8a5-e6a8-4736-8cce-b9e8bd2f6ff2",
+      "userId": "demo-admin-user",
+      "name": "Revenue executive snapshot",
+      "datasetId": "46a1681f-daed-409d-9d13-a684368d2e9b",
+      "chartType": "line",
+      "config": {
+        "chartColumn": "Revenue",
+        "labelColumn": "Month"
+      },
+      "snapshot": {
+        "savedAt": "2026-05-08T18:43:48.0811484Z",
+        "dataset": {
+          "id": "46a1681f-daed-409d-9d13-a684368d2e9b",
+          "fileName": "mvp-revenue.csv",
+          "uploadedAt": "2026-05-08T18:43:48.058Z",
+          "rows": 3,
+          "columns": 3,
+          "headers": [
+            "Month",
+            "Revenue",
+            "Cost"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "1200",
+              "Cost": "700"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "1550",
+              "Cost": "800"
+            },
+            {
+              "Month": "Mar",
+              "Revenue": "1425",
+              "Cost": "780"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 1200
+            },
+            {
+              "label": "Feb",
+              "value": 1550
+            },
+            {
+              "label": "Mar",
+              "value": 1425
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 4175,
+              "average": 1391.6666666666667,
+              "max": 1550,
+              "min": 1200,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 1550
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 1200
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 1200
+              },
+              "last": {
+                "index": 2,
+                "label": "Mar",
+                "value": 1425
+              },
+              "change": 225,
+              "changePercent": 18.75
+            },
+            {
+              "column": "Cost",
+              "total": 2280,
+              "average": 760,
+              "max": 800,
+              "min": 700,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 800
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 700
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 700
+              },
+              "last": {
+                "index": 2,
+                "label": "Mar",
+                "value": 780
+              },
+              "change": 80,
+              "changePercent": 11.428571428571429
+            }
+          ],
+          "insights": [
+            "The file contains 3 rows across 3 columns.",
+            "2 columns look numeric and chart-ready.",
+            "Revenue increased by 225 from Jan to Mar."
+          ]
+        },
+        "chartType": "line"
+      }
+    }
+  ],
+  "reports": [
+    {
+      "createdAt": "2026-05-08T18:53:40.918Z",
+      "id": "372c050e-d8c6-4aa7-9a8e-2a450cea6a82",
+      "userId": "79ceccae-7fd2-45d3-86a3-b05a2402bc7b",
+      "datasetId": "bdbd71aa-e470-4260-a647-c0e813e4f892",
+      "datasetName": "role-test.csv",
+      "title": "Role test report",
+      "reportType": "pdf",
+      "content": {
+        "lines": [
+          "Business AI Platform CSV Report",
+          "Dataset: role-test.csv",
+          "Uploaded: 5/8/2026, 2:53:40 PM",
+          "Rows: 2",
+          "Columns: 2",
+          "",
+          "AI Insights",
+          "- The file contains 2 rows across 2 columns.",
+          "- 1 column look numeric and chart-ready.",
+          "- Revenue increased by 40 from Jan to Feb.",
+          "",
+          "Numeric Summary",
+          "Revenue: total 240.00, average 120.00, min 100.00, max 140.00"
+        ],
+        "dataset": {
+          "id": "bdbd71aa-e470-4260-a647-c0e813e4f892",
+          "fileName": "role-test.csv",
+          "uploadedAt": "2026-05-08T18:53:40.876Z",
+          "rows": 2,
+          "columns": 2,
+          "headers": [
+            "Month",
+            "Revenue"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "100"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "140"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 100
+            },
+            {
+              "label": "Feb",
+              "value": 140
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 240,
+              "average": 120,
+              "max": 140,
+              "min": 100,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "last": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "change": 40,
+              "changePercent": 40
+            }
+          ],
+          "insights": [
+            "The file contains 2 rows across 2 columns.",
+            "1 column look numeric and chart-ready.",
+            "Revenue increased by 40 from Jan to Feb."
+          ]
+        }
+      }
+    },
+    {
+      "createdAt": "2026-05-08T18:52:47.817Z",
+      "id": "733ed607-16d9-46bc-a295-111f850c0286",
+      "userId": "faa8cba5-a1b5-44c8-90c1-5aaba20bed7e",
+      "datasetId": "431b7fc1-2fef-445e-b07e-3bcd3749b367",
+      "datasetName": "role-test.csv",
+      "title": "Role test report",
+      "reportType": "pdf",
+      "content": {
+        "lines": [
+          "Business AI Platform CSV Report",
+          "Dataset: role-test.csv",
+          "Uploaded: 5/8/2026, 2:52:47 PM",
+          "Rows: 2",
+          "Columns: 2",
+          "",
+          "AI Insights",
+          "- The file contains 2 rows across 2 columns.",
+          "- 1 column look numeric and chart-ready.",
+          "- Revenue increased by 40 from Jan to Feb.",
+          "",
+          "Numeric Summary",
+          "Revenue: total 240.00, average 120.00, min 100.00, max 140.00"
+        ],
+        "dataset": {
+          "id": "431b7fc1-2fef-445e-b07e-3bcd3749b367",
+          "fileName": "role-test.csv",
+          "uploadedAt": "2026-05-08T18:52:47.775Z",
+          "rows": 2,
+          "columns": 2,
+          "headers": [
+            "Month",
+            "Revenue"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "100"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "140"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 100
+            },
+            {
+              "label": "Feb",
+              "value": 140
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 240,
+              "average": 120,
+              "max": 140,
+              "min": 100,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 100
+              },
+              "last": {
+                "index": 1,
+                "label": "Feb",
+                "value": 140
+              },
+              "change": 40,
+              "changePercent": 40
+            }
+          ],
+          "insights": [
+            "The file contains 2 rows across 2 columns.",
+            "1 column look numeric and chart-ready.",
+            "Revenue increased by 40 from Jan to Feb."
+          ]
+        }
+      }
+    },
+    {
+      "createdAt": "2026-05-08T18:43:48.121Z",
+      "id": "d00379ba-5d9d-447a-b99e-9b860b1b5238",
+      "userId": "demo-admin-user",
+      "datasetId": "46a1681f-daed-409d-9d13-a684368d2e9b",
+      "datasetName": "mvp-revenue.csv",
+      "title": "Revenue PDF report",
+      "reportType": "pdf",
+      "content": {
+        "lines": [
+          "Business AI Platform CSV Report",
+          "Dataset: mvp-revenue.csv"
+        ],
+        "dataset": {
+          "id": "46a1681f-daed-409d-9d13-a684368d2e9b",
+          "fileName": "mvp-revenue.csv",
+          "uploadedAt": "2026-05-08T18:43:48.058Z",
+          "rows": 3,
+          "columns": 3,
+          "headers": [
+            "Month",
+            "Revenue",
+            "Cost"
+          ],
+          "preview": [
+            {
+              "Month": "Jan",
+              "Revenue": "1200",
+              "Cost": "700"
+            },
+            {
+              "Month": "Feb",
+              "Revenue": "1550",
+              "Cost": "800"
+            },
+            {
+              "Month": "Mar",
+              "Revenue": "1425",
+              "Cost": "780"
+            }
+          ],
+          "chartColumn": "Revenue",
+          "labelColumn": "Month",
+          "chart": [
+            {
+              "label": "Jan",
+              "value": 1200
+            },
+            {
+              "label": "Feb",
+              "value": 1550
+            },
+            {
+              "label": "Mar",
+              "value": 1425
+            }
+          ],
+          "numericSummary": [
+            {
+              "column": "Revenue",
+              "total": 4175,
+              "average": 1391.6666666666667,
+              "max": 1550,
+              "min": 1200,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 1550
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 1200
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 1200
+              },
+              "last": {
+                "index": 2,
+                "label": "Mar",
+                "value": 1425
+              },
+              "change": 225,
+              "changePercent": 18.75
+            },
+            {
+              "column": "Cost",
+              "total": 2280,
+              "average": 760,
+              "max": 800,
+              "min": 700,
+              "highest": {
+                "index": 1,
+                "label": "Feb",
+                "value": 800
+              },
+              "lowest": {
+                "index": 0,
+                "label": "Jan",
+                "value": 700
+              },
+              "first": {
+                "index": 0,
+                "label": "Jan",
+                "value": 700
+              },
+              "last": {
+                "index": 2,
+                "label": "Mar",
+                "value": 780
+              },
+              "change": 80,
+              "changePercent": 11.428571428571429
+            }
+          ],
+          "insights": [
+            "The file contains 3 rows across 3 columns.",
+            "2 columns look numeric and chart-ready.",
+            "Revenue increased by 225 from Jan to Mar."
+          ]
+        },
+        "chartType": "line"
+      }
+    }
+  ]
+}
