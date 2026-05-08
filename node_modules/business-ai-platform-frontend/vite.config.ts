@@ -6,8 +6,8 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': 'http://localhost:4000',
-      '/health': 'http://localhost:4000'
+      '/api': 'https://business-ai-platform-backend.vercel.app',
+      '/health': 'https://business-ai-platform-backend.vercel.app'
     }
   }
 });
