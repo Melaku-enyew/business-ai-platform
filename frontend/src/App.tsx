@@ -68,7 +68,7 @@ type ReportHistoryItem = {
   };
   createdAt: string;
 };
-
+const API_BASE = 'https://business-ai-platform-backend.vercel.app';
 const fallbackInsights: InsightResponse = {
   metrics: [
     { label: 'Automations live', value: 0, trend: '0%' },
@@ -113,7 +113,7 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    fetch('/api/config')
+    fetch(`${API_BASE}/api/config`)
       .then((response) => response.json())
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
@@ -226,7 +226,7 @@ export function App() {
 
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
-      const response = await fetch(`/api/auth/${credentials.mode}`, {
+      const response = await fetch(`${API_BASE}/api/auth/${credentials.mode}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
