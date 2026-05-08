@@ -235,7 +235,15 @@ export function App() {
           password: credentials.password
         })
       });
-      const payload = await response.json();
+      
+      let payload;
+
+try {
+  payload = await response.json();
+} catch (error) {
+  setAuthMessage('Server response error.');
+  return;
+}
 
       if (!response.ok) {
         throw new Error(payload.error || 'Authentication failed.');
