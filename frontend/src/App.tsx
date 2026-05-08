@@ -235,7 +235,7 @@ export function App() {
           password: credentials.password
         })
       });
-      
+
       let payload;
 
 try {
@@ -254,6 +254,7 @@ try {
       setUser(payload.user);
       setAuthPassword('');
       setAuthMessage('Welcome back.');
+      window.location.reload();
     } catch (error) {
       setAuthMessage(error instanceof Error ? error.message : 'Authentication failed.');
     }
