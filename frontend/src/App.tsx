@@ -113,7 +113,9 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/config`)
+    fetch(`${API_BASE}/api/config`, {
+  credentials: 'include'
+})
       .then((response) => response.json())
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
@@ -226,15 +228,16 @@ export function App() {
 
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
-      const response = await fetch(`${API_BASE}/api/auth/${credentials.mode}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          name: credentials.name,
-          email: credentials.email,
-          password: credentials.password
-        })
-      });
+     const response = await fetch(`${API_BASE}/api/auth/${credentials.mode}`, {
+  method: 'POST',
+  credentials: 'include',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    name: credentials.name,
+    email: credentials.email,
+    password: credentials.password
+  })
+});
 
       let payload;
 

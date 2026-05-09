@@ -507,7 +507,10 @@ async function importLegacyDatasets() {
   await Promise.all(datasets.map((dataset) => saveDataset({ ...dataset, userId: dataset.userId ?? getDevUser().id })));
 }
 
-app.use(cors({ origin: clientOrigin }));
+app.use(cors({
+  origin: clientOrigin,
+  credentials: true
+}));
 app.use(express.json());
 
 app.get('/health', (_req, res) => {
