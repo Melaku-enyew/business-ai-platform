@@ -8,9 +8,11 @@ import { promisify } from 'node:util';
 import cors from 'cors';
 import express from 'express';
 import multer from 'multer';
+import * as XLSX from 'xlsx';
 import {
   createSession,
   createUser,
+  deleteUser,
   findUserByEmail,
   findUserById,
   findSessionById,
@@ -21,19 +23,24 @@ import {
   listDatasets,
   listReports,
   listSessions,
+  listUsers,
   promoteAdminEmails,
   saveDashboard,
   saveDataset,
   saveReport,
   revokeSession,
+  revokeUserSessions,
+  updateUser,
   usingSqlServer
 } from './db.js';
 
 const scryptAsync = promisify(scrypt);
 const app = express();
+const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 15 * 1024 * 1024);
+const maxSpreadsheetRows = Number(process.env.MAX_SPREADSHEET_ROWS || 10000);
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 5 * 1024 * 1024 }
+  limits: { fileSize: maxUploadBytes }
 });
 const port = Number(process.env.PORT || 4000);
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
@@ -105,12 +112,26 @@ function parseCsv(text) {
     rows.push(row);
   }
 
-  if (rows.length === 0) {
+  return rowsToRecords(rows);
+}
+
+function rowsToRecords(rows) {
+  const normalizedRows = rows
+    .map((row) => row.map((value) => String(value ?? '').trim()))
+    .filter((row) => row.some((value) => value !== ''));
+
+  if (normalizedRows.length === 0) {
     return { columns: [], records: [] };
   }
 
-  const columns = rows[0].map((column, index) => column || `Column ${index + 1}`);
-  const records = rows.slice(1).map((values) =>
+  const seenColumns = new Map();
+  const columns = normalizedRows[0].map((column, index) => {
+    const baseName = column || `Column ${index + 1}`;
+    const count = seenColumns.get(baseName) ?? 0;
+    seenColumns.set(baseName, count + 1);
+    return count ? `${baseName} ${count + 1}` : baseName;
+  });
+  const records = normalizedRows.slice(1).map((values) =>
     columns.reduce((record, column, index) => {
       record[column] = values[index] ?? '';
       return record;
@@ -118,6 +139,61 @@ function parseCsv(text) {
   );
 
   return { columns, records };
+}
+
+function getFileExtension(fileName) {
+  return String(fileName || '').split('.').pop()?.toLowerCase() || '';
+}
+
+function parseUploadedFile(file, requestedWorksheetName) {
+  const extension = getFileExtension(file.originalname);
+
+  if (!['csv', 'xlsx', 'xls'].includes(extension)) {
+    const error = new Error('Upload a .csv, .xlsx, or .xls file.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (extension === 'csv') {
+    const parsed = parseCsv(file.buffer.toString('utf8'));
+    return {
+      ...parsed,
+      fileType: 'csv',
+      worksheetName: 'CSV',
+      worksheets: ['CSV']
+    };
+  }
+
+  const workbook = XLSX.read(file.buffer, {
+    type: 'buffer',
+    cellDates: true,
+    sheetRows: maxSpreadsheetRows + 1
+  });
+  const worksheets = workbook.SheetNames ?? [];
+
+  if (!worksheets.length) {
+    const error = new Error('This workbook does not contain any worksheets.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const worksheetName = worksheets.includes(requestedWorksheetName) ? requestedWorksheetName : worksheets[0];
+  const worksheet = workbook.Sheets[worksheetName];
+  const rows = XLSX.utils.sheet_to_json(worksheet, {
+    header: 1,
+    defval: '',
+    raw: false,
+    blankrows: false
+  });
+  const parsed = rowsToRecords(rows);
+
+  return {
+    ...parsed,
+    fileType: extension,
+    worksheetName,
+    worksheets,
+    truncated: parsed.records.length >= maxSpreadsheetRows
+  };
 }
 
 function summarizeCsv(columns, records) {
@@ -211,8 +287,10 @@ function dashboardSnapshot(dataset, chartType) {
 
 function reportLines(dataset) {
   return [
-    'Business AI Platform CSV Report',
+    'Business AI Platform Data Report',
     `Dataset: ${dataset.fileName}`,
+    `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
+    ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),
     `Uploaded: ${new Date(dataset.uploadedAt).toLocaleString()}`,
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
@@ -232,7 +310,9 @@ function publicUser(user) {
     id: user.id,
     name: user.name,
     email: user.email,
-    role: user.role === 'admin' ? 'admin' : 'user'
+    role: user.role === 'admin' ? 'admin' : 'user',
+    active: user.active !== false,
+    createdAt: user.createdAt
   };
 }
 
@@ -332,7 +412,7 @@ async function requireAuth(req, res, next) {
     const session = payload.sid ? await findSessionById(payload.sid, payload.sub) : undefined;
     const user = storedUser ?? (!usingSqlServer ? userFromToken(payload) : undefined);
 
-    if (!user || (requireStoredSessions && !session)) {
+    if (!user || user.active === false || (requireStoredSessions && !session)) {
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
@@ -354,7 +434,8 @@ function userFromToken(payload) {
     id: payload.sub,
     name: payload.name || payload.email,
     email: payload.email,
-    role: payload.role === 'admin' ? 'admin' : 'user'
+    role: payload.role === 'admin' ? 'admin' : 'user',
+    active: true
   };
 }
 
@@ -594,6 +675,11 @@ app.post('/api/auth/login', async (req, res, next) => {
         });
       }
 
+      if (demoUser.active === false) {
+        res.status(403).json({ error: 'This account is disabled.' });
+        return;
+      }
+
       const { token, session } = await createLoginSession(demoUser);
       res.json({ token, user: publicUser(demoUser), session, demo: true });
       return;
@@ -603,6 +689,11 @@ app.post('/api/auth/login', async (req, res, next) => {
 
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
       res.status(401).json({ error: 'Invalid email or password.' });
+      return;
+    }
+
+    if (user.active === false) {
+      res.status(403).json({ error: 'This account is disabled.' });
       return;
     }
 
@@ -643,6 +734,71 @@ app.get('/api/admin/workspace', requireAuth, requireRole('admin'), async (req, r
   }
 });
 
+app.get('/api/admin/users', requireAuth, requireRole('admin'), async (_req, res, next) => {
+  try {
+    res.json({ users: (await listUsers()).map(publicUser) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    const updates = {};
+
+    if (req.body?.role != null) {
+      updates.role = req.body.role === 'admin' ? 'admin' : 'user';
+    }
+
+    if (req.body?.active != null) {
+      updates.active = Boolean(req.body.active);
+    }
+
+    if (updates.active === false && req.params.id === req.user.id) {
+      res.status(400).json({ error: 'You cannot disable your own active account.' });
+      return;
+    }
+
+    const user = await updateUser(req.params.id, updates);
+    if (!user) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+
+    res.json({ user: publicUser(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) {
+      res.status(400).json({ error: 'You cannot delete your own active account.' });
+      return;
+    }
+
+    await deleteUser(req.params.id);
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    if (req.params.id === req.user.id) {
+      res.status(400).json({ error: 'Use logout to end your current session.' });
+      return;
+    }
+
+    await revokeUserSessions(req.params.id);
+    res.json({ revoked: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
   try {
     if (req.session) {
@@ -669,38 +825,55 @@ app.get('/api/workflows', async (_req, res, next) => {
   }
 });
 
-app.post('/api/csv/upload', upload.single('file'), (req, res) => {
-  Promise.resolve().then(async () => {
+async function handleDatasetUpload(req, res) {
   if (!req.file) {
-    res.status(400).json({ error: 'CSV file is required.' });
+    res.status(400).json({ error: 'A .csv, .xlsx, or .xls file is required.' });
     return;
   }
 
-  if (!req.file.originalname.toLowerCase().endsWith('.csv')) {
-    res.status(400).json({ error: 'Only .csv files are supported.' });
+  const requestedWorksheetName = String(req.body?.worksheetName || '').trim();
+  const parsed = parseUploadedFile(req.file, requestedWorksheetName);
+
+  if (!parsed.columns.length || !parsed.records.length) {
+    res.status(400).json({ error: 'The uploaded file does not contain tabular data with headers and rows.' });
     return;
   }
 
-  const text = req.file.buffer.toString('utf8');
-  const { columns, records } = parseCsv(text);
-  const summary = summarizeCsv(columns, records);
+  const summary = summarizeCsv(parsed.columns, parsed.records);
   const dataset = {
     id: randomUUID(),
     fileName: req.file.originalname,
+    fileType: parsed.fileType,
+    worksheetName: parsed.worksheetName,
+    worksheets: parsed.worksheets,
     uploadedAt: new Date().toISOString(),
-    rows: records.length,
-    columns: columns.length,
-    headers: columns,
-    preview: records.slice(0, 10),
-    records,
+    rows: parsed.records.length,
+    columns: parsed.columns.length,
+    headers: parsed.columns,
+    preview: parsed.records.slice(0, 10),
+    records: parsed.records,
     userId: req.user.id,
+    warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
   };
   await saveDataset(dataset);
 
   res.json(publicDataset(dataset));
+}
+
+app.post('/api/files/upload', upload.single('file'), (req, res) => {
+  Promise.resolve().then(async () => {
+    await handleDatasetUpload(req, res);
   }).catch((error) => {
-    res.status(500).json({ error: error.message || 'Upload failed.' });
+    res.status(error.statusCode || 500).json({ error: error.message || 'Upload failed.' });
+  });
+});
+
+app.post('/api/csv/upload', upload.single('file'), (req, res) => {
+  Promise.resolve().then(async () => {
+    await handleDatasetUpload(req, res);
+  }).catch((error) => {
+    res.status(error.statusCode || 500).json({ error: error.message || 'Upload failed.' });
   });
 });
 

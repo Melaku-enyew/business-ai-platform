@@ -12,6 +12,7 @@ const devUser = {
   name: 'Local MVP',
   email: 'local@example.com',
   role: 'admin',
+  active: true,
   createdAt: new Date().toISOString()
 };
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
@@ -84,6 +85,7 @@ export async function initDatabase() {
         name NVARCHAR(200) NOT NULL,
         email NVARCHAR(320) NOT NULL UNIQUE,
         role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user',
+        active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1,
         password_hash NVARCHAR(500) NOT NULL,
         created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created_at DEFAULT SYSUTCDATETIME()
       );
@@ -91,6 +93,9 @@ export async function initDatabase() {
 
     IF COL_LENGTH('dbo.users', 'role') IS NULL
       ALTER TABLE dbo.users ADD role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user';
+
+    IF COL_LENGTH('dbo.users', 'active') IS NULL
+      ALTER TABLE dbo.users ADD active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1;
 
     IF OBJECT_ID('dbo.sessions', 'U') IS NULL
     BEGIN
@@ -113,6 +118,8 @@ export async function initDatabase() {
         id NVARCHAR(64) NOT NULL PRIMARY KEY,
         user_id NVARCHAR(64) NOT NULL,
         file_name NVARCHAR(260) NOT NULL,
+        file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv',
+        worksheet_name NVARCHAR(260) NULL,
         uploaded_at DATETIME2 NOT NULL CONSTRAINT DF_datasets_uploaded_at DEFAULT SYSUTCDATETIME(),
         row_count INT NOT NULL,
         column_count INT NOT NULL,
@@ -123,6 +130,12 @@ export async function initDatabase() {
         CONSTRAINT FK_datasets_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
       );
     END;
+
+    IF COL_LENGTH('dbo.datasets', 'file_type') IS NULL
+      ALTER TABLE dbo.datasets ADD file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv';
+
+    IF COL_LENGTH('dbo.datasets', 'worksheet_name') IS NULL
+      ALTER TABLE dbo.datasets ADD worksheet_name NVARCHAR(260) NULL;
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_datasets_user_uploaded_at' AND object_id = OBJECT_ID('dbo.datasets'))
       CREATE INDEX IX_datasets_user_uploaded_at ON dbo.datasets (user_id, uploaded_at DESC);
@@ -178,6 +191,7 @@ export async function createUser(user) {
       name: user.name,
       email: user.email.toLowerCase(),
       role: normalizeRole(user.role),
+      active: user.active ?? true,
       passwordHash: user.passwordHash,
       createdAt: new Date().toISOString()
     };
@@ -192,11 +206,12 @@ export async function createUser(user) {
     .input('name', sql.NVarChar(200), user.name)
     .input('email', sql.NVarChar(320), user.email.toLowerCase())
     .input('role', sql.NVarChar(40), normalizeRole(user.role))
+    .input('active', sql.Bit, user.active ?? true)
     .input('passwordHash', sql.NVarChar(500), user.passwordHash)
     .query(`
-      INSERT INTO dbo.users (id, name, email, role, password_hash)
-      OUTPUT inserted.id, inserted.name, inserted.email, inserted.role, inserted.created_at
-      VALUES (@id, @name, @email, @role, @passwordHash);
+      INSERT INTO dbo.users (id, name, email, role, active, password_hash)
+      OUTPUT inserted.id, inserted.name, inserted.email, inserted.role, inserted.active, inserted.created_at
+      VALUES (@id, @name, @email, @role, @active, @passwordHash);
     `);
   return rowToUser(result.recordset[0]);
 }
@@ -229,8 +244,92 @@ export async function findUserById(id) {
   const db = await getPool();
   const result = await db.request()
     .input('id', sql.NVarChar(64), id)
-    .query('SELECT TOP (1) id, name, email, role, created_at FROM dbo.users WHERE id = @id;');
+    .query('SELECT TOP (1) id, name, email, role, active, created_at FROM dbo.users WHERE id = @id;');
   return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
+}
+
+export async function listUsers() {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return store.users
+      .map((user) => rowToUser(user))
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+  }
+
+  const db = await getPool();
+  const result = await db.request().query(`
+    SELECT id, name, email, role, active, created_at
+    FROM dbo.users
+    ORDER BY created_at DESC;
+  `);
+  return result.recordset.map(rowToUser);
+}
+
+export async function updateUser(id, updates) {
+  const normalizedUpdates = {
+    ...(updates.name != null ? { name: String(updates.name).trim() } : {}),
+    ...(updates.role != null ? { role: normalizeRole(updates.role) } : {}),
+    ...(updates.active != null ? { active: Boolean(updates.active) } : {})
+  };
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    let updated;
+    store.users = store.users.map((user) => {
+      if (user.id !== id) {
+        return user;
+      }
+      updated = { ...user, ...normalizedUpdates };
+      return updated;
+    });
+    await saveDevStore(store);
+    return updated ? rowToUser(updated) : undefined;
+  }
+
+  const existing = await findUserById(id);
+  if (!existing) {
+    return undefined;
+  }
+
+  const next = {
+    name: normalizedUpdates.name ?? existing.name,
+    role: normalizedUpdates.role ?? existing.role,
+    active: normalizedUpdates.active ?? existing.active
+  };
+  const db = await getPool();
+  const result = await db.request()
+    .input('id', sql.NVarChar(64), id)
+    .input('name', sql.NVarChar(200), next.name)
+    .input('role', sql.NVarChar(40), next.role)
+    .input('active', sql.Bit, next.active)
+    .query(`
+      UPDATE dbo.users
+      SET name = @name,
+          role = @role,
+          active = @active
+      OUTPUT inserted.id, inserted.name, inserted.email, inserted.role, inserted.active, inserted.created_at
+      WHERE id = @id;
+    `);
+  return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
+}
+
+export async function deleteUser(id) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.users = store.users.filter((user) => user.id !== id);
+    store.sessions = store.sessions.filter((session) => session.userId !== id);
+    store.datasets = store.datasets.filter((dataset) => dataset.userId !== id);
+    const datasetIds = new Set(store.datasets.map((dataset) => dataset.id));
+    store.dashboards = store.dashboards.filter((dashboard) => dashboard.userId !== id && datasetIds.has(dashboard.datasetId));
+    store.reports = store.reports.filter((report) => report.userId !== id && datasetIds.has(report.datasetId));
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('id', sql.NVarChar(64), id)
+    .query('DELETE FROM dbo.users WHERE id = @id;');
 }
 
 export async function setUserRoleByEmail(email, role) {
@@ -352,6 +451,23 @@ export async function revokeSession(id, userId) {
     .query('UPDATE dbo.sessions SET revoked_at = SYSUTCDATETIME() WHERE id = @id AND user_id = @userId;');
 }
 
+export async function revokeUserSessions(userId) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const revokedAt = new Date().toISOString();
+    store.sessions = store.sessions.map((entry) =>
+      entry.userId === userId && !entry.revokedAt ? { ...entry, revokedAt } : entry
+    );
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('userId', sql.NVarChar(64), userId)
+    .query('UPDATE dbo.sessions SET revoked_at = SYSUTCDATETIME() WHERE user_id = @userId AND revoked_at IS NULL;');
+}
+
 export async function saveDataset(dataset) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
@@ -365,13 +481,18 @@ export async function saveDataset(dataset) {
     labelColumn: dataset.labelColumn,
     chart: dataset.chart,
     numericSummary: dataset.numericSummary,
-    insights: dataset.insights
+    insights: dataset.insights,
+    fileType: dataset.fileType ?? 'csv',
+    worksheetName: dataset.worksheetName ?? null,
+    worksheets: dataset.worksheets ?? []
   };
   const db = await getPool();
   await db.request()
     .input('id', sql.NVarChar(64), dataset.id)
     .input('userId', sql.NVarChar(64), dataset.userId)
     .input('fileName', sql.NVarChar(260), dataset.fileName)
+    .input('fileType', sql.NVarChar(20), dataset.fileType ?? 'csv')
+    .input('worksheetName', sql.NVarChar(260), dataset.worksheetName ?? null)
     .input('uploadedAt', sql.DateTime2, new Date(dataset.uploadedAt))
     .input('rows', sql.Int, dataset.rows)
     .input('columns', sql.Int, dataset.columns)
@@ -385,6 +506,8 @@ export async function saveDataset(dataset) {
         UPDATE dbo.datasets
         SET user_id = @userId,
             file_name = @fileName,
+            file_type = @fileType,
+            worksheet_name = @worksheetName,
             uploaded_at = @uploadedAt,
             row_count = @rows,
             column_count = @columns,
@@ -397,11 +520,11 @@ export async function saveDataset(dataset) {
       ELSE
       BEGIN
         INSERT INTO dbo.datasets (
-          id, user_id, file_name, uploaded_at, row_count, column_count,
+          id, user_id, file_name, file_type, worksheet_name, uploaded_at, row_count, column_count,
           headers, preview, records, analysis
         )
         VALUES (
-          @id, @userId, @fileName, @uploadedAt, @rows, @columns,
+          @id, @userId, @fileName, @fileType, @worksheetName, @uploadedAt, @rows, @columns,
           @headers, @preview, @records, @analysis
         );
       END;
@@ -650,11 +773,14 @@ function rowToDataset(row) {
   const analysis = parseJson(row.analysis, {});
   return {
     id: row.id,
-    userId: row.user_id,
-    fileName: row.file_name,
-    uploadedAt: row.uploaded_at,
-    rows: row.row_count,
-    columns: row.column_count,
+    userId: row.user_id ?? row.userId,
+    fileName: row.file_name ?? row.fileName,
+    fileType: row.file_type ?? row.fileType ?? analysis.fileType ?? 'csv',
+    worksheetName: row.worksheet_name ?? row.worksheetName ?? analysis.worksheetName ?? null,
+    worksheets: analysis.worksheets ?? row.worksheets ?? [],
+    uploadedAt: row.uploaded_at ?? row.uploadedAt,
+    rows: row.row_count ?? row.rows,
+    columns: row.column_count ?? row.columns,
     headers: parseJson(row.headers, []),
     preview: parseJson(row.preview, []),
     records: parseJson(row.records, []),
@@ -672,6 +798,7 @@ function rowToUser(row, includePassword = false) {
     name: row.name,
     email: row.email,
     role: normalizeRole(row.role),
+    active: row.active ?? row.activeStatus ?? true,
     createdAt: row.created_at ?? row.createdAt,
     ...(includePassword ? { passwordHash: row.password_hash ?? row.passwordHash } : {})
   };
@@ -716,7 +843,11 @@ async function loadDevStore() {
 
 async function saveDevStore(store) {
   await mkdir(dirname(devStoreFile), { recursive: true });
-  // await writeFile(devStoreFile, JSON.stringify(store, null, 2));
+  try {
+    await writeFile(devStoreFile, JSON.stringify(store, null, 2));
+  } catch {
+    // Serverless environments may expose a read-only filesystem; local MVP mode keeps running without persistence.
+  }
 }
 
 function rowToSession(row) {

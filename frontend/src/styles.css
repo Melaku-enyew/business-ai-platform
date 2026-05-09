@@ -59,7 +59,8 @@ body {
 
 a,
 button,
-input {
+input,
+select {
   font: inherit;
 }
 
@@ -615,6 +616,12 @@ h3 {
   font-size: 13px;
 }
 
+.dataset-strip small {
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .persistence-note {
   color: var(--muted);
   margin: -2px 0 20px;
@@ -642,6 +649,58 @@ h3 {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.file-meta,
+.sheet-tabs,
+.admin-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.file-meta {
+  margin: -4px 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.file-meta span,
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: var(--panel-strong);
+}
+
+.sheet-tabs {
+  margin-bottom: 14px;
+}
+
+.sheet-tabs button {
+  min-height: 34px;
+  max-width: 220px;
+  overflow: hidden;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sheet-tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
 .table-wrap {
@@ -840,6 +899,64 @@ th {
 
 .settings-grid {
   grid-template-columns: minmax(0, 1fr) minmax(320px, 0.72fr);
+}
+
+.admin-page {
+  display: grid;
+  gap: 22px;
+}
+
+.admin-panel {
+  min-width: 0;
+}
+
+.admin-table-wrap {
+  margin-top: 16px;
+}
+
+.admin-table {
+  min-width: 940px;
+}
+
+.role-select {
+  min-height: 34px;
+  min-width: 104px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 10px;
+  color: var(--text);
+  background: var(--panel);
+  font-weight: 750;
+}
+
+.role-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.62;
+}
+
+.status-pill {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.status-pill.active {
+  color: #208b59;
+  background: color-mix(in srgb, #89d3af 28%, var(--panel));
+}
+
+.status-pill.disabled {
+  color: #b54b4b;
+  background: color-mix(in srgb, #f1b8b8 34%, var(--panel));
+}
+
+.admin-actions {
+  min-width: 330px;
+}
+
+.ghost-button.danger {
+  color: #b54b4b;
+  border-color: color-mix(in srgb, #b54b4b 28%, var(--line-strong));
 }
 
 .profile-panel h2 {

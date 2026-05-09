@@ -15,6 +15,10 @@ type Workflow = {
 type Dataset = {
   id: string;
   fileName: string;
+  fileType?: string;
+  worksheetName?: string | null;
+  worksheets?: string[];
+  warnings?: string[];
   uploadedAt: string;
   rows: number;
   columns: number;
@@ -31,13 +35,20 @@ type ChartType = 'bar' | 'line' | 'donut';
 type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
-type AppView = 'dashboard' | 'settings';
+type AppView = 'dashboard' | 'settings' | 'adminUsers';
 
 type User = {
   id: string;
   name: string;
   email: string;
   role: 'admin' | 'user';
+  active?: boolean;
+  createdAt?: string;
+};
+
+type AdminUser = User & {
+  active: boolean;
+  createdAt?: string;
 };
 
 type SavedDashboard = {
@@ -98,8 +109,9 @@ export function App() {
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [activeDataset, setActiveDataset] = useState<Dataset | null>(null);
   const [status, setStatus] = useState('Connecting');
-  const [uploadState, setUploadState] = useState('Drop a CSV here or browse to start analysis.');
+  const [uploadState, setUploadState] = useState('Drop a CSV or Excel file here to start analysis.');
   const [isDragging, setIsDragging] = useState(false);
+  const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'light');
   const [token, setToken] = useState(() => localStorage.getItem('authToken') || '');
@@ -116,6 +128,9 @@ export function App() {
   const [question, setQuestion] = useState('');
   const [dashboards, setDashboards] = useState<SavedDashboard[]>([]);
   const [reports, setReports] = useState<ReportHistoryItem[]>([]);
+  const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
+  const [adminLoading, setAdminLoading] = useState(false);
+  const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
   const [persistenceState, setPersistenceState] = useState('SQL Server storage ready for saved work.');
   const [chat, setChat] = useState<ChatMessage[]>([
     { role: 'assistant', text: 'Upload or select a dataset, then ask about rows, columns, totals, averages, or outliers.' }
@@ -152,6 +167,12 @@ export function App() {
 
     loadWorkspace();
   }, [authDisabled, configLoaded, token]);
+
+  useEffect(() => {
+    if (currentView === 'adminUsers' && user?.role === 'admin') {
+      loadAdminUsers();
+    }
+  }, [currentView, user?.role]);
 
   function apiFetch(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers);
@@ -233,6 +254,7 @@ export function App() {
     setActiveDataset(null);
     setDashboards([]);
     setReports([]);
+    setAdminUsers([]);
     setCurrentView('dashboard');
     setAccountOpen(false);
     setStatus('Signed out');
@@ -314,13 +336,22 @@ export function App() {
       .join(' ');
   }, [activeDataset, chartMax]);
 
-  async function uploadCsv(file: File) {
+  async function uploadDataset(file: File, worksheetName?: string) {
+    const extension = file.name.split('.').pop()?.toLowerCase();
+    if (!extension || !['csv', 'xlsx', 'xls'].includes(extension)) {
+      setUploadState('Upload a .csv, .xlsx, or .xls file.');
+      return;
+    }
+
     const formData = new FormData();
     formData.append('file', file);
-    setUploadState(`Analyzing ${file.name}...`);
+    if (worksheetName) {
+      formData.append('worksheetName', worksheetName);
+    }
+    setUploadState(`Analyzing ${file.name}${worksheetName ? ` - ${worksheetName}` : ''}...`);
 
     try {
-      const response = await apiFetch('/api/csv/upload', {
+      const response = await apiFetch('/api/files/upload', {
         method: 'POST',
         body: formData
       });
@@ -331,19 +362,22 @@ export function App() {
         throw new Error(dataset.error || 'Upload failed.');
       }
 
+      setLastUploadedFile(file);
       setActiveDataset(dataset);
       setDatasets((current: Dataset[]) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
-      setChat([{ role: 'assistant', text: `I loaded ${dataset.fileName}. Ask me what changed, what stands out, or how many rows it has.` }]);
-      setUploadState(authDisabled ? 'CSV analysis ready and saved locally.' : 'CSV analysis ready and saved to SQL Server.');
+      setChat([{ role: 'assistant', text: `I loaded ${dataset.fileName}${dataset.worksheetName ? ` (${dataset.worksheetName})` : ''}. Ask me what changed, what stands out, or how many rows it has.` }]);
+      const storageLabel = authDisabled ? 'saved locally' : 'saved to SQL Server';
+      const warning = dataset.warnings?.[0] ? ` ${dataset.warnings[0]}` : '';
+      setUploadState(`${(dataset.fileType ?? extension).toUpperCase()} analysis ready and ${storageLabel}.${warning}`);
     } catch (error) {
       setUploadState(error instanceof Error ? error.message : 'Upload failed.');
     }
   }
 
-  function handleCsvUpload(event: ChangeEvent<HTMLInputElement>) {
+  function handleDatasetUpload(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (file) {
-      uploadCsv(file);
+      uploadDataset(file);
     }
   }
 
@@ -353,8 +387,16 @@ export function App() {
 
     const file = event.dataTransfer.files[0];
     if (file) {
-      uploadCsv(file);
+      uploadDataset(file);
     }
+  }
+
+  function selectWorksheet(worksheetName: string) {
+    if (!lastUploadedFile || activeDataset?.worksheetName === worksheetName) {
+      return;
+    }
+
+    uploadDataset(lastUploadedFile, worksheetName);
   }
 
   async function askAssistant(event: FormEvent<HTMLFormElement>) {
@@ -426,13 +468,100 @@ export function App() {
     setReports(reportsPayload.reports ?? []);
   }
 
+  async function loadAdminUsers() {
+    if (user?.role !== 'admin') {
+      setCurrentView('dashboard');
+      return;
+    }
+
+    setAdminLoading(true);
+    try {
+      const response = await apiFetch('/api/admin/users');
+      const payload = await readJson<{ users: AdminUser[] }>(response);
+      setAdminUsers(payload.users ?? []);
+      setAdminMessage('User directory refreshed.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Could not load users.');
+    } finally {
+      setAdminLoading(false);
+    }
+  }
+
+  async function updateAdminUser(userId: string, updates: Partial<Pick<AdminUser, 'role' | 'active'>>) {
+    try {
+      const response = await apiFetch(`/api/admin/users/${userId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      const payload = await readJson<{ user: AdminUser; error?: string }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || 'User update failed.');
+      }
+
+      setAdminUsers((current: AdminUser[]) => current.map((entry) => entry.id === payload.user.id ? payload.user : entry));
+      setAdminMessage('User access updated.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'User update failed.');
+    }
+  }
+
+  async function toggleAdminUser(userRecord: AdminUser) {
+    const action = userRecord.active ? 'disable' : 'enable';
+    if (!window.confirm(`Confirm ${action} for ${userRecord.email}?`)) {
+      return;
+    }
+
+    await updateAdminUser(userRecord.id, { active: !userRecord.active });
+  }
+
+  async function deleteAdminUser(userRecord: AdminUser) {
+    if (!window.confirm(`Delete ${userRecord.email}? This removes their saved dashboards, reports, and sessions.`)) {
+      return;
+    }
+
+    try {
+      const response = await apiFetch(`/api/admin/users/${userRecord.id}`, { method: 'DELETE' });
+
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Delete failed.');
+      }
+
+      setAdminUsers((current: AdminUser[]) => current.filter((entry) => entry.id !== userRecord.id));
+      setAdminMessage('User deleted.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Delete failed.');
+    }
+  }
+
+  async function revokeAdminUserSessions(userRecord: AdminUser) {
+    if (!window.confirm(`Revoke active sessions for ${userRecord.email}?`)) {
+      return;
+    }
+
+    try {
+      const response = await apiFetch(`/api/admin/users/${userRecord.id}/revoke`, { method: 'POST' });
+      const payload = await readJson<{ error?: string; revoked?: boolean }>(response);
+
+      if (!response.ok || !payload.revoked) {
+        throw new Error(payload.error || 'Session revoke failed.');
+      }
+
+      setAdminMessage('User sessions revoked.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Session revoke failed.');
+    }
+  }
+
   async function downloadPdfReport() {
     if (!activeDataset) {
       return;
     }
 
     const lines = buildReportLines(activeDataset);
-    downloadPdf(lines, `${activeDataset.fileName.replace(/\.csv$/i, '')}-report.pdf`);
+    downloadPdf(lines, `${activeDataset.fileName.replace(/\.(csv|xlsx|xls)$/i, '')}-report.pdf`);
 
     const response = await apiFetch('/api/reports', {
       method: 'POST',
@@ -459,7 +588,7 @@ export function App() {
   function downloadHistoricalReport(report: ReportHistoryItem) {
     const lines = report.content?.lines
       ?? (report.content?.dataset ? buildReportLines(report.content.dataset) : [
-        'Business AI Platform CSV Report',
+        'Business AI Platform Data Report',
         `Report: ${report.title}`,
         `Dataset: ${report.datasetName}`,
         `Created: ${new Date(report.createdAt).toLocaleString()}`
@@ -539,6 +668,9 @@ export function App() {
           <button className={currentView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setCurrentView('dashboard')}>Overview</button>
           <a href="#csv" onClick={() => setCurrentView('dashboard')}>CSV Studio</a>
           <a href="#assistant" onClick={() => setCurrentView('dashboard')}>Assistant</a>
+          {user?.role === 'admin' && (
+            <button className={currentView === 'adminUsers' ? 'active' : ''} type="button" onClick={() => setCurrentView('adminUsers')}>Admin Users</button>
+          )}
           <button className={currentView === 'settings' ? 'active' : ''} type="button" onClick={openSettings}>Settings</button>
         </nav>
       </aside>
@@ -613,6 +745,84 @@ export function App() {
               </ul>
             </article>
           </section>
+        ) : currentView === 'adminUsers' && user?.role === 'admin' ? (
+          <section className="admin-page">
+            <article className="panel admin-panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Admin control center</p>
+                  <h2>User management</h2>
+                </div>
+                <button className="ghost-button compact" type="button" disabled={adminLoading} onClick={loadAdminUsers}>
+                  {adminLoading ? 'Refreshing' : 'Refresh'}
+                </button>
+              </div>
+              <p className="persistence-note">{adminMessage}</p>
+              <div className="table-wrap admin-table-wrap">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Status</th>
+                      <th>Created</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {adminUsers.map((adminUser) => (
+                      <tr key={adminUser.id}>
+                        <td>{adminUser.name}</td>
+                        <td>{adminUser.email}</td>
+                        <td>
+                          <select
+                            aria-label={`Role for ${adminUser.email}`}
+                            className="role-select"
+                            disabled={adminUser.id === user.id}
+                            value={adminUser.role}
+                            onChange={(event) => updateAdminUser(adminUser.id, { role: event.target.value as AdminUser['role'] })}
+                          >
+                            <option value="user">User</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </td>
+                        <td>
+                          <span className={`status-pill ${adminUser.active ? 'active' : 'disabled'}`}>
+                            {adminUser.active ? 'Active' : 'Disabled'}
+                          </span>
+                        </td>
+                        <td>{adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : 'Unknown'}</td>
+                        <td>
+                          <div className="admin-actions">
+                            {adminUser.role !== 'admin' && (
+                              <button className="ghost-button compact" type="button" onClick={() => updateAdminUser(adminUser.id, { role: 'admin' })}>
+                                Promote
+                              </button>
+                            )}
+                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id} onClick={() => toggleAdminUser(adminUser)}>
+                              {adminUser.active ? 'Disable' : 'Enable'}
+                            </button>
+                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id} onClick={() => revokeAdminUserSessions(adminUser)}>
+                              Revoke
+                            </button>
+                            <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user.id} onClick={() => deleteAdminUser(adminUser)}>
+                              Delete
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))}
+                    {!adminUsers.length && (
+                      <tr>
+                        <td colSpan={6}>No users found.</td>
+                      </tr>
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            </article>
+          </section>
         ) : (
           <>
             <section className="metrics-grid" aria-label="Performance metrics">
@@ -628,7 +838,7 @@ export function App() {
             <section className="csv-section" id="csv">
               <div className="section-heading">
                 <div>
-                  <p className="eyebrow">CSV studio</p>
+                  <p className="eyebrow">Data studio</p>
                   <h2>Analyze business data in one clean view</h2>
                 </div>
                 <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
@@ -648,8 +858,8 @@ export function App() {
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
               >
-                <input accept=".csv,text/csv" type="file" onChange={handleCsvUpload} />
-                <strong>Drop CSV file here</strong>
+                <input accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" onChange={handleDatasetUpload} />
+                <strong>Drop CSV or Excel file here</strong>
                 <span>{uploadState}</span>
               </label>
 
@@ -662,7 +872,8 @@ export function App() {
                     onClick={() => setActiveDataset(dataset)}
                   >
                     <strong>{dataset.fileName}</strong>
-                    <span>{dataset.rows} rows - {dataset.columns} columns</span>
+                    <span>{dataset.rows} rows - {dataset.columns} columns - {(dataset.fileType ?? 'csv').toUpperCase()}</span>
+                    {dataset.worksheetName && <small>{dataset.worksheetName}</small>}
                   </button>
                 ))}
               </div>
@@ -676,32 +887,53 @@ export function App() {
                     <div className="count-strip">
                       <span>{activeDataset?.rows ?? 0} rows</span>
                       <span>{activeDataset?.columns ?? 0} columns</span>
+                      <span>{(activeDataset?.fileType ?? 'csv').toUpperCase()}</span>
                     </div>
                   </div>
 
                   {activeDataset ? (
-                    <div className="table-wrap">
-                      <table>
-                        <thead>
-                          <tr>
-                            {activeDataset.headers.map((header) => (
-                              <th key={header}>{header}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {activeDataset.preview.map((row, rowIndex) => (
-                            <tr key={`${activeDataset.id}-${rowIndex}`}>
+                    <>
+                      <div className="file-meta">
+                        <span>File type: {(activeDataset.fileType ?? 'csv').toUpperCase()}</span>
+                        {activeDataset.worksheetName && <span>Worksheet: {activeDataset.worksheetName}</span>}
+                      </div>
+                      {(activeDataset.worksheets?.length ?? 0) > 1 && (
+                        <div className="sheet-tabs" aria-label="Worksheet tabs">
+                          {activeDataset.worksheets?.map((sheetName) => (
+                            <button
+                              className={activeDataset.worksheetName === sheetName ? 'active' : ''}
+                              key={sheetName}
+                              type="button"
+                              onClick={() => selectWorksheet(sheetName)}
+                            >
+                              {sheetName}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="table-wrap">
+                        <table>
+                          <thead>
+                            <tr>
                               {activeDataset.headers.map((header) => (
-                                <td key={header}>{row[header]}</td>
+                                <th key={header}>{header}</th>
                               ))}
                             </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
+                          </thead>
+                          <tbody>
+                            {activeDataset.preview.map((row, rowIndex) => (
+                              <tr key={`${activeDataset.id}-${rowIndex}`}>
+                                {activeDataset.headers.map((header) => (
+                                  <td key={header}>{row[header]}</td>
+                                ))}
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </>
                   ) : (
-                    <div className="empty-state">No CSV uploaded yet.</div>
+                    <div className="empty-state">No dataset uploaded yet.</div>
                   )}
                 </article>
 
@@ -726,7 +958,7 @@ export function App() {
                   <article className="panel ai-panel">
                     <h3>AI insights</h3>
                     <ul>
-                      {(activeDataset?.insights ?? ['Upload a CSV to generate clear, practical data insights.']).map((item) => (
+                      {(activeDataset?.insights ?? ['Upload a CSV or Excel file to generate clear, practical data insights.']).map((item) => (
                         <li key={item}>{item}</li>
                       ))}
                     </ul>
@@ -826,7 +1058,7 @@ export function App() {
 
 function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: number, linePoints: string) {
   if (!dataset) {
-    return <div className="empty-state chart-empty">Upload a CSV to build a chart.</div>;
+    return <div className="empty-state chart-empty">Upload a dataset to build a chart.</div>;
   }
 
   if (chartType === 'line') {
@@ -901,8 +1133,10 @@ function buildDashboardSnapshot(dataset: Dataset, chartType: ChartType) {
 
 function buildReportLines(dataset: Dataset) {
   return [
-    'Business AI Platform CSV Report',
+    'Business AI Platform Data Report',
     `Dataset: ${dataset.fileName}`,
+    `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
+    ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),
     `Uploaded: ${new Date(dataset.uploadedAt).toLocaleString()}`,
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
@@ -952,9 +1186,9 @@ function createSimplePdf(lines: string[]) {
     pdf += `${object}\n`;
   });
   const xref = pdf.length;
-  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  pdf += `xref\n0 ${objects.length + 1}\n0000000000 65535 f\n`;
   offsets.slice(1).forEach((offset) => {
-    pdf += `${String(offset).padStart(10, '0')} 00000 n \n`;
+    pdf += `${String(offset).padStart(10, '0')} 00000 n\n`;
   });
   pdf += `trailer << /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF`;
   return pdf;
