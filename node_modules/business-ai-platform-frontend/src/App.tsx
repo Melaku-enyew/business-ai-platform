@@ -451,7 +451,7 @@ try {
     );
   }
 
-  if (!user && !authDisabled) {
+  if (!authDisabled) {
     return (
       <main className="auth-shell">
         <section className="auth-card">
