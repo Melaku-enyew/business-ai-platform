@@ -31,12 +31,15 @@ type ChartType = 'bar' | 'line' | 'donut';
 type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
+type AppView = 'dashboard' | 'settings';
+
 type User = {
   id: string;
   name: string;
   email: string;
   role: 'admin' | 'user';
 };
+
 type SavedDashboard = {
   id: string;
   name: string;
@@ -53,6 +56,7 @@ type SavedDashboard = {
   createdAt?: string;
   updatedAt: string;
 };
+
 type ReportHistoryItem = {
   id: string;
   title: string;
@@ -68,7 +72,17 @@ type ReportHistoryItem = {
   };
   createdAt: string;
 };
-const API_BASE = 'https://backend-six-pied-39.vercel.app';
+
+type ConfigResponse = {
+  authDisabled: boolean;
+  storage: 'sql-server' | 'local-json' | string;
+};
+
+type AuthResponse = {
+  token: string;
+  user: User;
+};
+
 const fallbackInsights: InsightResponse = {
   metrics: [
     { label: 'Automations live', value: 0, trend: '0%' },
@@ -97,7 +111,7 @@ export function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMessage, setAuthMessage] = useState('Sign in to access your dashboards and datasets.');
-  const [currentView, setCurrentView] = useState<'dashboard' | 'settings'>('dashboard');
+  const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [accountOpen, setAccountOpen] = useState(false);
   const [question, setQuestion] = useState('');
   const [dashboards, setDashboards] = useState<SavedDashboard[]>([]);
@@ -113,10 +127,8 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    fetch(`${API_BASE}/api/config`, {
-  credentials: 'include'
-})
-      .then((response) => response.json())
+    fetch('/api/config', { credentials: 'include' })
+      .then((response) => readJson<ConfigResponse>(response))
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
         setPersistenceState(config.storage === 'sql-server' ? 'SQL Server storage ready for saved work.' : 'Local MVP storage ready.');
@@ -138,56 +150,79 @@ export function App() {
       return;
     }
 
-    Promise.all([
-      apiFetch('/api/auth/me'),
-     // apiFetch('/api/insights'),
-      apiFetch('/api/workflows'),
-      apiFetch('/api/datasets'),
-      apiFetch('/api/dashboards'),
-      apiFetch('/api/reports')
-    ])
-      .then(async ([meResponse, insightsResponse, workflowsResponse, datasetsResponse, dashboardsResponse, reportsResponse]) => {
-        setUser((await meResponse.json()).user);
-        setInsights(await insightsResponse.json());
-        setWorkflows((await workflowsResponse.json()).workflows);
-        const saved = (await datasetsResponse.json()).datasets;
-        const savedDashboards = (await dashboardsResponse.json()).dashboards;
-        const savedReports = (await reportsResponse.json()).reports;
-        const latestDashboard = savedDashboards[0];
-        const latestDataset = latestDashboard
-          ? saved.find((dataset: Dataset) => dataset.id === latestDashboard.datasetId) ?? latestDashboard.snapshot?.dataset
-          : undefined;
-        setDatasets(saved);
-        setActiveDataset(latestDataset ?? saved[0] ?? null);
-        if (latestDashboard?.chartType) {
-          setChartType(latestDashboard.chartType);
-        }
-        setDashboards(savedDashboards);
-        setReports(savedReports);
-        setStatus('Live');
-      })
-      .catch(() => {
-        if (authDisabled) {
-          setStatus('Offline');
-        } else {
-          logout();
-        }
-      });
+    loadWorkspace();
   }, [authDisabled, configLoaded, token]);
 
   function apiFetch(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers);
+
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return fetch(path, { ...options, headers }).then((response) => {
+    return fetch(path, {
+      ...options,
+      headers,
+      credentials: 'include'
+    }).then((response) => {
       if (response.status === 401) {
         logout();
         throw new Error('Authentication required.');
       }
+
       return response;
     });
+  }
+
+  async function loadWorkspace() {
+    try {
+      const [
+        meResponse,
+        insightsResponse,
+        workflowsResponse,
+        datasetsResponse,
+        dashboardsResponse,
+        reportsResponse
+      ] = await Promise.all([
+        apiFetch('/api/auth/me'),
+        apiFetch('/api/insights'),
+        apiFetch('/api/workflows'),
+        apiFetch('/api/datasets'),
+        apiFetch('/api/dashboards'),
+        apiFetch('/api/reports')
+      ]);
+
+      const mePayload = await readJson<{ user: User }>(meResponse);
+      const insightsPayload = await readJson<InsightResponse>(insightsResponse);
+      const workflowsPayload = await readJson<{ workflows: Workflow[] }>(workflowsResponse);
+      const datasetsPayload = await readJson<{ datasets: Dataset[] }>(datasetsResponse);
+      const dashboardsPayload = await readJson<{ dashboards: SavedDashboard[] }>(dashboardsResponse);
+      const reportsPayload = await readJson<{ reports: ReportHistoryItem[] }>(reportsResponse);
+
+      const savedDatasets = datasetsPayload.datasets ?? [];
+      const savedDashboards = dashboardsPayload.dashboards ?? [];
+      const latestDashboard = savedDashboards[0];
+      const latestDataset = latestDashboard
+        ? savedDatasets.find((dataset) => dataset.id === latestDashboard.datasetId) ?? latestDashboard.snapshot?.dataset
+        : undefined;
+
+      setUser(mePayload.user);
+      setInsights(insightsPayload);
+      setWorkflows(workflowsPayload.workflows ?? []);
+      setDatasets(savedDatasets);
+      setActiveDataset(latestDataset ?? savedDatasets[0] ?? null);
+      setDashboards(savedDashboards);
+      setReports(reportsPayload.reports ?? []);
+      setStatus('Live');
+
+      if (latestDashboard?.chartType) {
+        setChartType(latestDashboard.chartType);
+      }
+    } catch {
+      if (authDisabled) {
+        setStatus('Offline');
+      }
+    }
   }
 
   function logout() {
@@ -228,27 +263,20 @@ export function App() {
 
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
-     const response = await fetch(`${API_BASE}/api/auth/${credentials.mode}`, {
-  method: 'POST',
-  credentials: 'include',
-  headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({
-    name: credentials.name,
-    email: credentials.email,
-    password: credentials.password
-  })
-});
+      const response = await fetch(`/api/auth/${credentials.mode}`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: credentials.name,
+          email: credentials.email,
+          password: credentials.password
+        })
+      });
 
-      let payload;
+      const payload = await readJson<Partial<AuthResponse> & { error?: string }>(response);
 
-try {
-  payload = await response.json();
-} catch (error) {
-  setAuthMessage('Server response error.');
-  return;
-}
-
-      if (!response.ok) {
+      if (!response.ok || !payload.token || !payload.user) {
         throw new Error(payload.error || 'Authentication failed.');
       }
 
@@ -257,7 +285,8 @@ try {
       setUser(payload.user);
       setAuthPassword('');
       setAuthMessage('Welcome back.');
-      window.location.reload();
+      setStatus('Live');
+      setCurrentView('dashboard');
     } catch (error) {
       setAuthMessage(error instanceof Error ? error.message : 'Authentication failed.');
     }
@@ -267,6 +296,7 @@ try {
     if (!activeDataset?.chart.length) {
       return 1;
     }
+
     return Math.max(...activeDataset.chart.map((point) => point.value), 1);
   }, [activeDataset]);
 
@@ -295,14 +325,14 @@ try {
         body: formData
       });
 
+      const dataset = await readJson<Dataset & { error?: string }>(response);
+
       if (!response.ok) {
-        const payload = await response.json();
-        throw new Error(payload.error || 'Upload failed.');
+        throw new Error(dataset.error || 'Upload failed.');
       }
 
-      const dataset = await response.json();
       setActiveDataset(dataset);
-      setDatasets((current) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
+      setDatasets((current: Dataset[]) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
       setChat([{ role: 'assistant', text: `I loaded ${dataset.fileName}. Ask me what changed, what stands out, or how many rows it has.` }]);
       setUploadState(authDisabled ? 'CSV analysis ready and saved locally.' : 'CSV analysis ready and saved to SQL Server.');
     } catch (error) {
@@ -320,6 +350,7 @@ try {
   function handleDrop(event: DragEvent<HTMLLabelElement>) {
     event.preventDefault();
     setIsDragging(false);
+
     const file = event.dataTransfer.files[0];
     if (file) {
       uploadCsv(file);
@@ -328,13 +359,14 @@ try {
 
   async function askAssistant(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+
     if (!activeDataset || !question.trim()) {
       return;
     }
 
     const nextQuestion = question.trim();
     setQuestion('');
-    setChat((current) => [...current, { role: 'user', text: nextQuestion }]);
+    setChat((current: ChatMessage[]) => [...current, { role: 'user', text: nextQuestion }]);
 
     try {
       const response = await apiFetch(`/api/datasets/${activeDataset.id}/chat`, {
@@ -342,10 +374,10 @@ try {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: nextQuestion })
       });
-      const payload = await response.json();
-      setChat((current) => [...current, { role: 'assistant', text: payload.answer }]);
+      const payload = await readJson<{ answer: string }>(response);
+      setChat((current: ChatMessage[]) => [...current, { role: 'assistant', text: payload.answer }]);
     } catch {
-      setChat((current) => [...current, { role: 'assistant', text: 'I could not answer that yet. Check the backend connection and try again.' }]);
+      setChat((current: ChatMessage[]) => [...current, { role: 'assistant', text: 'I could not answer that yet. Check the backend connection and try again.' }]);
     }
   }
 
@@ -368,13 +400,14 @@ try {
         snapshot: buildDashboardSnapshot(activeDataset, chartType)
       })
     });
-    const payload = await response.json();
-    setDashboards((current) => [payload.dashboard, ...current.filter((dashboard) => dashboard.id !== payload.dashboard.id)]);
+    const payload = await readJson<{ dashboard: SavedDashboard }>(response);
+    setDashboards((current: SavedDashboard[]) => [payload.dashboard, ...current.filter((dashboard) => dashboard.id !== payload.dashboard.id)]);
     setPersistenceState(authDisabled ? 'Dashboard saved locally.' : 'Dashboard saved to SQL Server.');
   }
 
   function openDashboard(dashboard: SavedDashboard) {
     const dataset = datasets.find((item) => item.id === dashboard.datasetId) ?? dashboard.snapshot?.dataset;
+
     if (dataset) {
       setActiveDataset(dataset);
       setChartType(dashboard.chartType);
@@ -387,8 +420,10 @@ try {
       apiFetch('/api/dashboards'),
       apiFetch('/api/reports')
     ]);
-    setDashboards((await dashboardsResponse.json()).dashboards);
-    setReports((await reportsResponse.json()).reports);
+    const dashboardsPayload = await readJson<{ dashboards: SavedDashboard[] }>(dashboardsResponse);
+    const reportsPayload = await readJson<{ reports: ReportHistoryItem[] }>(reportsResponse);
+    setDashboards(dashboardsPayload.dashboards ?? []);
+    setReports(reportsPayload.reports ?? []);
   }
 
   async function downloadPdfReport() {
@@ -398,6 +433,7 @@ try {
 
     const lines = buildReportLines(activeDataset);
     downloadPdf(lines, `${activeDataset.fileName.replace(/\.csv$/i, '')}-report.pdf`);
+
     const response = await apiFetch('/api/reports', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -415,8 +451,8 @@ try {
         }
       })
     });
-    const payload = await response.json();
-    setReports((current) => [payload.report, ...current]);
+    const payload = await readJson<{ report: ReportHistoryItem }>(response);
+    setReports((current: ReportHistoryItem[]) => [payload.report, ...current]);
     setPersistenceState('Report downloaded and added to history.');
   }
 
@@ -428,7 +464,8 @@ try {
         `Dataset: ${report.datasetName}`,
         `Created: ${new Date(report.createdAt).toLocaleString()}`
       ]);
-    downloadPdf(lines, `${report.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'business-ai-report'}.pdf`);
+    const fileName = `${report.title.replace(/[^a-z0-9]+/gi, '-').replace(/^-|-$/g, '').toLowerCase() || 'business-ai-report'}.pdf`;
+    downloadPdf(lines, fileName);
     setPersistenceState(`Downloaded ${report.title}.`);
   }
 
@@ -451,7 +488,7 @@ try {
     );
   }
 
-  if (!authDisabled) {
+  if (!authDisabled && !user) {
     return (
       <main className="auth-shell">
         <section className="auth-card">
@@ -578,208 +615,208 @@ try {
           </section>
         ) : (
           <>
-        <section className="metrics-grid" aria-label="Performance metrics">
-          {insights.metrics.map((metric) => (
-            <article className="metric-card" key={metric.label}>
-              <span>{metric.label}</span>
-              <strong>{metric.value}</strong>
-              <small>{metric.trend} this month</small>
-            </article>
-          ))}
-        </section>
+            <section className="metrics-grid" aria-label="Performance metrics">
+              {insights.metrics.map((metric) => (
+                <article className="metric-card" key={metric.label}>
+                  <span>{metric.label}</span>
+                  <strong>{metric.value}</strong>
+                  <small>{metric.trend} this month</small>
+                </article>
+              ))}
+            </section>
 
-        <section className="csv-section" id="csv">
-          <div className="section-heading">
-            <div>
-              <p className="eyebrow">CSV studio</p>
-              <h2>Analyze business data in one clean view</h2>
-            </div>
-            <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
-              Download PDF
-            </button>
-            <button className="ghost-button" type="button" disabled={!activeDataset} onClick={saveCurrentDashboard}>
-              Save dashboard
-            </button>
-          </div>
-
-          <label
-            className={`drop-zone ${isDragging ? 'dragging' : ''}`}
-            onDragOver={(event) => {
-              event.preventDefault();
-              setIsDragging(true);
-            }}
-            onDragLeave={() => setIsDragging(false)}
-            onDrop={handleDrop}
-          >
-            <input accept=".csv,text/csv" type="file" onChange={handleCsvUpload} />
-            <strong>Drop CSV file here</strong>
-            <span>{uploadState}</span>
-          </label>
-
-          <div className="dataset-strip">
-            {datasets.map((dataset) => (
-              <button
-                className={activeDataset?.id === dataset.id ? 'selected' : ''}
-                key={dataset.id}
-                type="button"
-                onClick={() => setActiveDataset(dataset)}
-              >
-                <strong>{dataset.fileName}</strong>
-                <span>{dataset.rows} rows - {dataset.columns} columns</span>
-              </button>
-            ))}
-          </div>
-
-          <p className="persistence-note">{persistenceState}</p>
-
-          <div className="csv-grid">
-            <article className="panel data-panel">
-              <div className="panel-header">
-                <h3>{activeDataset?.fileName ?? 'Data preview'}</h3>
-                <div className="count-strip">
-                  <span>{activeDataset?.rows ?? 0} rows</span>
-                  <span>{activeDataset?.columns ?? 0} columns</span>
+            <section className="csv-section" id="csv">
+              <div className="section-heading">
+                <div>
+                  <p className="eyebrow">CSV studio</p>
+                  <h2>Analyze business data in one clean view</h2>
                 </div>
+                <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
+                  Download PDF
+                </button>
+                <button className="ghost-button" type="button" disabled={!activeDataset} onClick={saveCurrentDashboard}>
+                  Save dashboard
+                </button>
               </div>
 
-              {activeDataset ? (
-                <div className="table-wrap">
-                  <table>
-                    <thead>
-                      <tr>
-                        {activeDataset.headers.map((header) => (
-                          <th key={header}>{header}</th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {activeDataset.preview.map((row, rowIndex) => (
-                        <tr key={`${activeDataset.id}-${rowIndex}`}>
-                          {activeDataset.headers.map((header) => (
-                            <td key={header}>{row[header]}</td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <div className="empty-state">No CSV uploaded yet.</div>
-              )}
-            </article>
+              <label
+                className={`drop-zone ${isDragging ? 'dragging' : ''}`}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={handleDrop}
+              >
+                <input accept=".csv,text/csv" type="file" onChange={handleCsvUpload} />
+                <strong>Drop CSV file here</strong>
+                <span>{uploadState}</span>
+              </label>
 
-            <aside className="side-stack">
+              <div className="dataset-strip">
+                {datasets.map((dataset) => (
+                  <button
+                    className={activeDataset?.id === dataset.id ? 'selected' : ''}
+                    key={dataset.id}
+                    type="button"
+                    onClick={() => setActiveDataset(dataset)}
+                  >
+                    <strong>{dataset.fileName}</strong>
+                    <span>{dataset.rows} rows - {dataset.columns} columns</span>
+                  </button>
+                ))}
+              </div>
+
+              <p className="persistence-note">{persistenceState}</p>
+
+              <div className="csv-grid">
+                <article className="panel data-panel">
+                  <div className="panel-header">
+                    <h3>{activeDataset?.fileName ?? 'Data preview'}</h3>
+                    <div className="count-strip">
+                      <span>{activeDataset?.rows ?? 0} rows</span>
+                      <span>{activeDataset?.columns ?? 0} columns</span>
+                    </div>
+                  </div>
+
+                  {activeDataset ? (
+                    <div className="table-wrap">
+                      <table>
+                        <thead>
+                          <tr>
+                            {activeDataset.headers.map((header) => (
+                              <th key={header}>{header}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {activeDataset.preview.map((row, rowIndex) => (
+                            <tr key={`${activeDataset.id}-${rowIndex}`}>
+                              {activeDataset.headers.map((header) => (
+                                <td key={header}>{row[header]}</td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="empty-state">No CSV uploaded yet.</div>
+                  )}
+                </article>
+
+                <aside className="side-stack">
+                  <article className="panel">
+                    <div className="panel-header">
+                      <div>
+                        <h3>Auto chart</h3>
+                        <p className="muted">{activeDataset ? `Showing ${activeDataset.chartColumn}` : 'A chart appears after upload.'}</p>
+                      </div>
+                      <div className="segmented" aria-label="Chart type">
+                        {(['bar', 'line', 'donut'] as ChartType[]).map((type) => (
+                          <button className={chartType === type ? 'active' : ''} key={type} type="button" onClick={() => setChartType(type)}>
+                            {type}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                    {renderChart(chartType, activeDataset, chartMax, linePoints)}
+                  </article>
+
+                  <article className="panel ai-panel">
+                    <h3>AI insights</h3>
+                    <ul>
+                      {(activeDataset?.insights ?? ['Upload a CSV to generate clear, practical data insights.']).map((item) => (
+                        <li key={item}>{item}</li>
+                      ))}
+                    </ul>
+                  </article>
+                </aside>
+              </div>
+            </section>
+
+            <section className="history-grid">
               <article className="panel">
                 <div className="panel-header">
-                  <div>
-                    <h3>Auto chart</h3>
-                    <p className="muted">{activeDataset ? `Showing ${activeDataset.chartColumn}` : 'A chart appears after upload.'}</p>
-                  </div>
-                  <div className="segmented" aria-label="Chart type">
-                    {(['bar', 'line', 'donut'] as ChartType[]).map((type) => (
-                      <button className={chartType === type ? 'active' : ''} key={type} type="button" onClick={() => setChartType(type)}>
-                        {type}
+                  <h2>Saved dashboards</h2>
+                  <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
+                </div>
+                <div className="history-list">
+                  {dashboards.length ? dashboards.map((dashboard) => (
+                    <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
+                      <strong>{dashboard.name}</strong>
+                      <span>
+                        {dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}
+                        {user?.role === 'admin' && dashboard.ownerEmail ? ` - ${dashboard.ownerEmail}` : ''}
+                      </span>
+                    </button>
+                  )) : <p className="muted">No dashboards saved yet.</p>}
+                </div>
+              </article>
+
+              <article className="panel">
+                <div className="panel-header">
+                  <h2>Report history</h2>
+                  <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
+                </div>
+                <div className="history-list">
+                  {reports.length ? reports.map((report) => (
+                    <div className="history-item" key={report.id}>
+                      <div>
+                        <strong>{report.title}</strong>
+                        <span>
+                          {report.datasetName} - {new Date(report.createdAt).toLocaleString()}
+                          {user?.role === 'admin' && report.ownerEmail ? ` - ${report.ownerEmail}` : ''}
+                        </span>
+                      </div>
+                      <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>
+                        Download
                       </button>
-                    ))}
-                  </div>
+                    </div>
+                  )) : <p className="muted">Downloaded reports will appear here.</p>}
                 </div>
-                {renderChart(chartType, activeDataset, chartMax, linePoints)}
               </article>
+            </section>
 
-              <article className="panel ai-panel">
-                <h3>AI insights</h3>
-                <ul>
-                  {(activeDataset?.insights ?? ['Upload a CSV to generate clear, practical data insights.']).map((item) => (
-                    <li key={item}>{item}</li>
+            <section className="assistant-grid" id="assistant">
+              <article className="panel chat-panel">
+                <div className="panel-header">
+                  <h2>AI data assistant</h2>
+                  <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
+                </div>
+                <div className="messages">
+                  {chat.map((message, index) => (
+                    <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
+                      {message.text}
+                    </div>
                   ))}
-                </ul>
+                </div>
+                <form className="chat-form" onSubmit={askAssistant}>
+                  <input
+                    disabled={!activeDataset}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    placeholder="Ask about totals, averages, columns..."
+                    value={question}
+                  />
+                  <button disabled={!activeDataset || !question.trim()} type="submit">Ask</button>
+                </form>
               </article>
-            </aside>
-          </div>
-        </section>
 
-        <section className="history-grid">
-          <article className="panel">
-            <div className="panel-header">
-              <h2>Saved dashboards</h2>
-              <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
-            </div>
-            <div className="history-list">
-              {dashboards.length ? dashboards.map((dashboard) => (
-                <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
-                  <strong>{dashboard.name}</strong>
-                  <span>
-                    {dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}
-                    {user?.role === 'admin' && dashboard.ownerEmail ? ` - ${dashboard.ownerEmail}` : ''}
-                  </span>
-                </button>
-              )) : <p className="muted">No dashboards saved yet.</p>}
-            </div>
-          </article>
-
-          <article className="panel">
-            <div className="panel-header">
-              <h2>Report history</h2>
-              <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
-            </div>
-            <div className="history-list">
-              {reports.length ? reports.map((report) => (
-                <div className="history-item" key={report.id}>
-                  <div>
-                    <strong>{report.title}</strong>
-                    <span>
-                      {report.datasetName} - {new Date(report.createdAt).toLocaleString()}
-                      {user?.role === 'admin' && report.ownerEmail ? ` - ${report.ownerEmail}` : ''}
-                    </span>
-                  </div>
-                  <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>
-                    Download
-                  </button>
+              <article className="panel">
+                <h2>Active workflows</h2>
+                <div className="workflow-list">
+                  {workflows.map((workflow) => (
+                    <div className="workflow-row" key={workflow.name}>
+                      <div>
+                        <strong>{workflow.name}</strong>
+                        <span>{workflow.owner} - {workflow.steps} steps</span>
+                      </div>
+                      <small>{workflow.status}</small>
+                    </div>
+                  ))}
                 </div>
-              )) : <p className="muted">Downloaded reports will appear here.</p>}
-            </div>
-          </article>
-        </section>
-
-        <section className="assistant-grid" id="assistant">
-          <article className="panel chat-panel">
-            <div className="panel-header">
-              <h2>AI data assistant</h2>
-              <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
-            </div>
-            <div className="messages">
-              {chat.map((message, index) => (
-                <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-                  {message.text}
-                </div>
-              ))}
-            </div>
-            <form className="chat-form" onSubmit={askAssistant}>
-              <input
-                disabled={!activeDataset}
-                onChange={(event) => setQuestion(event.target.value)}
-                placeholder="Ask about totals, averages, columns..."
-                value={question}
-              />
-              <button disabled={!activeDataset || !question.trim()} type="submit">Ask</button>
-            </form>
-          </article>
-
-          <article className="panel">
-            <h2>Active workflows</h2>
-            <div className="workflow-list">
-              {workflows.map((workflow) => (
-                <div className="workflow-row" key={workflow.name}>
-                  <div>
-                    <strong>{workflow.name}</strong>
-                    <span>{workflow.owner} - {workflow.steps} steps</span>
-                  </div>
-                  <small>{workflow.status}</small>
-                </div>
-              ))}
-            </div>
-          </article>
-        </section>
+              </article>
+            </section>
           </>
         )}
       </section>
@@ -829,6 +866,20 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
       ))}
     </div>
   );
+}
+
+async function readJson<T>(response: Response): Promise<T> {
+  const contentType = response.headers.get('content-type') || '';
+  const text = await response.text();
+
+  if (!contentType.includes('application/json')) {
+    const preview = text.trim().slice(0, 80);
+    throw new Error(preview.startsWith('<!doctype') || preview.startsWith('<html')
+      ? 'API route returned HTML instead of JSON. Check the production /api rewrite.'
+      : 'API route returned a non-JSON response.');
+  }
+
+  return JSON.parse(text) as T;
 }
 
 function buildDashboardSnapshot(dataset: Dataset, chartType: ChartType) {

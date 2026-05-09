@@ -36,9 +36,10 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }
 });
 const port = Number(process.env.PORT || 4000);
-const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5173';
+const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
 const jwtSecret = process.env.JWT_SECRET || (!usingSqlServer ? 'local-mvp-secret' : '');
+const requireStoredSessions = usingSqlServer || process.env.REQUIRE_STORED_SESSIONS === 'true';
 const demoEmail = 'admin@businessai.com';
 const demoPassword = 'admin123';
 const adminEmails = (process.env.ADMIN_EMAILS || demoEmail)
@@ -264,7 +265,9 @@ async function createLoginSession(user) {
     {
       sub: user.id,
       sid: session.id,
-      email: user.email
+      email: user.email,
+      name: user.name,
+      role: user.role === 'admin' ? 'admin' : 'user'
     },
     session.expiresAt
   );
@@ -325,9 +328,11 @@ async function requireAuth(req, res, next) {
     }
 
     const payload = verifyJwt(token);
-    const user = await findUserById(payload.sub);
+    const storedUser = await findUserById(payload.sub);
     const session = payload.sid ? await findSessionById(payload.sid, payload.sub) : undefined;
-    if (!user || !session) {
+    const user = storedUser ?? (!usingSqlServer ? userFromToken(payload) : undefined);
+
+    if (!user || (requireStoredSessions && !session)) {
       res.status(401).json({ error: 'Authentication required.' });
       return;
     }
@@ -338,6 +343,19 @@ async function requireAuth(req, res, next) {
   } catch {
     res.status(401).json({ error: 'Authentication required.' });
   }
+}
+
+function userFromToken(payload) {
+  if (!payload?.sub || !payload?.email) {
+    return undefined;
+  }
+
+  return {
+    id: payload.sub,
+    name: payload.name || payload.email,
+    email: payload.email,
+    role: payload.role === 'admin' ? 'admin' : 'user'
+  };
 }
 
 function requireRole(role) {
