@@ -140,7 +140,7 @@ export function App() {
 
     Promise.all([
       apiFetch('/api/auth/me'),
-      apiFetch('/api/insights'),
+     // apiFetch('/api/insights'),
       apiFetch('/api/workflows'),
       apiFetch('/api/datasets'),
       apiFetch('/api/dashboards'),
