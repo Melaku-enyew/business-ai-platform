@@ -10,26 +10,39 @@ import express from 'express';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
+  createAccountToken,
   createSession,
   createUser,
   deleteUser,
+  ensureOwnerAccount,
   findUserByEmail,
   findUserById,
+  findAccountToken,
+  hasRole,
   findSessionById,
   getDevUser,
   getDataset,
   initDatabase,
+  listAuditLogs,
   listDashboards,
   listDatasets,
   listReports,
   listSessions,
   listUsers,
+  markAccountTokenUsed,
+  ownerEmail,
   promoteAdminEmails,
+  recordLoginFailure,
+  recordLoginSuccess,
+  removeDemoAccounts,
   saveDashboard,
   saveDataset,
   saveReport,
+  saveAuditLog,
   revokeSession,
   revokeUserSessions,
+  roles,
+  updateUserPassword,
   updateUser,
   usingSqlServer
 } from './db.js';
@@ -47,9 +60,7 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
 const jwtSecret = process.env.JWT_SECRET || (!usingSqlServer ? 'local-mvp-secret' : '');
 const requireStoredSessions = usingSqlServer || process.env.REQUIRE_STORED_SESSIONS === 'true';
-const demoEmail = 'admin@businessai.com';
-const demoPassword = 'admin123';
-const adminEmails = (process.env.ADMIN_EMAILS || demoEmail)
+const adminEmails = (process.env.ADMIN_EMAILS || ownerEmail)
   .split(',')
   .map((email) => email.trim().toLowerCase())
   .filter(Boolean);
@@ -310,14 +321,24 @@ function publicUser(user) {
     id: user.id,
     name: user.name,
     email: user.email,
-    role: user.role === 'admin' ? 'admin' : 'user',
+    role: user.role,
     active: user.active !== false,
+    emailVerified: user.emailVerified === true,
+    profilePhotoUrl: user.profilePhotoUrl ?? '',
+    notificationSettings: user.notificationSettings ?? {},
+    preferences: user.preferences ?? {},
+    twoFactorEnabled: user.twoFactorEnabled === true,
+    lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt
   };
 }
 
 function roleForEmail(email) {
-  return adminEmails.includes(email.toLowerCase()) ? 'admin' : 'user';
+  const normalizedEmail = email.toLowerCase();
+  if (normalizedEmail === ownerEmail) {
+    return 'owner';
+  }
+  return adminEmails.includes(normalizedEmail) ? 'admin' : 'employee';
 }
 
 function base64Url(input) {
@@ -347,7 +368,7 @@ async function createLoginSession(user) {
       sid: session.id,
       email: user.email,
       name: user.name,
-      role: user.role === 'admin' ? 'admin' : 'user'
+      role: user.role
     },
     session.expiresAt
   );
@@ -434,20 +455,40 @@ function userFromToken(payload) {
     id: payload.sub,
     name: payload.name || payload.email,
     email: payload.email,
-    role: payload.role === 'admin' ? 'admin' : 'user',
+    role: roles.includes(payload.role) ? payload.role : 'employee',
     active: true
   };
 }
 
 function requireRole(role) {
   return (req, res, next) => {
-    if (req.user?.role !== role) {
+    if (!hasRole(req.user, role)) {
       res.status(403).json({ error: 'Insufficient workspace permissions.' });
       return;
     }
 
     next();
   };
+}
+
+function hashToken(token) {
+  return createHmac('sha256', jwtSecret).update(token).digest('base64url');
+}
+
+function issueAccountToken() {
+  return randomBytes(32).toString('base64url');
+}
+
+async function audit(req, action, targetType, targetId, metadata = {}) {
+  await saveAuditLog({
+    id: randomUUID(),
+    actorUserId: req.user?.id,
+    actorEmail: req.user?.email ?? req.body?.email,
+    action,
+    targetType,
+    targetId,
+    metadata
+  });
 }
 
 function formatNumber(value) {
@@ -649,10 +690,129 @@ app.post('/api/auth/signup', async (req, res, next) => {
       name,
       email,
       role: roleForEmail(email),
+      emailVerified: email === ownerEmail,
       passwordHash: await hashPassword(password)
+    });
+    await saveAuditLog({
+      id: randomUUID(),
+      actorUserId: user.id,
+      actorEmail: user.email,
+      action: 'auth.signup',
+      targetType: 'user',
+      targetId: user.id,
+      metadata: { role: user.role }
     });
     const { token, session } = await createLoginSession(user);
     res.status(201).json({ token, user: publicUser(user), session });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/forgot-password', async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const user = email ? await findUserByEmail(email) : undefined;
+    let resetUrl;
+
+    if (user) {
+      const token = issueAccountToken();
+      await createAccountToken({
+        id: randomUUID(),
+        userId: user.id,
+        tokenHash: hashToken(token),
+        purpose: 'password_reset',
+        expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
+      });
+      resetUrl = `/reset-password?token=${encodeURIComponent(token)}`;
+      await saveAuditLog({
+        id: randomUUID(),
+        actorEmail: email,
+        action: 'auth.password_reset_requested',
+        targetType: 'user',
+        targetId: user.id,
+        metadata: { delivery: 'email-ready' }
+      });
+    }
+
+    res.json({
+      message: 'If the account exists, password reset instructions have been prepared.',
+      ...(resetUrl && !process.env.EMAIL_PROVIDER ? { resetUrl } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/reset-password', async (req, res, next) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const password = String(req.body?.password || '');
+
+    if (!token || password.length < 8) {
+      res.status(400).json({ error: 'A valid reset token and 8+ character password are required.' });
+      return;
+    }
+
+    const accountToken = await findAccountToken(hashToken(token), 'password_reset');
+    if (!accountToken) {
+      res.status(400).json({ error: 'Reset token is invalid or expired.' });
+      return;
+    }
+
+    await updateUserPassword(accountToken.userId, await hashPassword(password));
+    await revokeUserSessions(accountToken.userId);
+    await markAccountTokenUsed(accountToken.id);
+    res.json({ message: 'Password reset complete. Please log in again.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/recover-username', async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const user = email ? await findUserByEmail(email) : undefined;
+    res.json({
+      message: 'If the account exists, username recovery instructions have been prepared.',
+      ...(user && !process.env.EMAIL_PROVIDER ? { username: user.email, name: user.name } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/request-verification', requireAuth, async (req, res, next) => {
+  try {
+    const token = issueAccountToken();
+    await createAccountToken({
+      id: randomUUID(),
+      userId: req.user.id,
+      tokenHash: hashToken(token),
+      purpose: 'email_verification',
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+    });
+    res.json({
+      message: 'Verification instructions have been prepared.',
+      ...(!process.env.EMAIL_PROVIDER ? { verificationUrl: `/verify-email?token=${encodeURIComponent(token)}` } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/auth/verify-email', async (req, res, next) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const accountToken = await findAccountToken(hashToken(token), 'email_verification');
+    if (!accountToken) {
+      res.status(400).json({ error: 'Verification token is invalid or expired.' });
+      return;
+    }
+
+    await updateUser(accountToken.userId, { emailVerified: true });
+    await markAccountTokenUsed(accountToken.id);
+    res.json({ message: 'Email verified.' });
   } catch (error) {
     next(error);
   }
@@ -662,32 +822,15 @@ app.post('/api/auth/login', async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
+    const user = await findUserByEmail(email);
 
-    if (!usingSqlServer && email === demoEmail && password === demoPassword) {
-      let demoUser = await findUserByEmail(demoEmail);
-      if (!demoUser || demoUser.role !== 'admin') {
-        demoUser = await createUser({
-          id: 'demo-admin-user',
-          name: 'Demo Admin',
-          email: demoEmail,
-          role: 'admin',
-          passwordHash: await hashPassword(demoPassword)
-        });
-      }
-
-      if (demoUser.active === false) {
-        res.status(403).json({ error: 'This account is disabled.' });
-        return;
-      }
-
-      const { token, session } = await createLoginSession(demoUser);
-      res.json({ token, user: publicUser(demoUser), session, demo: true });
+    if (user?.lockedUntil && new Date(user.lockedUntil).getTime() > Date.now()) {
+      res.status(423).json({ error: 'Account temporarily locked after repeated failed logins. Try again later.' });
       return;
     }
 
-    const user = await findUserByEmail(email);
-
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
+      await recordLoginFailure(email);
       res.status(401).json({ error: 'Invalid email or password.' });
       return;
     }
@@ -697,7 +840,17 @@ app.post('/api/auth/login', async (req, res, next) => {
       return;
     }
 
+    await recordLoginSuccess(user.id);
     const { token, session } = await createLoginSession(user);
+    await saveAuditLog({
+      id: randomUUID(),
+      actorUserId: user.id,
+      actorEmail: user.email,
+      action: 'auth.login',
+      targetType: 'user',
+      targetId: user.id,
+      metadata: { role: user.role }
+    });
     res.json({ token, user: publicUser(user), session });
   } catch (error) {
     next(error);
@@ -747,7 +900,12 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
     const updates = {};
 
     if (req.body?.role != null) {
-      updates.role = req.body.role === 'admin' ? 'admin' : 'user';
+      const requestedRole = String(req.body.role);
+      if (requestedRole === 'owner' && req.user.email !== ownerEmail) {
+        res.status(403).json({ error: 'Only the permanent owner can assign owner permissions.' });
+        return;
+      }
+      updates.role = roles.includes(requestedRole) ? requestedRole : 'employee';
     }
 
     if (req.body?.active != null) {
@@ -759,6 +917,12 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
       return;
     }
 
+    const existing = await findUserById(req.params.id);
+    if (existing?.email === ownerEmail && req.user.email !== ownerEmail) {
+      res.status(403).json({ error: 'Owner permissions cannot be changed by another account.' });
+      return;
+    }
+
     const user = await updateUser(req.params.id, updates);
     if (!user) {
       res.status(404).json({ error: 'User not found.' });
@@ -766,6 +930,7 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
     }
 
     res.json({ user: publicUser(user) });
+    await audit(req, 'admin.user_updated', 'user', user.id, updates);
   } catch (error) {
     next(error);
   }
@@ -778,7 +943,14 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req
       return;
     }
 
+    const existing = await findUserById(req.params.id);
+    if (existing?.email === ownerEmail) {
+      res.status(403).json({ error: 'The permanent owner account cannot be deleted.' });
+      return;
+    }
+
     await deleteUser(req.params.id);
+    await audit(req, 'admin.user_deleted', 'user', req.params.id);
     res.status(204).end();
   } catch (error) {
     next(error);
@@ -793,6 +965,7 @@ app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('admin'), async
     }
 
     await revokeUserSessions(req.params.id);
+    await audit(req, 'admin.sessions_revoked', 'user', req.params.id);
     res.json({ revoked: true });
   } catch (error) {
     next(error);
@@ -811,6 +984,108 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
 });
 
 app.use('/api', requireAuth);
+
+app.get('/api/roles', (_req, res) => {
+  res.json({
+    roles,
+    permissions: {
+      owner: ['all'],
+      admin: ['users.manage', 'reports.view_all', 'modules.manage', 'security.manage'],
+      manager: ['team.manage', 'reports.view', 'modules.use'],
+      employee: ['modules.use', 'datasets.own'],
+      viewer: ['reports.read', 'dashboards.read']
+    }
+  });
+});
+
+app.get('/api/profile', (req, res) => {
+  res.json({ user: publicUser(req.user) });
+});
+
+app.patch('/api/profile', async (req, res, next) => {
+  try {
+    const user = await updateUser(req.user.id, {
+      name: req.body?.name,
+      profilePhotoUrl: req.body?.profilePhotoUrl,
+      notificationSettings: req.body?.notificationSettings,
+      preferences: req.body?.preferences,
+      twoFactorEnabled: req.body?.twoFactorEnabled
+    });
+    await audit(req, 'profile.updated', 'user', req.user.id);
+    res.json({ user: publicUser(user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/profile/change-password', async (req, res, next) => {
+  try {
+    const currentPassword = String(req.body?.currentPassword || '');
+    const nextPassword = String(req.body?.newPassword || '');
+    const user = await findUserByEmail(req.user.email);
+
+    if (!user || !(await verifyPassword(currentPassword, user.passwordHash))) {
+      res.status(401).json({ error: 'Current password is incorrect.' });
+      return;
+    }
+
+    if (nextPassword.length < 8) {
+      res.status(400).json({ error: 'New password must be at least 8 characters.' });
+      return;
+    }
+
+    await updateUserPassword(req.user.id, await hashPassword(nextPassword));
+    await revokeUserSessions(req.user.id);
+    await audit(req, 'profile.password_changed', 'user', req.user.id);
+    res.json({ message: 'Password changed. Please log in again.' });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/audit-logs', requireRole('admin'), async (_req, res, next) => {
+  try {
+    res.json({ auditLogs: await listAuditLogs() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
+  res.json({
+    status: 'operational',
+    storage: usingSqlServer ? 'sql-server' : 'local-json',
+    auth: requireStoredSessions ? 'jwt-with-stored-sessions' : 'jwt-stateless-local',
+    uptimeSeconds: Math.round(process.uptime()),
+    uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
+    maxSpreadsheetRows
+  });
+});
+
+app.post('/api/contact', async (req, res, next) => {
+  try {
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim();
+    const message = String(req.body?.message || '').trim();
+
+    if (!name || !email || !message) {
+      res.status(400).json({ error: 'Name, email, and message are required.' });
+      return;
+    }
+
+    await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email });
+    res.status(201).json({
+      message: 'Support request received. Metenova AI will follow up by email.',
+      contact: {
+        owner: 'Melaku',
+        email: ownerEmail,
+        phone: '202-607-1255'
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 app.get('/api/insights', (_req, res) => {
   res.json(insights);
@@ -1005,7 +1280,9 @@ app.use((error, _req, res, _next) => {
 });
 
 initDatabase()
+  .then(removeDemoAccounts)
   .then(() => promoteAdminEmails(adminEmails))
+  .then(ensureOwnerAccount)
   .then(importLegacyDatasets)
   .then(() => {
     app.listen(port, () => {

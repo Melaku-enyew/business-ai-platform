@@ -35,14 +35,33 @@ type ChartType = 'bar' | 'line' | 'donut';
 type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
-type AppView = 'dashboard' | 'settings' | 'adminUsers';
+type UserRole = 'owner' | 'admin' | 'manager' | 'employee' | 'viewer';
+type AppView =
+  | 'dashboard'
+  | 'assistant'
+  | 'accounting'
+  | 'engineering'
+  | 'hr'
+  | 'crm'
+  | 'dataProcessing'
+  | 'analytics'
+  | 'reports'
+  | 'adminUsers'
+  | 'settings'
+  | 'contact';
 
 type User = {
   id: string;
   name: string;
   email: string;
-  role: 'admin' | 'user';
+  role: UserRole;
   active?: boolean;
+  emailVerified?: boolean;
+  profilePhotoUrl?: string;
+  notificationSettings?: Record<string, boolean>;
+  preferences?: Record<string, string | boolean>;
+  twoFactorEnabled?: boolean;
+  lastLoginAt?: string;
   createdAt?: string;
 };
 
@@ -89,6 +108,24 @@ type ConfigResponse = {
   storage: 'sql-server' | 'local-json' | string;
 };
 
+type AuditLog = {
+  id: string;
+  actorEmail?: string;
+  action: string;
+  targetType?: string;
+  targetId?: string;
+  createdAt: string;
+};
+
+type SystemStatus = {
+  status: string;
+  storage: string;
+  auth: string;
+  uptimeSeconds: number;
+  uploadLimitMb: number;
+  maxSpreadsheetRows: number;
+};
+
 type AuthResponse = {
   token: string;
   user: User;
@@ -101,6 +138,57 @@ const fallbackInsights: InsightResponse = {
     { label: 'Active workflows', value: 0, trend: '0%' }
   ],
   recommendations: ['Start the backend to load live recommendations.']
+};
+
+const ownerEmail = 'melakue@metenovaai.com';
+const roleOptions: UserRole[] = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+
+const moduleNav: Array<{ view: AppView; label: string; adminOnly?: boolean }> = [
+  { view: 'dashboard', label: 'Dashboard' },
+  { view: 'assistant', label: 'AI Assistant' },
+  { view: 'accounting', label: 'Accounting' },
+  { view: 'engineering', label: 'Engineering' },
+  { view: 'hr', label: 'HR' },
+  { view: 'crm', label: 'CRM' },
+  { view: 'dataProcessing', label: 'Data Processing' },
+  { view: 'analytics', label: 'Analytics' },
+  { view: 'reports', label: 'Reports' },
+  { view: 'adminUsers', label: 'Admin Panel', adminOnly: true },
+  { view: 'settings', label: 'Settings' },
+  { view: 'contact', label: 'Contact Us' }
+];
+
+const moduleCards: Record<string, Array<{ title: string; copy: string; metric: string }>> = {
+  accounting: [
+    { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', metric: '$48K open' },
+    { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', metric: '94% coded' },
+    { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', metric: '3 alerts' },
+    { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', metric: '12 reports' },
+    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', metric: 'Ready' }
+  ],
+  engineering: [
+    { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', metric: '7 active' },
+    { title: 'Task Tracking', copy: 'Prioritize work, assign teams, and monitor delivery commitments.', metric: '42 tasks' },
+    { title: 'Blueprint/File Management', copy: 'Prepare document upload, file versioning, and blueprint review workflows.', metric: 'Vault ready' },
+    { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', metric: 'Weekly' }
+  ],
+  hr: [
+    { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', metric: 'Secure' },
+    { title: 'Team Assignments', copy: 'Map employees to modules, managers, and projects.', metric: 'Role aware' },
+    { title: 'HR Assistant', copy: 'Draft policies, onboarding checklists, and internal communications.', metric: 'AI ready' }
+  ],
+  crm: [
+    { title: 'Accounts', copy: 'Track clients, contacts, opportunities, and relationship health.', metric: 'Pipeline' },
+    { title: 'Activity History', copy: 'Prepare interaction logging and follow-up workflows.', metric: 'Planned' },
+    { title: 'AI Sales Assistant', copy: 'Summarize client notes, risks, next steps, and deal movement.', metric: 'Ready' }
+  ],
+  dataProcessing: [
+    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', metric: 'Rules ready' },
+    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', metric: 'AI assisted' },
+    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', metric: 'Quality score' },
+    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', metric: 'CSV/Excel' },
+    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', metric: 'Reportable' }
+  ]
 };
 
 export function App() {
@@ -123,6 +211,18 @@ export function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMessage, setAuthMessage] = useState('Sign in to access your dashboards and datasets.');
+  const [recoveryEmail, setRecoveryEmail] = useState('');
+  const [recoveryMessage, setRecoveryMessage] = useState('');
+  const [profileName, setProfileName] = useState('');
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState('');
+  const [securityMessage, setSecurityMessage] = useState('');
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [twoFactorEnabled, setTwoFactorEnabled] = useState(false);
+  const [contactName, setContactName] = useState('');
+  const [contactEmail, setContactEmail] = useState('');
+  const [contactMessage, setContactMessage] = useState('');
+  const [supportMessage, setSupportMessage] = useState('');
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [accountOpen, setAccountOpen] = useState(false);
   const [question, setQuestion] = useState('');
@@ -131,6 +231,8 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
+  const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [persistenceState, setPersistenceState] = useState('SQL Server storage ready for saved work.');
   const [chat, setChat] = useState<ChatMessage[]>([
     { role: 'assistant', text: 'Upload or select a dataset, then ask about rows, columns, totals, averages, or outliers.' }
@@ -169,10 +271,22 @@ export function App() {
   }, [authDisabled, configLoaded, token]);
 
   useEffect(() => {
-    if (currentView === 'adminUsers' && user?.role === 'admin') {
+    if (currentView === 'adminUsers' && canManageUsers(user)) {
       loadAdminUsers();
     }
   }, [currentView, user?.role]);
+
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+
+    setProfileName(user.name);
+    setProfilePhotoUrl(user.profilePhotoUrl ?? '');
+    setTwoFactorEnabled(Boolean(user.twoFactorEnabled));
+    setContactName(user.name);
+    setContactEmail(user.email);
+  }, [user]);
 
   function apiFetch(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers);
@@ -271,18 +385,6 @@ export function App() {
     });
   }
 
-  async function handleDemoLogin() {
-    setAuthMode('login');
-    setAuthEmail('admin@businessai.com');
-    setAuthPassword('admin123');
-    setAuthMessage('Opening demo workspace...');
-    await submitAuth({
-      email: 'admin@businessai.com',
-      password: 'admin123',
-      mode: 'login'
-    });
-  }
-
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
       const response = await fetch(`/api/auth/${credentials.mode}`, {
@@ -311,6 +413,46 @@ export function App() {
       setCurrentView('dashboard');
     } catch (error) {
       setAuthMessage(error instanceof Error ? error.message : 'Authentication failed.');
+    }
+  }
+
+  async function requestPasswordReset() {
+    if (!recoveryEmail.trim()) {
+      setRecoveryMessage('Enter your account email first.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/auth/forgot-password', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      const payload = await readJson<{ message: string; resetUrl?: string }>(response);
+      setRecoveryMessage(payload.resetUrl ? `${payload.message} Local reset link: ${payload.resetUrl}` : payload.message);
+    } catch (error) {
+      setRecoveryMessage(error instanceof Error ? error.message : 'Recovery request failed.');
+    }
+  }
+
+  async function requestUsernameRecovery() {
+    if (!recoveryEmail.trim()) {
+      setRecoveryMessage('Enter your account email first.');
+      return;
+    }
+
+    try {
+      const response = await fetch('/api/auth/recover-username', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: recoveryEmail })
+      });
+      const payload = await readJson<{ message: string; username?: string }>(response);
+      setRecoveryMessage(payload.username ? `${payload.message} Username: ${payload.username}` : payload.message);
+    } catch (error) {
+      setRecoveryMessage(error instanceof Error ? error.message : 'Recovery request failed.');
     }
   }
 
@@ -469,16 +611,24 @@ export function App() {
   }
 
   async function loadAdminUsers() {
-    if (user?.role !== 'admin') {
+    if (!canManageUsers(user)) {
       setCurrentView('dashboard');
       return;
     }
 
     setAdminLoading(true);
     try {
-      const response = await apiFetch('/api/admin/users');
-      const payload = await readJson<{ users: AdminUser[] }>(response);
+      const [usersResponse, auditResponse, systemResponse] = await Promise.all([
+        apiFetch('/api/admin/users'),
+        apiFetch('/api/admin/audit-logs'),
+        apiFetch('/api/admin/system')
+      ]);
+      const payload = await readJson<{ users: AdminUser[] }>(usersResponse);
+      const auditPayload = await readJson<{ auditLogs: AuditLog[] }>(auditResponse);
+      const systemPayload = await readJson<SystemStatus>(systemResponse);
       setAdminUsers(payload.users ?? []);
+      setAuditLogs(auditPayload.auditLogs ?? []);
+      setSystemStatus(systemPayload);
       setAdminMessage('User directory refreshed.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'Could not load users.');
@@ -552,6 +702,91 @@ export function App() {
       setAdminMessage('User sessions revoked.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'Session revoke failed.');
+    }
+  }
+
+  async function saveProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const response = await apiFetch('/api/profile', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          name: profileName,
+          profilePhotoUrl,
+          twoFactorEnabled,
+          notificationSettings: {
+            emailReports: true,
+            securityAlerts: true,
+            productUpdates: false
+          },
+          preferences: {
+            theme,
+            executiveMode: true
+          }
+        })
+      });
+      const payload = await readJson<{ user: User }>(response);
+      setUser(payload.user);
+      setSecurityMessage('Profile and preferences saved.');
+    } catch (error) {
+      setSecurityMessage(error instanceof Error ? error.message : 'Profile update failed.');
+    }
+  }
+
+  async function changePassword(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const response = await apiFetch('/api/profile/change-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ currentPassword, newPassword })
+      });
+      const payload = await readJson<{ message: string; error?: string }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || 'Password change failed.');
+      }
+
+      setCurrentPassword('');
+      setNewPassword('');
+      setSecurityMessage(payload.message);
+    } catch (error) {
+      setSecurityMessage(error instanceof Error ? error.message : 'Password change failed.');
+    }
+  }
+
+  async function requestEmailVerification() {
+    try {
+      const response = await apiFetch('/api/auth/request-verification', { method: 'POST' });
+      const payload = await readJson<{ message: string; verificationUrl?: string }>(response);
+      setSecurityMessage(payload.verificationUrl ? `${payload.message} Local link: ${payload.verificationUrl}` : payload.message);
+    } catch (error) {
+      setSecurityMessage(error instanceof Error ? error.message : 'Verification request failed.');
+    }
+  }
+
+  async function submitContact(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    try {
+      const response = await apiFetch('/api/contact', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: contactName, email: contactEmail, message: contactMessage })
+      });
+      const payload = await readJson<{ message: string; error?: string }>(response);
+
+      if (!response.ok) {
+        throw new Error(payload.error || 'Support request failed.');
+      }
+
+      setContactMessage('');
+      setSupportMessage(payload.message);
+    } catch (error) {
+      setSupportMessage(error instanceof Error ? error.message : 'Support request failed.');
     }
   }
 
@@ -645,10 +880,20 @@ export function App() {
             </label>
             <button type="submit">{authMode === 'login' ? 'Log in' : 'Sign up'}</button>
           </form>
-          <button className="demo-login-button" type="button" onClick={handleDemoLogin}>
-            Use demo login
-          </button>
-          <p className="demo-credentials">admin@businessai.com / admin123</p>
+          <div className="recovery-panel">
+            <input
+              autoComplete="email"
+              placeholder="Email for recovery"
+              type="email"
+              value={recoveryEmail}
+              onChange={(event) => setRecoveryEmail(event.target.value)}
+            />
+            <div>
+              <button type="button" onClick={requestPasswordReset}>Forgot password</button>
+              <button type="button" onClick={requestUsernameRecovery}>Recover username</button>
+            </div>
+            {recoveryMessage && <p>{recoveryMessage}</p>}
+          </div>
           <button className="link-button" type="button" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
             {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
           </button>
@@ -665,13 +910,18 @@ export function App() {
           <span>Business AI</span>
         </div>
         <nav aria-label="Primary">
-          <button className={currentView === 'dashboard' ? 'active' : ''} type="button" onClick={() => setCurrentView('dashboard')}>Overview</button>
-          <a href="#csv" onClick={() => setCurrentView('dashboard')}>CSV Studio</a>
-          <a href="#assistant" onClick={() => setCurrentView('dashboard')}>Assistant</a>
-          {user?.role === 'admin' && (
-            <button className={currentView === 'adminUsers' ? 'active' : ''} type="button" onClick={() => setCurrentView('adminUsers')}>Admin Users</button>
-          )}
-          <button className={currentView === 'settings' ? 'active' : ''} type="button" onClick={openSettings}>Settings</button>
+          {moduleNav
+            .filter((item) => !item.adminOnly || canManageUsers(user))
+            .map((item) => (
+              <button
+                className={currentView === item.view ? 'active' : ''}
+                key={item.view}
+                type="button"
+                onClick={() => item.view === 'settings' ? openSettings() : setCurrentView(item.view)}
+              >
+                {item.label}
+              </button>
+            ))}
         </nav>
       </aside>
 
@@ -685,12 +935,15 @@ export function App() {
             <button className="ghost-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
               {theme === 'light' ? 'Dark' : 'Light'} mode
             </button>
+            <button className="ghost-button" type="button" onClick={() => setCurrentView('contact')}>
+              Support
+            </button>
             <div className="account-menu">
               <button className="account-button" type="button" onClick={() => setAccountOpen((open) => !open)}>
                 <span className="avatar">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span>
                 <span>
                   <strong>{user?.name ?? 'Local workspace'}</strong>
-                  <small>{user?.role === 'admin' ? 'Admin' : 'User'}</small>
+                  <small>{roleLabel(user?.role)}</small>
                 </span>
               </button>
               {accountOpen && (
@@ -714,38 +967,76 @@ export function App() {
               <p className="eyebrow">Account</p>
               <h2>Profile settings</h2>
               <div className="profile-card">
-                <span className="avatar large">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span>
+                {user?.profilePhotoUrl ? (
+                  <img className="avatar large photo-avatar" src={user.profilePhotoUrl} alt="" />
+                ) : (
+                  <span className="avatar large">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span>
+                )}
                 <div>
                   <strong>{user?.name ?? 'Local workspace'}</strong>
                   <span>{user?.email ?? 'local@example.com'}</span>
                 </div>
               </div>
+              <form className="settings-form" onSubmit={saveProfile}>
+                <label>
+                  Display name
+                  <input value={profileName} onChange={(event) => setProfileName(event.target.value)} />
+                </label>
+                <label>
+                  Profile picture URL
+                  <input placeholder="https://..." value={profilePhotoUrl} onChange={(event) => setProfilePhotoUrl(event.target.value)} />
+                </label>
+                <label className="toggle-row">
+                  <input checked={twoFactorEnabled} type="checkbox" onChange={(event) => setTwoFactorEnabled(event.target.checked)} />
+                  Optional 2FA enabled
+                </label>
+                <button type="submit">Save profile</button>
+              </form>
               <dl className="settings-list">
                 <div>
                   <dt>Workspace role</dt>
-                  <dd>{user?.role === 'admin' ? 'Admin' : 'User'}</dd>
+                  <dd>{roleLabel(user?.role)}</dd>
                 </div>
                 <div>
                   <dt>Access policy</dt>
-                  <dd>{user?.role === 'admin' ? 'Can view all dashboards and reports.' : 'Can view only owned datasets, dashboards, and reports.'}</dd>
+                  <dd>{canManageUsers(user) ? 'Can manage workspace users, reports, and security controls.' : 'Can access modules based on assigned permissions.'}</dd>
+                </div>
+                <div>
+                  <dt>Email verification</dt>
+                  <dd>{user?.emailVerified ? 'Verified' : 'Not verified'}</dd>
                 </div>
                 <div>
                   <dt>Session security</dt>
-                  <dd>JWT session with server-side revocation.</dd>
+                  <dd>JWT session with server-side revocation and account lockout protection.</dd>
                 </div>
               </dl>
             </article>
             <article className="panel">
-              <p className="eyebrow">Workspace</p>
-              <h2>Enterprise controls</h2>
+              <p className="eyebrow">Security</p>
+              <h2>Account protection</h2>
+              <form className="settings-form" onSubmit={changePassword}>
+                <label>
+                  Current password
+                  <input type="password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} />
+                </label>
+                <label>
+                  New password
+                  <input minLength={8} type="password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} />
+                </label>
+                <button type="submit">Change password</button>
+              </form>
+              <button className="ghost-button support-button" type="button" onClick={requestEmailVerification}>
+                Send verification email
+              </button>
+              {securityMessage && <p className="persistence-note">{securityMessage}</p>}
               <ul className="settings-notes">
-                <li>Role is stored with the user profile in SQL Server.</li>
-                <li>Dashboard and report history are filtered server-side.</li>
-                <li>Protected admin routes reject non-admin users.</li>
+                <li>Owner permissions are permanently reserved for {ownerEmail}.</li>
+                <li>Roles, active status, settings, and preferences persist in database storage.</li>
+                <li>Failed login attempts trigger temporary account lockout.</li>
               </ul>
             </article>
           </section>
-        ) : currentView === 'adminUsers' && user?.role === 'admin' ? (
+        ) : currentView === 'adminUsers' && canManageUsers(user) ? (
           <section className="admin-page">
             <article className="panel admin-panel">
               <div className="panel-header">
@@ -779,12 +1070,13 @@ export function App() {
                           <select
                             aria-label={`Role for ${adminUser.email}`}
                             className="role-select"
-                            disabled={adminUser.id === user.id}
+                            disabled={adminUser.email === ownerEmail && user.email !== ownerEmail}
                             value={adminUser.role}
                             onChange={(event) => updateAdminUser(adminUser.id, { role: event.target.value as AdminUser['role'] })}
                           >
-                            <option value="user">User</option>
-                            <option value="admin">Admin</option>
+                            {roleOptions.map((role) => (
+                              <option key={role} value={role}>{roleLabel(role)}</option>
+                            ))}
                           </select>
                         </td>
                         <td>
@@ -795,18 +1087,18 @@ export function App() {
                         <td>{adminUser.createdAt ? new Date(adminUser.createdAt).toLocaleDateString() : 'Unknown'}</td>
                         <td>
                           <div className="admin-actions">
-                            {adminUser.role !== 'admin' && (
+                            {adminUser.role !== 'admin' && adminUser.role !== 'owner' && (
                               <button className="ghost-button compact" type="button" onClick={() => updateAdminUser(adminUser.id, { role: 'admin' })}>
                                 Promote
                               </button>
                             )}
-                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id} onClick={() => toggleAdminUser(adminUser)}>
+                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id || adminUser.email === ownerEmail} onClick={() => toggleAdminUser(adminUser)}>
                               {adminUser.active ? 'Disable' : 'Enable'}
                             </button>
                             <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id} onClick={() => revokeAdminUserSessions(adminUser)}>
                               Revoke
                             </button>
-                            <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user.id} onClick={() => deleteAdminUser(adminUser)}>
+                            <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user.id || adminUser.email === ownerEmail} onClick={() => deleteAdminUser(adminUser)}>
                               Delete
                             </button>
                           </div>
@@ -820,6 +1112,132 @@ export function App() {
                     )}
                   </tbody>
                 </table>
+              </div>
+              <div className="admin-insights">
+                <article>
+                  <h3>System monitoring</h3>
+                  <dl className="settings-list compact-list">
+                    <div><dt>Status</dt><dd>{systemStatus?.status ?? 'Unknown'}</dd></div>
+                    <div><dt>Storage</dt><dd>{systemStatus?.storage ?? 'Unknown'}</dd></div>
+                    <div><dt>Authentication</dt><dd>{systemStatus?.auth ?? 'Unknown'}</dd></div>
+                    <div><dt>Upload limit</dt><dd>{systemStatus ? `${systemStatus.uploadLimitMb} MB` : 'Unknown'}</dd></div>
+                  </dl>
+                </article>
+                <article>
+                  <h3>Audit logs</h3>
+                  <div className="audit-list">
+                    {auditLogs.slice(0, 6).map((log) => (
+                      <div key={log.id}>
+                        <strong>{log.action}</strong>
+                        <span>{log.actorEmail ?? 'System'} - {new Date(log.createdAt).toLocaleString()}</span>
+                      </div>
+                    ))}
+                    {!auditLogs.length && <p className="muted">No audit events yet.</p>}
+                  </div>
+                </article>
+              </div>
+            </article>
+          </section>
+        ) : currentView === 'contact' ? (
+          <section className="module-page">
+            <article className="panel company-panel">
+              <p className="eyebrow">Metenova AI</p>
+              <h2>Contact & Support</h2>
+              <p className="module-copy">
+                Metenova AI is a modern AI-powered business operations and analytics platform designed to help companies manage data,
+                analytics, business workflows, reporting, AI automation, data cleanup, user management, reports, and enterprise operations
+                in a scalable modular system.
+              </p>
+              <div className="support-grid">
+                <div><strong>Owner</strong><span>Melaku</span></div>
+                <div><strong>Email</strong><span>{ownerEmail}</span></div>
+                <div><strong>Phone</strong><span>202-607-1255</span></div>
+              </div>
+            </article>
+            <article className="panel">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Need help?</p>
+                  <h2>Send a support request</h2>
+                </div>
+                <button className="ghost-button compact" type="button" onClick={() => setContactMessage('I need help with ')}>
+                  Quick support
+                </button>
+              </div>
+              <form className="contact-form" onSubmit={submitContact}>
+                <input placeholder="Name" value={contactName} onChange={(event) => setContactName(event.target.value)} />
+                <input placeholder="Email" type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} />
+                <textarea placeholder="How can we help?" value={contactMessage} onChange={(event) => setContactMessage(event.target.value)} />
+                <button type="submit">Submit request</button>
+              </form>
+              {supportMessage && <p className="persistence-note">{supportMessage}</p>}
+              <div className="faq-grid">
+                <div><strong>Where is my data?</strong><span>SQL Server in production, local JSON fallback for MVP development.</span></div>
+                <div><strong>How do I get help?</strong><span>Use this form or email {ownerEmail}.</span></div>
+                <div><strong>What integrations are planned?</strong><span>QuickBooks, Excel, Microsoft 365, Google Workspace, Stripe, PayPal, Slack, and external APIs.</span></div>
+              </div>
+            </article>
+          </section>
+        ) : ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'].includes(currentView) ? (
+          <section className="module-page">
+            {renderModulePage(currentView, setCurrentView)}
+          </section>
+        ) : currentView === 'analytics' ? (
+          <section className="module-page">
+            <article className="panel">
+              <p className="eyebrow">Analytics</p>
+              <h2>Executive analytics dashboard</h2>
+              <div className="module-grid">
+                <div><strong>Dataset intelligence</strong><span>{datasets.length} saved datasets available for analysis.</span></div>
+                <div><strong>Dashboards</strong><span>{dashboards.length} saved dashboards across the workspace.</span></div>
+                <div><strong>Reports</strong><span>{reports.length} generated reports in history.</span></div>
+                <div><strong>AI recommendations</strong><span>Use uploaded data to generate trends, variance explanations, and executive summaries.</span></div>
+              </div>
+            </article>
+          </section>
+        ) : currentView === 'reports' ? (
+          <section className="history-grid">
+            <article className="panel">
+              <div className="panel-header">
+                <h2>Saved dashboards</h2>
+                <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
+              </div>
+              <div className="history-list">
+                {dashboards.length ? dashboards.map((dashboard) => (
+                  <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
+                    <strong>{dashboard.name}</strong>
+                    <span>{dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}</span>
+                  </button>
+                )) : <p className="muted">No dashboards saved yet.</p>}
+              </div>
+            </article>
+            <article className="panel">
+              <div className="panel-header">
+                <h2>Report history</h2>
+                <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
+              </div>
+              <div className="history-list">
+                {reports.length ? reports.map((report) => (
+                  <div className="history-item" key={report.id}>
+                    <div>
+                      <strong>{report.title}</strong>
+                      <span>{report.datasetName} - {new Date(report.createdAt).toLocaleString()}</span>
+                    </div>
+                    <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>Download</button>
+                  </div>
+                )) : <p className="muted">Downloaded reports will appear here.</p>}
+              </div>
+            </article>
+          </section>
+        ) : currentView === 'assistant' ? (
+          <section className="assistant-grid" id="assistant">
+            {renderAssistantPanel(activeDataset, chat, question, setQuestion, askAssistant)}
+            <article className="panel">
+              <h2>Assistant capabilities</h2>
+              <div className="workflow-list">
+                {['Business trend summaries', 'Increase and decrease explanations', 'Highest and lowest value detection', 'Executive-ready insights'].map((item) => (
+                  <div className="workflow-row" key={item}><strong>{item}</strong><small>Ready</small></div>
+                ))}
               </div>
             </article>
           </section>
@@ -979,7 +1397,7 @@ export function App() {
                       <strong>{dashboard.name}</strong>
                       <span>
                         {dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}
-                        {user?.role === 'admin' && dashboard.ownerEmail ? ` - ${dashboard.ownerEmail}` : ''}
+                        {canManageUsers(user) && dashboard.ownerEmail ? ` - ${dashboard.ownerEmail}` : ''}
                       </span>
                     </button>
                   )) : <p className="muted">No dashboards saved yet.</p>}
@@ -998,7 +1416,7 @@ export function App() {
                         <strong>{report.title}</strong>
                         <span>
                           {report.datasetName} - {new Date(report.createdAt).toLocaleString()}
-                          {user?.role === 'admin' && report.ownerEmail ? ` - ${report.ownerEmail}` : ''}
+                          {canManageUsers(user) && report.ownerEmail ? ` - ${report.ownerEmail}` : ''}
                         </span>
                       </div>
                       <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>
@@ -1052,6 +1470,9 @@ export function App() {
           </>
         )}
       </section>
+      <button className="floating-help" type="button" onClick={() => setCurrentView('contact')}>
+        Help
+      </button>
     </main>
   );
 }
@@ -1097,6 +1518,94 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
         </div>
       ))}
     </div>
+  );
+}
+
+function canManageUsers(user: User | null) {
+  return user?.role === 'owner' || user?.role === 'admin';
+}
+
+function roleLabel(role?: string) {
+  const labels: Record<string, string> = {
+    owner: 'Owner / Super Admin',
+    admin: 'Admin',
+    manager: 'Manager',
+    employee: 'Employee',
+    viewer: 'Viewer / Client'
+  };
+  return labels[role ?? ''] ?? 'Employee';
+}
+
+function renderModulePage(view: AppView, setCurrentView: (view: AppView) => void) {
+  const titles: Record<string, string> = {
+    accounting: 'Accounting command center',
+    engineering: 'Engineering & projects',
+    hr: 'HR workspace',
+    crm: 'CRM workspace',
+    dataProcessing: 'Data processing & cleanup'
+  };
+  const descriptions: Record<string, string> = {
+    accounting: 'Invoices, expenses, payroll, financial reports, budgets, tax tracking, and an AI financial assistant.',
+    engineering: 'Project management, task tracking, team assignments, document uploads, blueprint management, and workflow reports.',
+    hr: 'People operations, roles, onboarding, team assignments, and HR-ready AI support.',
+    crm: 'Client records, opportunity tracking, support history, and AI-assisted relationship management.',
+    dataProcessing: 'Data cleanup, duplicate detection, validation, normalization, import/export, batch processing, and data quality reports.'
+  };
+  const cards = moduleCards[view] ?? [];
+
+  return (
+    <>
+      <article className="panel module-hero">
+        <p className="eyebrow">Modular AI ERP</p>
+        <h2>{titles[view]}</h2>
+        <p className="module-copy">{descriptions[view]}</p>
+        <button className="ghost-button support-button" type="button" onClick={() => setCurrentView('contact')}>
+          Need help?
+        </button>
+      </article>
+      <div className="module-grid">
+        {cards.map((card) => (
+          <article className="module-card" key={card.title}>
+            <span>{card.metric}</span>
+            <strong>{card.title}</strong>
+            <p>{card.copy}</p>
+          </article>
+        ))}
+      </div>
+    </>
+  );
+}
+
+function renderAssistantPanel(
+  activeDataset: Dataset | null,
+  chat: ChatMessage[],
+  question: string,
+  setQuestion: (question: string) => void,
+  askAssistant: (event: FormEvent<HTMLFormElement>) => void
+) {
+  return (
+    <article className="panel chat-panel">
+      <div className="panel-header">
+        <h2>AI data assistant</h2>
+        <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
+      </div>
+      <div className="messages">
+        {chat.map((message, index) => (
+          <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
+            {message.text}
+          </div>
+        ))}
+      </div>
+      <form className="chat-form" onSubmit={askAssistant}>
+        <input
+          disabled={!activeDataset}
+          onChange={(event) => setQuestion(event.target.value)}
+          placeholder="Ask about totals, averages, trends, outliers..."
+          value={question}
+        />
+        <button disabled={!activeDataset || !question.trim()} type="submit">Ask</button>
+      </form>
+    </article>
   );
 }
 

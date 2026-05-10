@@ -11,12 +11,19 @@ const devUser = {
   id: 'local-dev-user',
   name: 'Local MVP',
   email: 'local@example.com',
-  role: 'admin',
+  role: 'owner',
   active: true,
+  emailVerified: true,
+  profilePhotoUrl: '',
+  notificationSettings: {},
+  preferences: {},
+  twoFactorEnabled: false,
   createdAt: new Date().toISOString()
 };
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
 const sqlServerDatabase = process.env.SQLSERVER_DATABASE || 'business_ai_platform';
+export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
+export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
 
 export const usingSqlServer = Boolean(process.env.SQLSERVER_HOST || process.env.SQLSERVER_CONNECTION_STRING);
 export let pool = null;
@@ -86,6 +93,14 @@ export async function initDatabase() {
         email NVARCHAR(320) NOT NULL UNIQUE,
         role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user',
         active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1,
+        email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT 0,
+        profile_photo_url NVARCHAR(1000) NULL,
+        notification_settings NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_notification_settings DEFAULT '{}',
+        preferences NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_preferences DEFAULT '{}',
+        two_factor_enabled BIT NOT NULL CONSTRAINT DF_users_two_factor_enabled DEFAULT 0,
+        last_login_at DATETIME2 NULL,
+        failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT 0,
+        locked_until DATETIME2 NULL,
         password_hash NVARCHAR(500) NOT NULL,
         created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created_at DEFAULT SYSUTCDATETIME()
       );
@@ -96,6 +111,30 @@ export async function initDatabase() {
 
     IF COL_LENGTH('dbo.users', 'active') IS NULL
       ALTER TABLE dbo.users ADD active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1;
+
+    IF COL_LENGTH('dbo.users', 'email_verified') IS NULL
+      ALTER TABLE dbo.users ADD email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT 0;
+
+    IF COL_LENGTH('dbo.users', 'profile_photo_url') IS NULL
+      ALTER TABLE dbo.users ADD profile_photo_url NVARCHAR(1000) NULL;
+
+    IF COL_LENGTH('dbo.users', 'notification_settings') IS NULL
+      ALTER TABLE dbo.users ADD notification_settings NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_notification_settings DEFAULT '{}';
+
+    IF COL_LENGTH('dbo.users', 'preferences') IS NULL
+      ALTER TABLE dbo.users ADD preferences NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_preferences DEFAULT '{}';
+
+    IF COL_LENGTH('dbo.users', 'two_factor_enabled') IS NULL
+      ALTER TABLE dbo.users ADD two_factor_enabled BIT NOT NULL CONSTRAINT DF_users_two_factor_enabled DEFAULT 0;
+
+    IF COL_LENGTH('dbo.users', 'last_login_at') IS NULL
+      ALTER TABLE dbo.users ADD last_login_at DATETIME2 NULL;
+
+    IF COL_LENGTH('dbo.users', 'failed_login_count') IS NULL
+      ALTER TABLE dbo.users ADD failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT 0;
+
+    IF COL_LENGTH('dbo.users', 'locked_until') IS NULL
+      ALTER TABLE dbo.users ADD locked_until DATETIME2 NULL;
 
     IF OBJECT_ID('dbo.sessions', 'U') IS NULL
     BEGIN
@@ -180,6 +219,41 @@ export async function initDatabase() {
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_reports_user_created_at' AND object_id = OBJECT_ID('dbo.reports'))
       CREATE INDEX IX_reports_user_created_at ON dbo.reports (user_id, created_at DESC);
+
+    IF OBJECT_ID('dbo.account_tokens', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.account_tokens (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        user_id NVARCHAR(64) NOT NULL,
+        token_hash NVARCHAR(500) NOT NULL,
+        purpose NVARCHAR(60) NOT NULL,
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_account_tokens_created_at DEFAULT SYSUTCDATETIME(),
+        expires_at DATETIME2 NOT NULL,
+        used_at DATETIME2 NULL,
+        CONSTRAINT FK_account_tokens_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_account_tokens_user_purpose' AND object_id = OBJECT_ID('dbo.account_tokens'))
+      CREATE INDEX IX_account_tokens_user_purpose ON dbo.account_tokens (user_id, purpose, expires_at DESC);
+
+    IF OBJECT_ID('dbo.audit_logs', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.audit_logs (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        actor_user_id NVARCHAR(64) NULL,
+        actor_email NVARCHAR(320) NULL,
+        action NVARCHAR(140) NOT NULL,
+        target_type NVARCHAR(80) NULL,
+        target_id NVARCHAR(64) NULL,
+        metadata NVARCHAR(MAX) NOT NULL CONSTRAINT DF_audit_logs_metadata DEFAULT '{}',
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_audit_logs_created_at DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_audit_logs_users FOREIGN KEY (actor_user_id) REFERENCES dbo.users(id) ON DELETE SET NULL
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_logs_created_at' AND object_id = OBJECT_ID('dbo.audit_logs'))
+      CREATE INDEX IX_audit_logs_created_at ON dbo.audit_logs (created_at DESC);
   `);
 }
 
@@ -190,8 +264,15 @@ export async function createUser(user) {
       id: user.id,
       name: user.name,
       email: user.email.toLowerCase(),
-      role: normalizeRole(user.role),
+      role: roleForUser(user.email, user.role),
       active: user.active ?? true,
+      emailVerified: user.emailVerified ?? user.email?.toLowerCase() === ownerEmail,
+      profilePhotoUrl: user.profilePhotoUrl ?? '',
+      notificationSettings: user.notificationSettings ?? {},
+      preferences: user.preferences ?? {},
+      twoFactorEnabled: user.twoFactorEnabled ?? false,
+      failedLoginCount: 0,
+      lockedUntil: null,
       passwordHash: user.passwordHash,
       createdAt: new Date().toISOString()
     };
@@ -205,13 +286,24 @@ export async function createUser(user) {
     .input('id', sql.NVarChar(64), user.id)
     .input('name', sql.NVarChar(200), user.name)
     .input('email', sql.NVarChar(320), user.email.toLowerCase())
-    .input('role', sql.NVarChar(40), normalizeRole(user.role))
+    .input('role', sql.NVarChar(40), roleForUser(user.email, user.role))
     .input('active', sql.Bit, user.active ?? true)
+    .input('emailVerified', sql.Bit, user.emailVerified ?? user.email?.toLowerCase() === ownerEmail)
+    .input('profilePhotoUrl', sql.NVarChar(1000), user.profilePhotoUrl ?? null)
+    .input('notificationSettings', sql.NVarChar(sql.MAX), JSON.stringify(user.notificationSettings ?? {}))
+    .input('preferences', sql.NVarChar(sql.MAX), JSON.stringify(user.preferences ?? {}))
+    .input('twoFactorEnabled', sql.Bit, user.twoFactorEnabled ?? false)
     .input('passwordHash', sql.NVarChar(500), user.passwordHash)
     .query(`
-      INSERT INTO dbo.users (id, name, email, role, active, password_hash)
-      OUTPUT inserted.id, inserted.name, inserted.email, inserted.role, inserted.active, inserted.created_at
-      VALUES (@id, @name, @email, @role, @active, @passwordHash);
+      INSERT INTO dbo.users (
+        id, name, email, role, active, email_verified, profile_photo_url,
+        notification_settings, preferences, two_factor_enabled, password_hash
+      )
+      OUTPUT inserted.*
+      VALUES (
+        @id, @name, @email, @role, @active, @emailVerified, @profilePhotoUrl,
+        @notificationSettings, @preferences, @twoFactorEnabled, @passwordHash
+      );
     `);
   return rowToUser(result.recordset[0]);
 }
@@ -244,7 +336,7 @@ export async function findUserById(id) {
   const db = await getPool();
   const result = await db.request()
     .input('id', sql.NVarChar(64), id)
-    .query('SELECT TOP (1) id, name, email, role, active, created_at FROM dbo.users WHERE id = @id;');
+    .query('SELECT TOP (1) * FROM dbo.users WHERE id = @id;');
   return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
 }
 
@@ -258,7 +350,8 @@ export async function listUsers() {
 
   const db = await getPool();
   const result = await db.request().query(`
-    SELECT id, name, email, role, active, created_at
+    SELECT id, name, email, role, active, email_verified, profile_photo_url, notification_settings,
+      preferences, two_factor_enabled, last_login_at, failed_login_count, locked_until, created_at
     FROM dbo.users
     ORDER BY created_at DESC;
   `);
@@ -269,7 +362,12 @@ export async function updateUser(id, updates) {
   const normalizedUpdates = {
     ...(updates.name != null ? { name: String(updates.name).trim() } : {}),
     ...(updates.role != null ? { role: normalizeRole(updates.role) } : {}),
-    ...(updates.active != null ? { active: Boolean(updates.active) } : {})
+    ...(updates.active != null ? { active: Boolean(updates.active) } : {}),
+    ...(updates.emailVerified != null ? { emailVerified: Boolean(updates.emailVerified) } : {}),
+    ...(updates.profilePhotoUrl != null ? { profilePhotoUrl: String(updates.profilePhotoUrl).trim() } : {}),
+    ...(updates.notificationSettings != null ? { notificationSettings: updates.notificationSettings } : {}),
+    ...(updates.preferences != null ? { preferences: updates.preferences } : {}),
+    ...(updates.twoFactorEnabled != null ? { twoFactorEnabled: Boolean(updates.twoFactorEnabled) } : {})
   };
 
   if (!usingSqlServer) {
@@ -279,7 +377,7 @@ export async function updateUser(id, updates) {
       if (user.id !== id) {
         return user;
       }
-      updated = { ...user, ...normalizedUpdates };
+      updated = { ...user, ...protectOwnerUpdates(user, normalizedUpdates) };
       return updated;
     });
     await saveDevStore(store);
@@ -292,9 +390,8 @@ export async function updateUser(id, updates) {
   }
 
   const next = {
-    name: normalizedUpdates.name ?? existing.name,
-    role: normalizedUpdates.role ?? existing.role,
-    active: normalizedUpdates.active ?? existing.active
+    ...existing,
+    ...protectOwnerUpdates(existing, normalizedUpdates)
   };
   const db = await getPool();
   const result = await db.request()
@@ -302,18 +399,33 @@ export async function updateUser(id, updates) {
     .input('name', sql.NVarChar(200), next.name)
     .input('role', sql.NVarChar(40), next.role)
     .input('active', sql.Bit, next.active)
+    .input('emailVerified', sql.Bit, next.emailVerified)
+    .input('profilePhotoUrl', sql.NVarChar(1000), next.profilePhotoUrl || null)
+    .input('notificationSettings', sql.NVarChar(sql.MAX), JSON.stringify(next.notificationSettings ?? {}))
+    .input('preferences', sql.NVarChar(sql.MAX), JSON.stringify(next.preferences ?? {}))
+    .input('twoFactorEnabled', sql.Bit, next.twoFactorEnabled)
     .query(`
       UPDATE dbo.users
       SET name = @name,
           role = @role,
-          active = @active
-      OUTPUT inserted.id, inserted.name, inserted.email, inserted.role, inserted.active, inserted.created_at
+          active = @active,
+          email_verified = @emailVerified,
+          profile_photo_url = @profilePhotoUrl,
+          notification_settings = @notificationSettings,
+          preferences = @preferences,
+          two_factor_enabled = @twoFactorEnabled
+      OUTPUT inserted.*
       WHERE id = @id;
     `);
   return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
 }
 
 export async function deleteUser(id) {
+  const user = await findUserById(id);
+  if (isOwner(user)) {
+    throw new Error('The permanent owner account cannot be deleted.');
+  }
+
   if (!usingSqlServer) {
     const store = await loadDevStore();
     store.users = store.users.filter((user) => user.id !== id);
@@ -334,7 +446,7 @@ export async function deleteUser(id) {
 
 export async function setUserRoleByEmail(email, role) {
   const normalizedEmail = email.toLowerCase();
-  const normalizedRole = normalizeRole(role);
+  const normalizedRole = roleForUser(normalizedEmail, role);
 
   if (!usingSqlServer) {
     const store = await loadDevStore();
@@ -354,6 +466,38 @@ export async function setUserRoleByEmail(email, role) {
 
 export async function promoteAdminEmails(emails) {
   await Promise.all(emails.map((email) => setUserRoleByEmail(email, 'admin')));
+}
+
+export async function ensureOwnerAccount() {
+  const existing = await findUserByEmail(ownerEmail);
+  if (!existing) {
+    return;
+  }
+
+  await updateUser(existing.id, { role: 'owner', active: true, emailVerified: true });
+}
+
+export async function removeDemoAccounts() {
+  const demoEmails = ['admin@businessai.com'];
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const demoIds = new Set(store.users
+      .filter((user) => demoEmails.includes(user.email) || String(user.email).includes('analyst+'))
+      .map((user) => user.id));
+    store.users = store.users.filter((user) => !demoIds.has(user.id));
+    store.sessions = store.sessions.filter((session) => !demoIds.has(session.userId));
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await Promise.all(demoEmails.map((email) =>
+    db.request()
+      .input('email', sql.NVarChar(320), email)
+      .query('DELETE FROM dbo.users WHERE email = @email;')
+  ));
+  await db.request().query("DELETE FROM dbo.users WHERE email LIKE 'analyst+%@businessai.com';");
 }
 
 export async function createSession(session) {
@@ -466,6 +610,212 @@ export async function revokeUserSessions(userId) {
   await db.request()
     .input('userId', sql.NVarChar(64), userId)
     .query('UPDATE dbo.sessions SET revoked_at = SYSUTCDATETIME() WHERE user_id = @userId AND revoked_at IS NULL;');
+}
+
+export async function updateUserPassword(userId, passwordHash) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.users = store.users.map((user) =>
+      user.id === userId ? { ...user, passwordHash, failedLoginCount: 0, lockedUntil: null } : user
+    );
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('userId', sql.NVarChar(64), userId)
+    .input('passwordHash', sql.NVarChar(500), passwordHash)
+    .query(`
+      UPDATE dbo.users
+      SET password_hash = @passwordHash,
+          failed_login_count = 0,
+          locked_until = NULL
+      WHERE id = @userId;
+    `);
+}
+
+export async function recordLoginSuccess(userId) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.users = store.users.map((user) =>
+      user.id === userId
+        ? { ...user, failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date().toISOString() }
+        : user
+    );
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('userId', sql.NVarChar(64), userId)
+    .query(`
+      UPDATE dbo.users
+      SET failed_login_count = 0,
+          locked_until = NULL,
+          last_login_at = SYSUTCDATETIME()
+      WHERE id = @userId;
+    `);
+}
+
+export async function recordLoginFailure(email) {
+  const normalizedEmail = email.toLowerCase();
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.users = store.users.map((user) => {
+      if (user.email !== normalizedEmail) {
+        return user;
+      }
+      const failedLoginCount = Number(user.failedLoginCount ?? 0) + 1;
+      return {
+        ...user,
+        failedLoginCount,
+        lockedUntil: failedLoginCount >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : user.lockedUntil
+      };
+    });
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('email', sql.NVarChar(320), normalizedEmail)
+    .query(`
+      UPDATE dbo.users
+      SET failed_login_count = failed_login_count + 1,
+          locked_until = CASE
+            WHEN failed_login_count + 1 >= 5 THEN DATEADD(minute, 15, SYSUTCDATETIME())
+            ELSE locked_until
+          END
+      WHERE email = @email;
+    `);
+}
+
+export async function createAccountToken(token) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.accountTokens = [
+      {
+        id: token.id,
+        userId: token.userId,
+        tokenHash: token.tokenHash,
+        purpose: token.purpose,
+        createdAt: new Date().toISOString(),
+        expiresAt: token.expiresAt,
+        usedAt: null
+      },
+      ...(store.accountTokens ?? []).filter((entry) => entry.id !== token.id)
+    ].slice(0, 200);
+    await saveDevStore(store);
+    return token;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('id', sql.NVarChar(64), token.id)
+    .input('userId', sql.NVarChar(64), token.userId)
+    .input('tokenHash', sql.NVarChar(500), token.tokenHash)
+    .input('purpose', sql.NVarChar(60), token.purpose)
+    .input('expiresAt', sql.DateTime2, new Date(token.expiresAt))
+    .query(`
+      INSERT INTO dbo.account_tokens (id, user_id, token_hash, purpose, expires_at)
+      VALUES (@id, @userId, @tokenHash, @purpose, @expiresAt);
+    `);
+  return token;
+}
+
+export async function findAccountToken(tokenHash, purpose) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const token = (store.accountTokens ?? []).find((entry) =>
+      entry.tokenHash === tokenHash &&
+      entry.purpose === purpose &&
+      !entry.usedAt &&
+      new Date(entry.expiresAt).getTime() > Date.now()
+    );
+    return token ? rowToAccountToken(token) : undefined;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('tokenHash', sql.NVarChar(500), tokenHash)
+    .input('purpose', sql.NVarChar(60), purpose)
+    .query(`
+      SELECT TOP (1) *
+      FROM dbo.account_tokens
+      WHERE token_hash = @tokenHash
+        AND purpose = @purpose
+        AND used_at IS NULL
+        AND expires_at > SYSUTCDATETIME();
+    `);
+  return result.recordset[0] ? rowToAccountToken(result.recordset[0]) : undefined;
+}
+
+export async function markAccountTokenUsed(id) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.accountTokens = (store.accountTokens ?? []).map((token) =>
+      token.id === id ? { ...token, usedAt: new Date().toISOString() } : token
+    );
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('id', sql.NVarChar(64), id)
+    .query('UPDATE dbo.account_tokens SET used_at = SYSUTCDATETIME() WHERE id = @id;');
+}
+
+export async function saveAuditLog(entry) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.auditLogs = [
+      {
+        id: entry.id,
+        actorUserId: entry.actorUserId ?? null,
+        actorEmail: entry.actorEmail ?? null,
+        action: entry.action,
+        targetType: entry.targetType ?? null,
+        targetId: entry.targetId ?? null,
+        metadata: entry.metadata ?? {},
+        createdAt: new Date().toISOString()
+      },
+      ...(store.auditLogs ?? [])
+    ].slice(0, 300);
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('id', sql.NVarChar(64), entry.id)
+    .input('actorUserId', sql.NVarChar(64), entry.actorUserId ?? null)
+    .input('actorEmail', sql.NVarChar(320), entry.actorEmail ?? null)
+    .input('action', sql.NVarChar(140), entry.action)
+    .input('targetType', sql.NVarChar(80), entry.targetType ?? null)
+    .input('targetId', sql.NVarChar(64), entry.targetId ?? null)
+    .input('metadata', sql.NVarChar(sql.MAX), JSON.stringify(entry.metadata ?? {}))
+    .query(`
+      INSERT INTO dbo.audit_logs (id, actor_user_id, actor_email, action, target_type, target_id, metadata)
+      VALUES (@id, @actorUserId, @actorEmail, @action, @targetType, @targetId, @metadata);
+    `);
+}
+
+export async function listAuditLogs() {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return (store.auditLogs ?? []).slice(0, 100);
+  }
+
+  const db = await getPool();
+  const result = await db.request().query(`
+    SELECT TOP (100) *
+    FROM dbo.audit_logs
+    ORDER BY created_at DESC;
+  `);
+  return result.recordset.map(rowToAuditLog);
 }
 
 export async function saveDataset(dataset) {
@@ -793,14 +1143,48 @@ function rowToDataset(row) {
 }
 
 function rowToUser(row, includePassword = false) {
+  const email = row.email?.toLowerCase();
   return {
     id: row.id,
     name: row.name,
-    email: row.email,
-    role: normalizeRole(row.role),
+    email,
+    role: roleForUser(email, row.role),
     active: row.active ?? row.activeStatus ?? true,
+    emailVerified: row.email_verified ?? row.emailVerified ?? email === ownerEmail,
+    profilePhotoUrl: row.profile_photo_url ?? row.profilePhotoUrl ?? '',
+    notificationSettings: parseJson(row.notification_settings ?? row.notificationSettings, {}),
+    preferences: parseJson(row.preferences, {}),
+    twoFactorEnabled: row.two_factor_enabled ?? row.twoFactorEnabled ?? false,
+    lastLoginAt: row.last_login_at ?? row.lastLoginAt,
+    failedLoginCount: row.failed_login_count ?? row.failedLoginCount ?? 0,
+    lockedUntil: row.locked_until ?? row.lockedUntil ?? null,
     createdAt: row.created_at ?? row.createdAt,
     ...(includePassword ? { passwordHash: row.password_hash ?? row.passwordHash } : {})
+  };
+}
+
+function rowToAccountToken(row) {
+  return {
+    id: row.id,
+    userId: row.user_id ?? row.userId,
+    tokenHash: row.token_hash ?? row.tokenHash,
+    purpose: row.purpose,
+    createdAt: row.created_at ?? row.createdAt,
+    expiresAt: row.expires_at ?? row.expiresAt,
+    usedAt: row.used_at ?? row.usedAt
+  };
+}
+
+function rowToAuditLog(row) {
+  return {
+    id: row.id,
+    actorUserId: row.actor_user_id ?? row.actorUserId,
+    actorEmail: row.actor_email ?? row.actorEmail,
+    action: row.action,
+    targetType: row.target_type ?? row.targetType,
+    targetId: row.target_id ?? row.targetId,
+    metadata: parseJson(row.metadata, {}),
+    createdAt: row.created_at ?? row.createdAt
   };
 }
 
@@ -809,11 +1193,53 @@ function getUserId(user) {
 }
 
 function isAdmin(user) {
-  return typeof user === 'object' && normalizeRole(user.role) === 'admin';
+  return typeof user === 'object' && hasRole(user, 'admin');
+}
+
+export function hasRole(user, requiredRole) {
+  if (!user || typeof user !== 'object') {
+    return false;
+  }
+  return roleRank(roleForUser(user.email, user.role)) >= roleRank(requiredRole);
+}
+
+export function isOwner(user) {
+  return Boolean(user && typeof user === 'object' && roleForUser(user.email, user.role) === 'owner');
+}
+
+function protectOwnerUpdates(existingUser, updates) {
+  if (isOwner(existingUser)) {
+    return {
+      ...updates,
+      role: 'owner',
+      active: true,
+      emailVerified: true
+    };
+  }
+
+  if (normalizeRole(updates.role) === 'owner' && existingUser.email !== ownerEmail) {
+    return { ...updates, role: 'admin' };
+  }
+
+  return updates;
+}
+
+function roleForUser(email, role) {
+  return String(email || '').toLowerCase() === ownerEmail ? 'owner' : normalizeRole(role);
+}
+
+function roleRank(role) {
+  return roles.indexOf(normalizeRole(role));
 }
 
 function normalizeRole(role) {
-  return role === 'admin' ? 'admin' : 'user';
+  if (role === 'super_admin') {
+    return 'owner';
+  }
+  if (role === 'user') {
+    return 'employee';
+  }
+  return roles.includes(role) ? role : 'employee';
 }
 
 export function getDevUser() {
@@ -827,7 +1253,9 @@ async function loadDevStore() {
       sessions: [],
       datasets: [],
       dashboards: [],
-      reports: []
+      reports: [],
+      accountTokens: [],
+      auditLogs: []
     };
   }
 
@@ -837,7 +1265,9 @@ async function loadDevStore() {
     sessions: store.sessions ?? [],
     datasets: store.datasets ?? [],
     dashboards: store.dashboards ?? [],
-    reports: store.reports ?? []
+    reports: store.reports ?? [],
+    accountTokens: store.accountTokens ?? [],
+    auditLogs: store.auditLogs ?? []
   };
 }
 
