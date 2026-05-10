@@ -7,8 +7,16 @@ import sql from 'mssql';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
+const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
+const sqlServerDatabase = process.env.SQLSERVER_DATABASE || 'business_ai_platform';
+export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
+export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+const defaultCompanyId = 'metenova-default-company';
+const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
+
 const devUser = {
   id: 'local-dev-user',
+  companyId: defaultCompanyId,
   name: 'Local MVP',
   email: 'local@example.com',
   role: 'owner',
@@ -20,10 +28,6 @@ const devUser = {
   twoFactorEnabled: false,
   createdAt: new Date().toISOString()
 };
-const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
-const sqlServerDatabase = process.env.SQLSERVER_DATABASE || 'business_ai_platform';
-export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
-export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
 
 export const usingSqlServer = Boolean(process.env.SQLSERVER_HOST || process.env.SQLSERVER_CONNECTION_STRING);
 export let pool = null;
@@ -85,10 +89,24 @@ export async function initDatabase() {
 
   const db = await getPool();
   await db.request().batch(`
+    IF OBJECT_ID('dbo.companies', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.companies (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        name NVARCHAR(220) NOT NULL,
+        owner_user_id NVARCHAR(64) NULL,
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_companies_created_at DEFAULT SYSUTCDATETIME()
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM dbo.companies WHERE id = '${defaultCompanyId}')
+      INSERT INTO dbo.companies (id, name) VALUES ('${defaultCompanyId}', N'${escapeSqlString(defaultCompanyName)}');
+
     IF OBJECT_ID('dbo.users', 'U') IS NULL
     BEGIN
       CREATE TABLE dbo.users (
         id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_users_company_id DEFAULT '${defaultCompanyId}',
         name NVARCHAR(200) NOT NULL,
         email NVARCHAR(320) NOT NULL UNIQUE,
         role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user',
@@ -102,9 +120,13 @@ export async function initDatabase() {
         failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT 0,
         locked_until DATETIME2 NULL,
         password_hash NVARCHAR(500) NOT NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created_at DEFAULT SYSUTCDATETIME()
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created_at DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_users_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id)
       );
     END;
+
+    IF COL_LENGTH('dbo.users', 'company_id') IS NULL
+      ALTER TABLE dbo.users ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_users_company_id DEFAULT '${defaultCompanyId}';
 
     IF COL_LENGTH('dbo.users', 'role') IS NULL
       ALTER TABLE dbo.users ADD role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user';
@@ -156,6 +178,7 @@ export async function initDatabase() {
       CREATE TABLE dbo.datasets (
         id NVARCHAR(64) NOT NULL PRIMARY KEY,
         user_id NVARCHAR(64) NOT NULL,
+        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_datasets_company_id DEFAULT '${defaultCompanyId}',
         file_name NVARCHAR(260) NOT NULL,
         file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv',
         worksheet_name NVARCHAR(260) NULL,
@@ -169,6 +192,9 @@ export async function initDatabase() {
         CONSTRAINT FK_datasets_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
       );
     END;
+
+    IF COL_LENGTH('dbo.datasets', 'company_id') IS NULL
+      ALTER TABLE dbo.datasets ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_datasets_company_id DEFAULT '${defaultCompanyId}';
 
     IF COL_LENGTH('dbo.datasets', 'file_type') IS NULL
       ALTER TABLE dbo.datasets ADD file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv';
@@ -184,6 +210,7 @@ export async function initDatabase() {
       CREATE TABLE dbo.dashboards (
         id NVARCHAR(64) NOT NULL PRIMARY KEY,
         user_id NVARCHAR(64) NOT NULL,
+        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_dashboards_company_id DEFAULT '${defaultCompanyId}',
         name NVARCHAR(260) NOT NULL,
         dataset_id NVARCHAR(64) NOT NULL,
         chart_type NVARCHAR(40) NOT NULL CONSTRAINT DF_dashboards_chart_type DEFAULT 'bar',
@@ -199,6 +226,9 @@ export async function initDatabase() {
     IF COL_LENGTH('dbo.dashboards', 'snapshot') IS NULL
       ALTER TABLE dbo.dashboards ADD snapshot NVARCHAR(MAX) NOT NULL CONSTRAINT DF_dashboards_snapshot DEFAULT '{}';
 
+    IF COL_LENGTH('dbo.dashboards', 'company_id') IS NULL
+      ALTER TABLE dbo.dashboards ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_dashboards_company_id DEFAULT '${defaultCompanyId}';
+
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_dashboards_user_updated_at' AND object_id = OBJECT_ID('dbo.dashboards'))
       CREATE INDEX IX_dashboards_user_updated_at ON dbo.dashboards (user_id, updated_at DESC);
 
@@ -207,6 +237,7 @@ export async function initDatabase() {
       CREATE TABLE dbo.reports (
         id NVARCHAR(64) NOT NULL PRIMARY KEY,
         user_id NVARCHAR(64) NOT NULL,
+        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_reports_company_id DEFAULT '${defaultCompanyId}',
         dataset_id NVARCHAR(64) NOT NULL,
         title NVARCHAR(260) NOT NULL,
         report_type NVARCHAR(40) NOT NULL CONSTRAINT DF_reports_report_type DEFAULT 'pdf',
@@ -219,6 +250,31 @@ export async function initDatabase() {
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_reports_user_created_at' AND object_id = OBJECT_ID('dbo.reports'))
       CREATE INDEX IX_reports_user_created_at ON dbo.reports (user_id, created_at DESC);
+
+    IF COL_LENGTH('dbo.reports', 'company_id') IS NULL
+      ALTER TABLE dbo.reports ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_reports_company_id DEFAULT '${defaultCompanyId}';
+
+    IF OBJECT_ID('dbo.module_records', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.module_records (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        company_id NVARCHAR(64) NOT NULL,
+        user_id NVARCHAR(64) NOT NULL,
+        module NVARCHAR(80) NOT NULL,
+        record_type NVARCHAR(80) NOT NULL,
+        title NVARCHAR(260) NOT NULL,
+        status NVARCHAR(80) NOT NULL CONSTRAINT DF_module_records_status DEFAULT 'open',
+        amount DECIMAL(18,2) NULL,
+        metadata NVARCHAR(MAX) NOT NULL CONSTRAINT DF_module_records_metadata DEFAULT '{}',
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_module_records_created_at DEFAULT SYSUTCDATETIME(),
+        updated_at DATETIME2 NOT NULL CONSTRAINT DF_module_records_updated_at DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_module_records_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id),
+        CONSTRAINT FK_module_records_users FOREIGN KEY (user_id) REFERENCES dbo.users(id)
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_module_records_company_module' AND object_id = OBJECT_ID('dbo.module_records'))
+      CREATE INDEX IX_module_records_company_module ON dbo.module_records (company_id, module, updated_at DESC);
 
     IF OBJECT_ID('dbo.account_tokens', 'U') IS NULL
     BEGIN
@@ -262,6 +318,7 @@ export async function createUser(user) {
     const store = await loadDevStore();
     const savedUser = {
       id: user.id,
+      companyId: user.companyId ?? defaultCompanyId,
       name: user.name,
       email: user.email.toLowerCase(),
       role: roleForUser(user.email, user.role),
@@ -284,6 +341,7 @@ export async function createUser(user) {
   const db = await getPool();
   const result = await db.request()
     .input('id', sql.NVarChar(64), user.id)
+    .input('companyId', sql.NVarChar(64), user.companyId ?? defaultCompanyId)
     .input('name', sql.NVarChar(200), user.name)
     .input('email', sql.NVarChar(320), user.email.toLowerCase())
     .input('role', sql.NVarChar(40), roleForUser(user.email, user.role))
@@ -296,12 +354,12 @@ export async function createUser(user) {
     .input('passwordHash', sql.NVarChar(500), user.passwordHash)
     .query(`
       INSERT INTO dbo.users (
-        id, name, email, role, active, email_verified, profile_photo_url,
+        id, company_id, name, email, role, active, email_verified, profile_photo_url,
         notification_settings, preferences, two_factor_enabled, password_hash
       )
       OUTPUT inserted.*
       VALUES (
-        @id, @name, @email, @role, @active, @emailVerified, @profilePhotoUrl,
+        @id, @companyId, @name, @email, @role, @active, @emailVerified, @profilePhotoUrl,
         @notificationSettings, @preferences, @twoFactorEnabled, @passwordHash
       );
     `);
@@ -397,6 +455,7 @@ export async function updateUser(id, updates) {
   const result = await db.request()
     .input('id', sql.NVarChar(64), id)
     .input('name', sql.NVarChar(200), next.name)
+    .input('companyId', sql.NVarChar(64), next.companyId ?? defaultCompanyId)
     .input('role', sql.NVarChar(40), next.role)
     .input('active', sql.Bit, next.active)
     .input('emailVerified', sql.Bit, next.emailVerified)
@@ -407,6 +466,7 @@ export async function updateUser(id, updates) {
     .query(`
       UPDATE dbo.users
       SET name = @name,
+          company_id = @companyId,
           role = @role,
           active = @active,
           email_verified = @emailVerified,
@@ -840,6 +900,7 @@ export async function saveDataset(dataset) {
   await db.request()
     .input('id', sql.NVarChar(64), dataset.id)
     .input('userId', sql.NVarChar(64), dataset.userId)
+    .input('companyId', sql.NVarChar(64), dataset.companyId ?? defaultCompanyId)
     .input('fileName', sql.NVarChar(260), dataset.fileName)
     .input('fileType', sql.NVarChar(20), dataset.fileType ?? 'csv')
     .input('worksheetName', sql.NVarChar(260), dataset.worksheetName ?? null)
@@ -855,6 +916,7 @@ export async function saveDataset(dataset) {
       BEGIN
         UPDATE dbo.datasets
         SET user_id = @userId,
+            company_id = @companyId,
             file_name = @fileName,
             file_type = @fileType,
             worksheet_name = @worksheetName,
@@ -870,44 +932,49 @@ export async function saveDataset(dataset) {
       ELSE
       BEGIN
         INSERT INTO dbo.datasets (
-          id, user_id, file_name, file_type, worksheet_name, uploaded_at, row_count, column_count,
+          id, user_id, company_id, file_name, file_type, worksheet_name, uploaded_at, row_count, column_count,
           headers, preview, records, analysis
         )
         VALUES (
-          @id, @userId, @fileName, @fileType, @worksheetName, @uploadedAt, @rows, @columns,
+          @id, @userId, @companyId, @fileName, @fileType, @worksheetName, @uploadedAt, @rows, @columns,
           @headers, @preview, @records, @analysis
         );
       END;
     `);
 }
 
-export async function listDatasets(userId) {
+export async function listDatasets(user) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
     return store.datasets
-      .filter((dataset) => dataset.userId === userId)
+      .filter((dataset) => canAccessCompanyRecord(user, dataset))
       .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
       .slice(0, 50);
   }
 
   const db = await getPool();
-  const result = await db.request()
-    .input('userId', sql.NVarChar(64), userId)
-    .query('SELECT TOP (50) * FROM dbo.datasets WHERE user_id = @userId ORDER BY uploaded_at DESC;');
+  const request = db.request();
+  const filter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`SELECT TOP (50) * FROM dbo.datasets ${filter} ORDER BY uploaded_at DESC;`);
   return result.recordset.map(rowToDataset);
 }
 
-export async function getDataset(id, userId) {
+export async function getDataset(id, user) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
-    return store.datasets.find((dataset) => dataset.id === id && dataset.userId === userId);
+    return store.datasets.find((dataset) => dataset.id === id && canAccessCompanyRecord(user, dataset));
   }
 
   const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('userId', sql.NVarChar(64), userId)
-    .query('SELECT TOP (1) * FROM dbo.datasets WHERE id = @id AND user_id = @userId;');
+  const request = db.request().input('id', sql.NVarChar(64), id);
+  const filter = isOwner(user) ? 'id = @id' : 'id = @id AND company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`SELECT TOP (1) * FROM dbo.datasets WHERE ${filter};`);
   return result.recordset[0] ? rowToDataset(result.recordset[0]) : undefined;
 }
 
@@ -936,6 +1003,7 @@ export async function saveDashboard(dashboard) {
   await db.request()
     .input('id', sql.NVarChar(64), dashboard.id)
     .input('userId', sql.NVarChar(64), dashboard.userId)
+    .input('companyId', sql.NVarChar(64), dashboard.companyId ?? defaultCompanyId)
     .input('name', sql.NVarChar(260), dashboard.name)
     .input('datasetId', sql.NVarChar(64), dashboard.datasetId)
     .input('chartType', sql.NVarChar(40), dashboard.chartType)
@@ -946,6 +1014,7 @@ export async function saveDashboard(dashboard) {
       BEGIN
         UPDATE dbo.dashboards
         SET user_id = @userId,
+            company_id = @companyId,
             name = @name,
             dataset_id = @datasetId,
             chart_type = @chartType,
@@ -956,14 +1025,15 @@ export async function saveDashboard(dashboard) {
       END
       ELSE
       BEGIN
-        INSERT INTO dbo.dashboards (id, user_id, name, dataset_id, chart_type, config, snapshot)
-        VALUES (@id, @userId, @name, @datasetId, @chartType, @config, @snapshot);
+        INSERT INTO dbo.dashboards (id, user_id, company_id, name, dataset_id, chart_type, config, snapshot)
+        VALUES (@id, @userId, @companyId, @name, @datasetId, @chartType, @config, @snapshot);
       END;
     `);
 
   const result = await db.request()
     .input('id', sql.NVarChar(64), dashboard.id)
     .input('userId', sql.NVarChar(64), dashboard.userId)
+    .input('companyId', sql.NVarChar(64), dashboard.companyId ?? defaultCompanyId)
     .query(`
       SELECT TOP (1)
         dashboards.*,
@@ -971,7 +1041,8 @@ export async function saveDashboard(dashboard) {
       FROM dbo.dashboards AS dashboards
       INNER JOIN dbo.datasets AS datasets ON datasets.id = dashboards.dataset_id
       WHERE dashboards.id = @id
-        AND dashboards.user_id = @userId;
+        AND dashboards.user_id = @userId
+        AND dashboards.company_id = @companyId;
     `);
   return rowToDashboard(result.recordset[0]);
 }
@@ -980,7 +1051,7 @@ export async function listDashboards(user) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
     return store.dashboards
-      .filter((dashboard) => isAdmin(user) || dashboard.userId === getUserId(user))
+      .filter((dashboard) => isOwner(user) || (dashboard.companyId ?? defaultCompanyId) === getCompanyId(user))
       .map((dashboard) => ({
         ...dashboard,
         datasetName: store.datasets.find((dataset) => dataset.id === dashboard.datasetId)?.fileName ?? 'Unknown dataset',
@@ -993,9 +1064,9 @@ export async function listDashboards(user) {
 
   const db = await getPool();
   const request = db.request();
-  const ownershipFilter = isAdmin(user) ? '' : 'WHERE dashboards.user_id = @userId';
-  if (!isAdmin(user)) {
-    request.input('userId', sql.NVarChar(64), getUserId(user));
+  const ownershipFilter = isOwner(user) ? '' : 'WHERE dashboards.company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
   }
   const result = await request.query(`
       SELECT TOP (50)
@@ -1036,14 +1107,15 @@ export async function saveReport(report) {
   const result = await db.request()
     .input('id', sql.NVarChar(64), report.id)
     .input('userId', sql.NVarChar(64), report.userId)
+    .input('companyId', sql.NVarChar(64), report.companyId ?? defaultCompanyId)
     .input('datasetId', sql.NVarChar(64), report.datasetId)
     .input('title', sql.NVarChar(260), report.title)
     .input('reportType', sql.NVarChar(40), report.reportType ?? 'pdf')
     .input('content', sql.NVarChar(sql.MAX), JSON.stringify(report.content ?? {}))
     .query(`
-      INSERT INTO dbo.reports (id, user_id, dataset_id, title, report_type, content)
+      INSERT INTO dbo.reports (id, user_id, company_id, dataset_id, title, report_type, content)
       OUTPUT inserted.id, inserted.user_id, inserted.dataset_id, inserted.title, inserted.report_type, inserted.content, inserted.created_at
-      VALUES (@id, @userId, @datasetId, @title, @reportType, @content);
+      VALUES (@id, @userId, @companyId, @datasetId, @title, @reportType, @content);
     `);
 
   return {
@@ -1056,7 +1128,7 @@ export async function listReports(user) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
     return store.reports
-      .filter((report) => isAdmin(user) || report.userId === getUserId(user))
+      .filter((report) => isOwner(user) || (report.companyId ?? defaultCompanyId) === getCompanyId(user))
       .map((report) => ({
         ...report,
         datasetName: store.datasets.find((dataset) => dataset.id === report.datasetId)?.fileName ?? 'Unknown dataset',
@@ -1069,9 +1141,9 @@ export async function listReports(user) {
 
   const db = await getPool();
   const request = db.request();
-  const ownershipFilter = isAdmin(user) ? '' : 'WHERE reports.user_id = @userId';
-  if (!isAdmin(user)) {
-    request.input('userId', sql.NVarChar(64), getUserId(user));
+  const ownershipFilter = isOwner(user) ? '' : 'WHERE reports.company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
   }
   const result = await request.query(`
       SELECT TOP (50)
@@ -1089,11 +1161,110 @@ export async function listReports(user) {
   return result.recordset.map(rowToReport);
 }
 
+export async function createModuleRecord(record) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const saved = {
+      ...record,
+      companyId: record.companyId ?? defaultCompanyId,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    store.moduleRecords = [saved, ...(store.moduleRecords ?? [])].slice(0, 500);
+    await saveDevStore(store);
+    return saved;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('id', sql.NVarChar(64), record.id)
+    .input('companyId', sql.NVarChar(64), record.companyId ?? defaultCompanyId)
+    .input('userId', sql.NVarChar(64), record.userId)
+    .input('module', sql.NVarChar(80), record.module)
+    .input('recordType', sql.NVarChar(80), record.recordType)
+    .input('title', sql.NVarChar(260), record.title)
+    .input('status', sql.NVarChar(80), record.status ?? 'open')
+    .input('amount', sql.Decimal(18, 2), record.amount ?? null)
+    .input('metadata', sql.NVarChar(sql.MAX), JSON.stringify(record.metadata ?? {}))
+    .query(`
+      INSERT INTO dbo.module_records (id, company_id, user_id, module, record_type, title, status, amount, metadata)
+      OUTPUT inserted.*
+      VALUES (@id, @companyId, @userId, @module, @recordType, @title, @status, @amount, @metadata);
+    `);
+  return rowToModuleRecord(result.recordset[0]);
+}
+
+export async function listModuleRecords(user, module) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return (store.moduleRecords ?? [])
+      .filter((record) => record.module === module && (isOwner(user) || record.companyId === getCompanyId(user)))
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+      .slice(0, 100);
+  }
+
+  const db = await getPool();
+  const request = db.request().input('module', sql.NVarChar(80), module);
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`
+    SELECT TOP (100) *
+    FROM dbo.module_records
+    WHERE module = @module
+      ${companyFilter}
+    ORDER BY updated_at DESC;
+  `);
+  return result.recordset.map(rowToModuleRecord);
+}
+
+export async function getModuleMetrics(user) {
+  const modules = ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'];
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return modules.reduce((metrics, module) => {
+      const records = (store.moduleRecords ?? []).filter((record) =>
+        record.module === module && (isOwner(user) || record.companyId === getCompanyId(user))
+      );
+      metrics[module] = {
+        total: records.length,
+        open: records.filter((record) => record.status !== 'closed').length
+      };
+      return metrics;
+    }, {});
+  }
+
+  const db = await getPool();
+  const request = db.request();
+  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`
+    SELECT module, COUNT(*) AS total_count,
+      SUM(CASE WHEN status <> 'closed' THEN 1 ELSE 0 END) AS open_count
+    FROM dbo.module_records
+    ${companyFilter}
+    GROUP BY module;
+  `);
+  const metrics = Object.fromEntries(modules.map((module) => [module, { total: 0, open: 0 }]));
+  result.recordset.forEach((row) => {
+    metrics[row.module] = {
+      total: Number(row.total_count ?? 0),
+      open: Number(row.open_count ?? 0)
+    };
+  });
+  return metrics;
+}
+
 function rowToDashboard(row) {
   return {
     id: row.id,
     name: row.name,
     datasetId: row.dataset_id,
+    companyId: row.company_id ?? row.companyId,
     datasetName: row.dataset_name,
     ownerName: row.owner_name,
     ownerEmail: row.owner_email,
@@ -1109,6 +1280,7 @@ function rowToReport(row) {
   return {
     id: row.id,
     datasetId: row.dataset_id,
+    companyId: row.company_id ?? row.companyId,
     datasetName: row.dataset_name,
     ownerName: row.owner_name,
     ownerEmail: row.owner_email,
@@ -1124,6 +1296,7 @@ function rowToDataset(row) {
   return {
     id: row.id,
     userId: row.user_id ?? row.userId,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
     fileName: row.file_name ?? row.fileName,
     fileType: row.file_type ?? row.fileType ?? analysis.fileType ?? 'csv',
     worksheetName: row.worksheet_name ?? row.worksheetName ?? analysis.worksheetName ?? null,
@@ -1146,6 +1319,7 @@ function rowToUser(row, includePassword = false) {
   const email = row.email?.toLowerCase();
   return {
     id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
     name: row.name,
     email,
     role: roleForUser(email, row.role),
@@ -1160,6 +1334,22 @@ function rowToUser(row, includePassword = false) {
     lockedUntil: row.locked_until ?? row.lockedUntil ?? null,
     createdAt: row.created_at ?? row.createdAt,
     ...(includePassword ? { passwordHash: row.password_hash ?? row.passwordHash } : {})
+  };
+}
+
+function rowToModuleRecord(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    module: row.module,
+    recordType: row.record_type ?? row.recordType,
+    title: row.title,
+    status: row.status,
+    amount: row.amount == null ? null : Number(row.amount),
+    metadata: parseJson(row.metadata, {}),
+    createdAt: row.created_at ?? row.createdAt,
+    updatedAt: row.updated_at ?? row.updatedAt
   };
 }
 
@@ -1190,6 +1380,14 @@ function rowToAuditLog(row) {
 
 function getUserId(user) {
   return typeof user === 'string' ? user : user.id;
+}
+
+function getCompanyId(user) {
+  return typeof user === 'object' ? user.companyId ?? defaultCompanyId : defaultCompanyId;
+}
+
+function canAccessCompanyRecord(user, record) {
+  return isOwner(user) || (record.companyId ?? defaultCompanyId) === getCompanyId(user);
 }
 
 function isAdmin(user) {
@@ -1254,6 +1452,7 @@ async function loadDevStore() {
       datasets: [],
       dashboards: [],
       reports: [],
+      moduleRecords: [],
       accountTokens: [],
       auditLogs: []
     };
@@ -1266,6 +1465,7 @@ async function loadDevStore() {
     datasets: store.datasets ?? [],
     dashboards: store.dashboards ?? [],
     reports: store.reports ?? [],
+    moduleRecords: store.moduleRecords ?? [],
     accountTokens: store.accountTokens ?? [],
     auditLogs: store.auditLogs ?? []
   };

@@ -988,6 +988,78 @@ th {
   margin: 0;
 }
 
+.module-card button,
+.module-form button {
+  min-height: 36px;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.module-stat-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-top: 16px;
+}
+
+.module-stat-row span {
+  min-height: 30px;
+  padding: 6px 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel-strong);
+  font-size: 13px;
+  font-weight: 850;
+}
+
+.module-workbench {
+  display: grid;
+  gap: 18px;
+}
+
+.module-form {
+  display: grid;
+  grid-template-columns: 180px 1fr 170px auto;
+  gap: 10px;
+}
+
+.module-form input,
+.module-form select {
+  min-height: 40px;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.record-list {
+  display: grid;
+  gap: 10px;
+}
+
+.record-list > div:not(.empty-state) {
+  display: grid;
+  gap: 4px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.record-list span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.compact-empty {
+  min-height: 90px;
+}
+
 .module-hero,
 .company-panel {
   background:
@@ -1457,7 +1529,8 @@ th {
   }
 
   .bar-row,
-  .chat-form {
+  .chat-form,
+  .module-form {
     grid-template-columns: 1fr;
   }
 

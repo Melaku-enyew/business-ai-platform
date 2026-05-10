@@ -183,11 +183,13 @@
         "3 columns look numeric and chart-ready.",
         "This dataset is compact enough for quick review and cleanup."
       ],
-      "userId": "local-dev-user"
+      "userId": "local-dev-user",
+      "companyId": "metenova-default-company"
     }
   ],
   "dashboards": [],
   "reports": [],
+  "moduleRecords": [],
   "accountTokens": [],
   "auditLogs": []
 }

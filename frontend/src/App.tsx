@@ -52,6 +52,7 @@ type AppView =
 
 type User = {
   id: string;
+  companyId?: string;
   name: string;
   email: string;
   role: UserRole;
@@ -126,6 +127,19 @@ type SystemStatus = {
   maxSpreadsheetRows: number;
 };
 
+type ModuleRecord = {
+  id: string;
+  module: string;
+  recordType: string;
+  title: string;
+  status: string;
+  amount?: number | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ModuleMetrics = Record<string, { total: number; open: number }>;
+
 type AuthResponse = {
   token: string;
   user: User;
@@ -158,36 +172,38 @@ const moduleNav: Array<{ view: AppView; label: string; adminOnly?: boolean }> = 
   { view: 'contact', label: 'Contact Us' }
 ];
 
-const moduleCards: Record<string, Array<{ title: string; copy: string; metric: string }>> = {
+const moduleCards: Record<string, Array<{ title: string; copy: string; type: string }>> = {
   accounting: [
-    { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', metric: '$48K open' },
-    { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', metric: '94% coded' },
-    { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', metric: '3 alerts' },
-    { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', metric: '12 reports' },
-    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', metric: 'Ready' }
+    { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', type: 'invoice' },
+    { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', type: 'expense' },
+    { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', type: 'payroll' },
+    { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', type: 'financial_report' },
+    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', type: 'assistant' }
   ],
   engineering: [
-    { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', metric: '7 active' },
-    { title: 'Task Tracking', copy: 'Prioritize work, assign teams, and monitor delivery commitments.', metric: '42 tasks' },
-    { title: 'Blueprint/File Management', copy: 'Prepare document upload, file versioning, and blueprint review workflows.', metric: 'Vault ready' },
-    { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', metric: 'Weekly' }
+    { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', type: 'project' },
+    { title: 'Task Tracking', copy: 'Prioritize work, assign teams, and monitor delivery commitments.', type: 'task' },
+    { title: 'Blueprint/File Management', copy: 'Prepare document upload, file versioning, and blueprint review workflows.', type: 'blueprint' },
+    { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', type: 'progress_report' }
   ],
   hr: [
-    { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', metric: 'Secure' },
-    { title: 'Team Assignments', copy: 'Map employees to modules, managers, and projects.', metric: 'Role aware' },
-    { title: 'HR Assistant', copy: 'Draft policies, onboarding checklists, and internal communications.', metric: 'AI ready' }
+    { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', type: 'employee' },
+    { title: 'Attendance', copy: 'Prepare attendance, time, and shift tracking workflows.', type: 'attendance' },
+    { title: 'Hiring', copy: 'Track candidates, interviews, and onboarding steps.', type: 'hiring' },
+    { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave' }
   ],
   crm: [
-    { title: 'Accounts', copy: 'Track clients, contacts, opportunities, and relationship health.', metric: 'Pipeline' },
-    { title: 'Activity History', copy: 'Prepare interaction logging and follow-up workflows.', metric: 'Planned' },
-    { title: 'AI Sales Assistant', copy: 'Summarize client notes, risks, next steps, and deal movement.', metric: 'Ready' }
+    { title: 'Clients', copy: 'Track client accounts, contacts, and relationship health.', type: 'client' },
+    { title: 'Leads', copy: 'Capture prospects and qualify opportunities.', type: 'lead' },
+    { title: 'Sales Pipeline', copy: 'Manage stages, value, and next actions.', type: 'pipeline' },
+    { title: 'Customer Notes', copy: 'Log interaction history and follow-ups.', type: 'note' }
   ],
   dataProcessing: [
-    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', metric: 'Rules ready' },
-    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', metric: 'AI assisted' },
-    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', metric: 'Quality score' },
-    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', metric: 'CSV/Excel' },
-    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', metric: 'Reportable' }
+    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', type: 'cleanup' },
+    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', type: 'dedupe' },
+    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', type: 'validation' },
+    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', type: 'import_export' },
+    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', type: 'quality_report' }
   ]
 };
 
@@ -233,6 +249,10 @@ export function App() {
   const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [moduleMetrics, setModuleMetrics] = useState<ModuleMetrics>({});
+  const [moduleRecords, setModuleRecords] = useState<ModuleRecord[]>([]);
+  const [moduleMessage, setModuleMessage] = useState('Select a tool to create a workspace record.');
+  const [moduleForm, setModuleForm] = useState({ title: '', recordType: 'item', amount: '' });
   const [persistenceState, setPersistenceState] = useState('SQL Server storage ready for saved work.');
   const [chat, setChat] = useState<ChatMessage[]>([
     { role: 'assistant', text: 'Upload or select a dataset, then ask about rows, columns, totals, averages, or outliers.' }
@@ -288,6 +308,12 @@ export function App() {
     setContactEmail(user.email);
   }, [user]);
 
+  useEffect(() => {
+    if (['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'].includes(currentView)) {
+      loadModuleRecords(currentView);
+    }
+  }, [currentView]);
+
   function apiFetch(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers);
 
@@ -317,14 +343,16 @@ export function App() {
         workflowsResponse,
         datasetsResponse,
         dashboardsResponse,
-        reportsResponse
+        reportsResponse,
+        moduleMetricsResponse
       ] = await Promise.all([
         apiFetch('/api/auth/me'),
         apiFetch('/api/insights'),
         apiFetch('/api/workflows'),
         apiFetch('/api/datasets'),
         apiFetch('/api/dashboards'),
-        apiFetch('/api/reports')
+        apiFetch('/api/reports'),
+        apiFetch('/api/modules/metrics')
       ]);
 
       const mePayload = await readJson<{ user: User }>(meResponse);
@@ -333,6 +361,7 @@ export function App() {
       const datasetsPayload = await readJson<{ datasets: Dataset[] }>(datasetsResponse);
       const dashboardsPayload = await readJson<{ dashboards: SavedDashboard[] }>(dashboardsResponse);
       const reportsPayload = await readJson<{ reports: ReportHistoryItem[] }>(reportsResponse);
+      const moduleMetricsPayload = await readJson<{ metrics: ModuleMetrics }>(moduleMetricsResponse);
 
       const savedDatasets = datasetsPayload.datasets ?? [];
       const savedDashboards = dashboardsPayload.dashboards ?? [];
@@ -348,6 +377,7 @@ export function App() {
       setActiveDataset(latestDataset ?? savedDatasets[0] ?? null);
       setDashboards(savedDashboards);
       setReports(reportsPayload.reports ?? []);
+      setModuleMetrics(moduleMetricsPayload.metrics ?? {});
       setStatus('Live');
 
       if (latestDashboard?.chartType) {
@@ -372,6 +402,16 @@ export function App() {
     setCurrentView('dashboard');
     setAccountOpen(false);
     setStatus('Signed out');
+  }
+
+  async function logoutRemote() {
+    try {
+      if (token) {
+        await apiFetch('/api/auth/logout', { method: 'POST' });
+      }
+    } finally {
+      logout();
+    }
   }
 
   async function handleAuth(event: FormEvent<HTMLFormElement>) {
@@ -651,6 +691,13 @@ export function App() {
       }
 
       setAdminUsers((current: AdminUser[]) => current.map((entry) => entry.id === payload.user.id ? payload.user : entry));
+      if (payload.user.id === user?.id) {
+        setUser(payload.user);
+        const refreshResponse = await apiFetch('/api/auth/refresh', { method: 'POST' });
+        const refreshPayload = await readJson<AuthResponse>(refreshResponse);
+        localStorage.setItem('authToken', refreshPayload.token);
+        setToken(refreshPayload.token);
+      }
       setAdminMessage('User access updated.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'User update failed.');
@@ -787,6 +834,55 @@ export function App() {
       setSupportMessage(payload.message);
     } catch (error) {
       setSupportMessage(error instanceof Error ? error.message : 'Support request failed.');
+    }
+  }
+
+  async function loadModuleRecords(module: string) {
+    try {
+      const response = await apiFetch(`/api/modules/${module}/records`);
+      const payload = await readJson<{ records: ModuleRecord[] }>(response);
+      setModuleRecords(payload.records ?? []);
+      setModuleMessage(payload.records?.length ? 'Workspace records loaded.' : 'No records yet. Create the first item for this module.');
+    } catch (error) {
+      setModuleMessage(error instanceof Error ? error.message : 'Could not load module records.');
+    }
+  }
+
+  async function createModuleItem(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!moduleForm.title.trim()) {
+      setModuleMessage('Enter a title before saving.');
+      return;
+    }
+
+    try {
+      const response = await apiFetch(`/api/modules/${currentView}/records`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: moduleForm.title,
+          recordType: moduleForm.recordType,
+          amount: moduleForm.amount,
+          metadata: { source: 'module-ui' }
+        })
+      });
+      const payload = await readJson<{ record: ModuleRecord; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not save module record.');
+      }
+      setModuleRecords((current: ModuleRecord[]) => [payload.record, ...current]);
+      setModuleMetrics((current) => ({
+        ...current,
+        [currentView]: {
+          total: (current[currentView]?.total ?? 0) + 1,
+          open: (current[currentView]?.open ?? 0) + 1
+        }
+      }));
+      setModuleForm({ title: '', recordType: moduleCards[currentView]?.[0]?.type ?? 'item', amount: '' });
+      setModuleMessage('Record saved to this company workspace.');
+    } catch (error) {
+      setModuleMessage(error instanceof Error ? error.message : 'Could not save module record.');
     }
   }
 
@@ -953,7 +1049,7 @@ export function App() {
                     <span>{user?.email ?? 'local@example.com'}</span>
                   </div>
                   <button type="button" onClick={openSettings}>Profile settings</button>
-                  {!authDisabled && <button type="button" onClick={logout}>Log out</button>}
+                  {!authDisabled && <button type="button" onClick={logoutRemote}>Log out</button>}
                 </div>
               )}
             </div>
@@ -1180,7 +1276,16 @@ export function App() {
           </section>
         ) : ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'].includes(currentView) ? (
           <section className="module-page">
-            {renderModulePage(currentView, setCurrentView)}
+            {renderModulePage(
+              currentView,
+              setCurrentView,
+              moduleMetrics[currentView],
+              moduleRecords,
+              moduleForm,
+              setModuleForm,
+              createModuleItem,
+              moduleMessage
+            )}
           </section>
         ) : currentView === 'analytics' ? (
           <section className="module-page">
@@ -1536,7 +1641,16 @@ function roleLabel(role?: string) {
   return labels[role ?? ''] ?? 'Employee';
 }
 
-function renderModulePage(view: AppView, setCurrentView: (view: AppView) => void) {
+function renderModulePage(
+  view: AppView,
+  setCurrentView: (view: AppView) => void,
+  metrics: { total: number; open: number } | undefined,
+  records: ModuleRecord[],
+  moduleForm: { title: string; recordType: string; amount: string },
+  setModuleForm: (value: { title: string; recordType: string; amount: string }) => void,
+  createModuleItem: (event: FormEvent<HTMLFormElement>) => void,
+  moduleMessage: string
+) {
   const titles: Record<string, string> = {
     accounting: 'Accounting command center',
     engineering: 'Engineering & projects',
@@ -1559,6 +1673,10 @@ function renderModulePage(view: AppView, setCurrentView: (view: AppView) => void
         <p className="eyebrow">Modular AI ERP</p>
         <h2>{titles[view]}</h2>
         <p className="module-copy">{descriptions[view]}</p>
+        <div className="module-stat-row">
+          <span>{metrics?.total ?? 0} total records</span>
+          <span>{metrics?.open ?? 0} open items</span>
+        </div>
         <button className="ghost-button support-button" type="button" onClick={() => setCurrentView('contact')}>
           Need help?
         </button>
@@ -1566,12 +1684,39 @@ function renderModulePage(view: AppView, setCurrentView: (view: AppView) => void
       <div className="module-grid">
         {cards.map((card) => (
           <article className="module-card" key={card.title}>
-            <span>{card.metric}</span>
+            <span>{records.filter((record) => record.recordType === card.type).length} records</span>
             <strong>{card.title}</strong>
             <p>{card.copy}</p>
+            <button type="button" onClick={() => setModuleForm({ ...moduleForm, recordType: card.type })}>
+              Create {card.title}
+            </button>
           </article>
         ))}
       </div>
+      <article className="panel module-workbench">
+        <div>
+          <p className="eyebrow">Workspace records</p>
+          <h2>Create a real module item</h2>
+          <p className="persistence-note">{moduleMessage}</p>
+        </div>
+        <form className="module-form" onSubmit={createModuleItem}>
+          <select value={moduleForm.recordType} onChange={(event) => setModuleForm({ ...moduleForm, recordType: event.target.value })}>
+            {cards.map((card) => <option key={card.type} value={card.type}>{card.title}</option>)}
+          </select>
+          <input placeholder="Title or reference" value={moduleForm.title} onChange={(event) => setModuleForm({ ...moduleForm, title: event.target.value })} />
+          <input placeholder="Amount (optional)" value={moduleForm.amount} onChange={(event) => setModuleForm({ ...moduleForm, amount: event.target.value })} />
+          <button type="submit">Save record</button>
+        </form>
+        <div className="record-list">
+          {records.map((record) => (
+            <div key={record.id}>
+              <strong>{record.title}</strong>
+              <span>{record.recordType} - {record.status} - {new Date(record.updatedAt).toLocaleString()}</span>
+            </div>
+          ))}
+          {!records.length && <div className="empty-state compact-empty">No records yet. Add the first operational item.</div>}
+        </div>
+      </article>
     </>
   );
 }

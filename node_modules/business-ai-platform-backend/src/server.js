@@ -11,6 +11,7 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
   createAccountToken,
+  createModuleRecord,
   createSession,
   createUser,
   deleteUser,
@@ -22,10 +23,12 @@ import {
   findSessionById,
   getDevUser,
   getDataset,
+  getModuleMetrics,
   initDatabase,
   listAuditLogs,
   listDashboards,
   listDatasets,
+  listModuleRecords,
   listReports,
   listSessions,
   listUsers,
@@ -67,6 +70,9 @@ const adminEmails = (process.env.ADMIN_EMAILS || ownerEmail)
 const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 const frontendDist = join(rootDir, 'frontend/dist');
 const legacyDatasetsFile = join(rootDir, 'backend/data/uploads/datasets.json');
+const authAttempts = new Map();
+const emailFrom = process.env.EMAIL_FROM || `Metenova AI <support@${process.env.EMAIL_DOMAIN || 'metenovaai.com'}>`;
+const appBaseUrl = process.env.APP_BASE_URL || clientOrigin;
 
 const insights = {
   metrics: [
@@ -319,6 +325,7 @@ function reportLines(dataset) {
 function publicUser(user) {
   return {
     id: user.id,
+    companyId: user.companyId,
     name: user.name,
     email: user.email,
     role: user.role,
@@ -366,6 +373,7 @@ async function createLoginSession(user) {
     {
       sub: user.id,
       sid: session.id,
+      companyId: user.companyId,
       email: user.email,
       name: user.name,
       role: user.role
@@ -453,6 +461,7 @@ function userFromToken(payload) {
 
   return {
     id: payload.sub,
+    companyId: payload.companyId,
     name: payload.name || payload.email,
     email: payload.email,
     role: roles.includes(payload.role) ? payload.role : 'employee',
@@ -489,6 +498,32 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
     targetId,
     metadata
   });
+}
+
+async function sendEmail({ to, subject, text }) {
+  if (!process.env.RESEND_API_KEY) {
+    return { delivered: false, provider: 'local-dev' };
+  }
+
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      from: emailFrom,
+      to,
+      subject,
+      text
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error('Email provider rejected the message.');
+  }
+
+  return { delivered: true, provider: 'resend' };
 }
 
 function formatNumber(value) {
@@ -644,7 +679,11 @@ async function importLegacyDatasets() {
 
   const legacy = JSON.parse(await readFile(legacyDatasetsFile, 'utf8'));
   const datasets = Array.isArray(legacy) ? legacy : [legacy];
-  await Promise.all(datasets.map((dataset) => saveDataset({ ...dataset, userId: dataset.userId ?? getDevUser().id })));
+  await Promise.all(datasets.map((dataset) => saveDataset({
+    ...dataset,
+    userId: dataset.userId ?? getDevUser().id,
+    companyId: dataset.companyId ?? getDevUser().companyId
+  })));
 }
 
 app.use(cors({
@@ -652,6 +691,28 @@ app.use(cors({
   credentials: true
 }));
 app.use(express.json());
+
+function authRateLimit(req, res, next) {
+  const key = `${req.ip}:${String(req.body?.email || '').toLowerCase()}`;
+  const now = Date.now();
+  const windowMs = 15 * 60 * 1000;
+  const entry = authAttempts.get(key) ?? { count: 0, resetAt: now + windowMs };
+
+  if (entry.resetAt <= now) {
+    entry.count = 0;
+    entry.resetAt = now + windowMs;
+  }
+
+  entry.count += 1;
+  authAttempts.set(key, entry);
+
+  if (entry.count > 20) {
+    res.status(429).json({ error: 'Too many authentication attempts. Try again later.' });
+    return;
+  }
+
+  next();
+}
 
 app.get('/health', (_req, res) => {
   res.json({
@@ -668,7 +729,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-app.post('/api/auth/signup', async (req, res, next) => {
+app.post('/api/auth/signup', authRateLimit, async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -709,7 +770,7 @@ app.post('/api/auth/signup', async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/forgot-password', async (req, res, next) => {
+app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const user = email ? await findUserByEmail(email) : undefined;
@@ -724,7 +785,12 @@ app.post('/api/auth/forgot-password', async (req, res, next) => {
         purpose: 'password_reset',
         expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
       });
-      resetUrl = `/reset-password?token=${encodeURIComponent(token)}`;
+      resetUrl = `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
+      await sendEmail({
+        to: user.email,
+        subject: 'Reset your Metenova AI password',
+        text: `Use this secure link to reset your password: ${resetUrl}`
+      });
       await saveAuditLog({
         id: randomUUID(),
         actorEmail: email,
@@ -737,7 +803,7 @@ app.post('/api/auth/forgot-password', async (req, res, next) => {
 
     res.json({
       message: 'If the account exists, password reset instructions have been prepared.',
-      ...(resetUrl && !process.env.EMAIL_PROVIDER ? { resetUrl } : {})
+      ...(resetUrl && !process.env.RESEND_API_KEY ? { resetUrl } : {})
     });
   } catch (error) {
     next(error);
@@ -773,9 +839,16 @@ app.post('/api/auth/recover-username', async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const user = email ? await findUserByEmail(email) : undefined;
+    if (user) {
+      await sendEmail({
+        to: user.email,
+        subject: 'Your Metenova AI username',
+        text: `Your Metenova AI username is ${user.email}.`
+      });
+    }
     res.json({
       message: 'If the account exists, username recovery instructions have been prepared.',
-      ...(user && !process.env.EMAIL_PROVIDER ? { username: user.email, name: user.name } : {})
+      ...(user && !process.env.RESEND_API_KEY ? { username: user.email, name: user.name } : {})
     });
   } catch (error) {
     next(error);
@@ -792,9 +865,15 @@ app.post('/api/auth/request-verification', requireAuth, async (req, res, next) =
       purpose: 'email_verification',
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     });
+    const verificationUrl = `${appBaseUrl}/verify-email?token=${encodeURIComponent(token)}`;
+    await sendEmail({
+      to: req.user.email,
+      subject: 'Verify your Metenova AI email',
+      text: `Verify your email address here: ${verificationUrl}`
+    });
     res.json({
       message: 'Verification instructions have been prepared.',
-      ...(!process.env.EMAIL_PROVIDER ? { verificationUrl: `/verify-email?token=${encodeURIComponent(token)}` } : {})
+      ...(!process.env.RESEND_API_KEY ? { verificationUrl } : {})
     });
   } catch (error) {
     next(error);
@@ -818,7 +897,7 @@ app.post('/api/auth/verify-email', async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/login', async (req, res, next) => {
+app.post('/api/auth/login', authRateLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -859,6 +938,15 @@ app.post('/api/auth/login', async (req, res, next) => {
 
 app.get('/api/auth/me', requireAuth, (req, res) => {
   res.json({ user: publicUser(req.user) });
+});
+
+app.post('/api/auth/refresh', requireAuth, async (req, res, next) => {
+  try {
+    const { token, session } = await createLoginSession(req.user);
+    res.json({ token, user: publicUser(req.user), session });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/auth/sessions', requireAuth, async (req, res, next) => {
@@ -1062,6 +1150,50 @@ app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
   });
 });
 
+app.get('/api/modules/metrics', async (req, res, next) => {
+  try {
+    res.json({ metrics: await getModuleMetrics(req.user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/modules/:module/records', async (req, res, next) => {
+  try {
+    res.json({ records: await listModuleRecords(req.user, req.params.module) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/modules/:module/records', async (req, res, next) => {
+  try {
+    const title = String(req.body?.title || '').trim();
+    const recordType = String(req.body?.recordType || 'item').trim();
+
+    if (!title) {
+      res.status(400).json({ error: 'Title is required.' });
+      return;
+    }
+
+    const record = await createModuleRecord({
+      id: randomUUID(),
+      companyId: req.user.companyId,
+      userId: req.user.id,
+      module: req.params.module,
+      recordType,
+      title,
+      status: String(req.body?.status || 'open'),
+      amount: req.body?.amount === '' || req.body?.amount == null ? null : Number(req.body.amount),
+      metadata: req.body?.metadata ?? {}
+    });
+    await audit(req, 'module.record_created', req.params.module, record.id, { recordType });
+    res.status(201).json({ record });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/contact', async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
@@ -1074,6 +1206,11 @@ app.post('/api/contact', async (req, res, next) => {
     }
 
     await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email });
+    await sendEmail({
+      to: ownerEmail,
+      subject: `Metenova AI support request from ${name}`,
+      text: `From: ${name} <${email}>\n\n${message}`
+    });
     res.status(201).json({
       message: 'Support request received. Metenova AI will follow up by email.',
       contact: {
@@ -1128,6 +1265,7 @@ async function handleDatasetUpload(req, res) {
     preview: parsed.records.slice(0, 10),
     records: parsed.records,
     userId: req.user.id,
+    companyId: req.user.companyId,
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
   };
@@ -1154,7 +1292,7 @@ app.post('/api/csv/upload', upload.single('file'), (req, res) => {
 
 app.get('/api/datasets', async (req, res, next) => {
   try {
-    const datasets = await listDatasets(req.user.id);
+    const datasets = await listDatasets(req.user);
     res.json({ datasets: datasets.map(publicDataset) });
   } catch (error) {
     next(error);
@@ -1163,7 +1301,7 @@ app.get('/api/datasets', async (req, res, next) => {
 
 app.get('/api/datasets/:id', async (req, res, next) => {
   try {
-    const dataset = await getDataset(req.params.id, req.user.id);
+    const dataset = await getDataset(req.params.id, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
       return;
@@ -1177,7 +1315,7 @@ app.get('/api/datasets/:id', async (req, res, next) => {
 
 app.post('/api/datasets/:id/chat', async (req, res, next) => {
   try {
-    const dataset = await getDataset(req.params.id, req.user.id);
+    const dataset = await getDataset(req.params.id, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
       return;
@@ -1205,7 +1343,7 @@ app.get('/api/dashboards', async (req, res, next) => {
 
 app.post('/api/dashboards', async (req, res, next) => {
   try {
-    const dataset = await getDataset(req.body?.datasetId, req.user.id);
+    const dataset = await getDataset(req.body?.datasetId, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
       return;
@@ -1214,6 +1352,7 @@ app.post('/api/dashboards', async (req, res, next) => {
     const dashboard = {
       id: req.body?.id || randomUUID(),
       userId: req.user.id,
+      companyId: req.user.companyId,
       name: String(req.body?.name || `${dataset.fileName} dashboard`),
       datasetId: dataset.id,
       chartType: String(req.body?.chartType || 'bar'),
@@ -1239,7 +1378,7 @@ app.get('/api/reports', async (req, res, next) => {
 
 app.post('/api/reports', async (req, res, next) => {
   try {
-    const dataset = await getDataset(req.body?.datasetId, req.user.id);
+    const dataset = await getDataset(req.body?.datasetId, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
       return;
@@ -1248,6 +1387,7 @@ app.post('/api/reports', async (req, res, next) => {
     const report = {
       id: randomUUID(),
       userId: req.user.id,
+      companyId: req.user.companyId,
       datasetId: dataset.id,
       datasetName: dataset.fileName,
       title: String(req.body?.title || `${dataset.fileName} report`),
