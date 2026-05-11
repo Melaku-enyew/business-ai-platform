@@ -107,6 +107,10 @@ type ReportHistoryItem = {
 type ConfigResponse = {
   authDisabled: boolean;
   storage: 'sql-server' | 'local-json' | string;
+  durableStorage?: boolean;
+  emailConfigured?: boolean;
+  sessionTimeoutMinutes?: number;
+  sessionWarningSeconds?: number;
 };
 
 type AuditLog = {
@@ -248,6 +252,9 @@ export function App() {
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
   const [authMessage, setAuthMessage] = useState('Sign in to access your dashboards and datasets.');
+  const [inviteToken, setInviteToken] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [invitePassword, setInvitePassword] = useState('');
   const [recoveryEmail, setRecoveryEmail] = useState('');
   const [recoveryMessage, setRecoveryMessage] = useState('');
   const [profileName, setProfileName] = useState('');
@@ -259,7 +266,9 @@ export function App() {
   const [contactName, setContactName] = useState('');
   const [contactEmail, setContactEmail] = useState('');
   const [contactMessage, setContactMessage] = useState('');
+  const [contactContext, setContactContext] = useState('');
   const [supportMessage, setSupportMessage] = useState('');
+  const [supportSending, setSupportSending] = useState(false);
   const [currentView, setCurrentView] = useState<AppView>('dashboard');
   const [accountOpen, setAccountOpen] = useState(false);
   const [question, setQuestion] = useState('');
@@ -278,7 +287,16 @@ export function App() {
   const [moduleRecords, setModuleRecords] = useState<ModuleRecord[]>([]);
   const [moduleMessage, setModuleMessage] = useState('Select a tool to create a workspace record.');
   const [moduleForm, setModuleForm] = useState({ title: '', recordType: 'item', amount: '' });
+  const [recordSearch, setRecordSearch] = useState('');
+  const [recordStatusFilter, setRecordStatusFilter] = useState('all');
+  const [selectedRecord, setSelectedRecord] = useState<ModuleRecord | null>(null);
   const [persistenceState, setPersistenceState] = useState('Enterprise-grade secure cloud storage ready.');
+  const [durableStorage, setDurableStorage] = useState(true);
+  const [emailConfigured, setEmailConfigured] = useState(false);
+  const [sessionTimeoutMs, setSessionTimeoutMs] = useState(15 * 60 * 1000);
+  const [sessionWarningSeconds, setSessionWarningSeconds] = useState(60);
+  const [showSessionWarning, setShowSessionWarning] = useState(false);
+  const [sessionSecondsLeft, setSessionSecondsLeft] = useState(60);
   const [chat, setChat] = useState<ChatMessage[]>([
     { role: 'assistant', text: 'Upload or select a dataset, then ask about rows, columns, totals, averages, or outliers.' }
   ]);
@@ -293,13 +311,26 @@ export function App() {
       .then((response) => readJson<ConfigResponse>(response))
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
-        setPersistenceState(config.storage ? 'Enterprise-grade secure cloud storage ready.' : 'Protected workspace infrastructure ready.');
+        setDurableStorage(config.durableStorage !== false);
+        setEmailConfigured(Boolean(config.emailConfigured));
+        setSessionTimeoutMs(Math.max(config.sessionTimeoutMinutes ?? 15, 5) * 60 * 1000);
+        setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
+        setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
       })
       .catch(() => {
         setAuthDisabled(false);
         setPersistenceState('Protected workspace infrastructure ready.');
       })
       .finally(() => setConfigLoaded(true));
+  }, []);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tokenParam = params.get('token');
+    if (window.location.pathname.includes('accept-invite') && tokenParam) {
+      setInviteToken(tokenParam);
+      setAuthMessage('Complete your invitation to join this workspace.');
+    }
   }, []);
 
   useEffect(() => {
@@ -338,6 +369,63 @@ export function App() {
       loadModuleRecords(currentView);
     }
   }, [currentView]);
+
+  useEffect(() => {
+    const syncAuth = (event: StorageEvent) => {
+      if (event.key === 'authToken') {
+        const nextToken = event.newValue || '';
+        if (!nextToken) {
+          logout('Signed out in another tab.');
+          return;
+        }
+        setToken(nextToken);
+      }
+      if (event.key === 'metenovaLogoutAt' && event.newValue) {
+        logout('Session ended in another tab.');
+      }
+    };
+
+    window.addEventListener('storage', syncAuth);
+    return () => window.removeEventListener('storage', syncAuth);
+  }, []);
+
+  useEffect(() => {
+    if (!user || authDisabled) {
+      setShowSessionWarning(false);
+      return;
+    }
+
+    const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart', 'visibilitychange'];
+    const markActive = () => {
+      if (document.visibilityState !== 'hidden') {
+        localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+        setShowSessionWarning(false);
+      }
+    };
+    const checkSession = () => {
+      const lastActivity = Number(localStorage.getItem('metenovaLastActivityAt') || Date.now());
+      const elapsed = Date.now() - lastActivity;
+      const remainingMs = sessionTimeoutMs - elapsed;
+      const nextSeconds = Math.max(Math.ceil(remainingMs / 1000), 0);
+      setSessionSecondsLeft(nextSeconds);
+
+      if (remainingMs <= 0) {
+        localStorage.setItem('metenovaLogoutAt', String(Date.now()));
+        logoutRemote('Session expired after inactivity.');
+        return;
+      }
+
+      setShowSessionWarning(nextSeconds <= sessionWarningSeconds);
+    };
+
+    markActive();
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, markActive, { passive: true }));
+    const interval = window.setInterval(checkSession, 1000);
+    return () => {
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, markActive));
+      window.clearInterval(interval);
+    };
+  }, [user?.id, authDisabled, sessionTimeoutMs, sessionWarningSeconds]);
 
   function apiFetch(path: string, options: RequestInit = {}) {
     const headers = new Headers(options.headers);
@@ -415,7 +503,7 @@ export function App() {
     }
   }
 
-  function logout() {
+  function logout(message = 'Signed out') {
     localStorage.removeItem('authToken');
     setToken('');
     setUser(null);
@@ -427,15 +515,18 @@ export function App() {
     setCurrentView('dashboard');
     setAccountOpen(false);
     setStatus('Signed out');
+    setAuthMessage(message);
+    setShowSessionWarning(false);
   }
 
-  async function logoutRemote() {
+  async function logoutRemote(message = 'Signed out') {
     try {
       if (token) {
         await apiFetch('/api/auth/logout', { method: 'POST' });
       }
     } finally {
-      logout();
+      localStorage.setItem('metenovaLogoutAt', String(Date.now()));
+      logout(message);
     }
   }
 
@@ -470,6 +561,7 @@ export function App() {
       }
 
       localStorage.setItem('authToken', payload.token);
+      localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
       setToken(payload.token);
       setUser(payload.user);
       setAuthPassword('');
@@ -478,6 +570,41 @@ export function App() {
       setCurrentView('dashboard');
     } catch (error) {
       setAuthMessage(error instanceof Error ? error.message : 'Authentication failed.');
+    }
+  }
+
+  async function acceptInvite(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    setAuthMessage('Activating your workspace invitation...');
+
+    try {
+      const response = await fetch('/api/auth/accept-invite', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          token: inviteToken,
+          name: inviteName,
+          password: invitePassword
+        })
+      });
+      const payload = await readJson<Partial<AuthResponse> & { error?: string }>(response);
+      if (!response.ok || !payload.token || !payload.user) {
+        throw new Error(payload.error || 'Invitation could not be accepted.');
+      }
+
+      localStorage.setItem('authToken', payload.token);
+      localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+      window.history.replaceState({}, '', '/');
+      setToken(payload.token);
+      setUser(payload.user);
+      setInviteToken('');
+      setInvitePassword('');
+      setAuthMessage('Invitation accepted.');
+      setStatus('Live');
+      setCurrentView('dashboard');
+    } catch (error) {
+      setAuthMessage(error instanceof Error ? error.message : 'Invitation could not be accepted.');
     }
   }
 
@@ -889,23 +1016,37 @@ export function App() {
 
   async function submitContact(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
+    const attachments = form.querySelector<HTMLInputElement>('input[name="attachments"]')?.files;
+    const body = new FormData();
+    body.append('name', contactName);
+    body.append('email', contactEmail);
+    body.append('message', contactMessage);
+    body.append('pageContext', contactContext || currentView);
+    Array.from(attachments ?? []).slice(0, 3).forEach((file) => body.append('attachments', file));
+    setSupportSending(true);
 
     try {
       const response = await apiFetch('/api/contact', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: contactName, email: contactEmail, message: contactMessage })
+        body
       });
-      const payload = await readJson<{ message: string; error?: string }>(response);
+      const payload = await readJson<{ message: string; error?: string; delivery?: { status?: string; error?: string } }>(response);
 
       if (!response.ok) {
         throw new Error(payload.error || 'Support request failed.');
       }
 
       setContactMessage('');
-      setSupportMessage(payload.message);
+      setContactContext('');
+      form.reset();
+      setSupportMessage(payload.delivery?.status === 'failed'
+        ? `${payload.message} Delivery detail: ${payload.delivery.error ?? 'Email delivery is not configured.'}`
+        : payload.message);
     } catch (error) {
       setSupportMessage(error instanceof Error ? error.message : 'Support request failed.');
+    } finally {
+      setSupportSending(false);
     }
   }
 
@@ -970,10 +1111,19 @@ export function App() {
         throw new Error(payload.error || 'Could not update module record.');
       }
       setModuleRecords((current: ModuleRecord[]) => current.map((entry) => entry.id === record.id ? payload.record : entry));
+      setSelectedRecord((current: ModuleRecord | null) => current?.id === record.id ? payload.record : current);
       setModuleMessage('Record updated.');
     } catch (error) {
       setModuleMessage(error instanceof Error ? error.message : 'Could not update module record.');
     }
+  }
+
+  async function editModuleItem(record: ModuleRecord) {
+    const title = window.prompt('Update record title', record.title);
+    if (title == null || !title.trim() || title.trim() === record.title) {
+      return;
+    }
+    await updateModuleItem(record, { title: title.trim() });
   }
 
   async function deleteModuleItem(record: ModuleRecord) {
@@ -988,6 +1138,7 @@ export function App() {
         throw new Error(payload.error || 'Could not delete module record.');
       }
       setModuleRecords((current: ModuleRecord[]) => current.filter((entry) => entry.id !== record.id));
+      setSelectedRecord((current: ModuleRecord | null) => current?.id === record.id ? null : current);
       setModuleMetrics((current) => ({
         ...current,
         [record.module]: {
@@ -1072,42 +1223,60 @@ export function App() {
             <span>Metenova AI</span>
           </div>
           <p className="eyebrow">Secure workspace</p>
-          <h1>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+          <h1>{inviteToken ? 'Accept invitation' : authMode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
           <p className="auth-copy">{authMessage}</p>
-          <form className="auth-form" onSubmit={handleAuth}>
-            {authMode === 'signup' && (
+          {inviteToken ? (
+            <form className="auth-form" onSubmit={acceptInvite}>
               <label>
                 Name
-                <input autoComplete="name" value={authName} onChange={(event) => setAuthName(event.target.value)} />
+                <input autoComplete="name" value={inviteName} onChange={(event) => setInviteName(event.target.value)} />
               </label>
-            )}
-            <label>
-              Email
-              <input autoComplete="email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
-            </label>
-            <label>
-              Password
-              <input autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} />
-            </label>
-            <button type="submit">{authMode === 'login' ? 'Log in' : 'Sign up'}</button>
-          </form>
-          <div className="recovery-panel">
-            <input
-              autoComplete="email"
-              placeholder="Email for recovery"
-              type="email"
-              value={recoveryEmail}
-              onChange={(event) => setRecoveryEmail(event.target.value)}
-            />
-            <div>
-              <button type="button" onClick={requestPasswordReset}>Forgot password</button>
-              <button type="button" onClick={requestUsernameRecovery}>Recover username</button>
-            </div>
-            {recoveryMessage && <p>{recoveryMessage}</p>}
-          </div>
-          <button className="link-button" type="button" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
-            {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
-          </button>
+              <label>
+                Password
+                <input autoComplete="new-password" minLength={8} type="password" value={invitePassword} onChange={(event) => setInvitePassword(event.target.value)} />
+              </label>
+              <button type="submit">Join workspace</button>
+            </form>
+          ) : (
+            <form className="auth-form" onSubmit={handleAuth}>
+              {authMode === 'signup' && (
+                <label>
+                  Name
+                  <input autoComplete="name" value={authName} onChange={(event) => setAuthName(event.target.value)} />
+                </label>
+              )}
+              <label>
+                Email
+                <input autoComplete="email" type="email" value={authEmail} onChange={(event) => setAuthEmail(event.target.value)} />
+              </label>
+              <label>
+                Password
+                <input autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} minLength={8} type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} />
+              </label>
+              <button type="submit">{authMode === 'login' ? 'Log in' : 'Sign up'}</button>
+            </form>
+          )}
+          {!inviteToken && (
+            <>
+              <div className="recovery-panel">
+                <input
+                  autoComplete="email"
+                  placeholder="Email for recovery"
+                  type="email"
+                  value={recoveryEmail}
+                  onChange={(event) => setRecoveryEmail(event.target.value)}
+                />
+                <div>
+                  <button type="button" onClick={requestPasswordReset}>Forgot password</button>
+                  <button type="button" onClick={requestUsernameRecovery}>Recover username</button>
+                </div>
+                {recoveryMessage && <p>{recoveryMessage}</p>}
+              </div>
+              <button className="link-button" type="button" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
+                {authMode === 'login' ? 'Need an account? Sign up' : 'Already have an account? Log in'}
+              </button>
+            </>
+          )}
         </section>
       </main>
     );
@@ -1146,7 +1315,10 @@ export function App() {
             <button className="ghost-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
               {theme === 'light' ? 'Dark' : 'Light'} mode
             </button>
-            <button className="ghost-button" type="button" onClick={() => setCurrentView('contact')}>
+            <button className="ghost-button" type="button" onClick={() => {
+              setContactContext(currentView);
+              setCurrentView('contact');
+            }}>
               Support
             </button>
             <div className="account-menu">
@@ -1164,7 +1336,7 @@ export function App() {
                     <span>{user?.email ?? 'workspace@metenovaai.com'}</span>
                   </div>
                   <button type="button" onClick={openSettings}>Profile settings</button>
-                  {!authDisabled && <button type="button" onClick={logoutRemote}>Log out</button>}
+                  {!authDisabled && <button type="button" onClick={() => logoutRemote()}>Log out</button>}
                 </div>
               )}
             </div>
@@ -1411,15 +1583,26 @@ export function App() {
                   <p className="eyebrow">Need help?</p>
                   <h2>Send a support request</h2>
                 </div>
-                <button className="ghost-button compact" type="button" onClick={() => setContactMessage('I need help with ')}>
+                <button className="ghost-button compact" type="button" onClick={() => {
+                  setContactContext(currentView);
+                  setContactMessage('I need help with ');
+                }}>
                   Quick support
                 </button>
               </div>
+              {!emailConfigured && (
+                <p className="persistence-note warning-note">Support request tracking is active. Direct email delivery is being configured for this workspace.</p>
+              )}
               <form className="contact-form" onSubmit={submitContact}>
                 <input placeholder="Name" value={contactName} onChange={(event) => setContactName(event.target.value)} />
                 <input placeholder="Email" type="email" value={contactEmail} onChange={(event) => setContactEmail(event.target.value)} />
+                <input placeholder="Page or module context" value={contactContext} onChange={(event) => setContactContext(event.target.value)} />
                 <textarea placeholder="How can we help?" value={contactMessage} onChange={(event) => setContactMessage(event.target.value)} />
-                <button type="submit">Submit request</button>
+                <label className="file-input-label">
+                  Optional screenshot or file
+                  <input name="attachments" type="file" multiple />
+                </label>
+                <button type="submit" disabled={supportSending}>{supportSending ? 'Sending...' : 'Submit request'}</button>
               </form>
               {supportMessage && <p className="persistence-note">{supportMessage}</p>}
               <div className="faq-grid">
@@ -1441,7 +1624,14 @@ export function App() {
               createModuleItem,
               moduleMessage,
               updateModuleItem,
-              deleteModuleItem
+              deleteModuleItem,
+              editModuleItem,
+              recordSearch,
+              setRecordSearch,
+              recordStatusFilter,
+              setRecordStatusFilter,
+              selectedRecord,
+              setSelectedRecord
             )}
           </section>
         ) : currentView === 'analytics' ? (
@@ -1732,9 +1922,33 @@ export function App() {
           </>
         )}
       </section>
-      <button className="floating-help" type="button" onClick={() => setCurrentView('contact')}>
+      <button className="floating-help" type="button" onClick={() => {
+        setContactContext(currentView);
+        setCurrentView('contact');
+        setContactMessage('I need help with ');
+      }}>
         Help
       </button>
+      {showSessionWarning && (
+        <div className="session-overlay" role="alertdialog" aria-modal="true" aria-labelledby="session-warning-title">
+          <div className="session-modal">
+            <p className="eyebrow">Session security</p>
+            <h2 id="session-warning-title">You will be signed out soon</h2>
+            <p>Your session will expire in {sessionSecondsLeft} seconds because of inactivity.</p>
+            <div className="session-actions">
+              <button type="button" onClick={() => {
+                localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+                setShowSessionWarning(false);
+              }}>
+                Continue session
+              </button>
+              <button className="ghost-button" type="button" onClick={() => logoutRemote('Signed out for security.')}>
+                Log out now
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
@@ -1808,7 +2022,14 @@ function renderModulePage(
   createModuleItem: (event: FormEvent<HTMLFormElement>) => void,
   moduleMessage: string,
   updateModuleItem: (record: ModuleRecord, updates: Partial<Pick<ModuleRecord, 'status' | 'title'>>) => void,
-  deleteModuleItem: (record: ModuleRecord) => void
+  deleteModuleItem: (record: ModuleRecord) => void,
+  editModuleItem: (record: ModuleRecord) => void,
+  recordSearch: string,
+  setRecordSearch: (value: string) => void,
+  recordStatusFilter: string,
+  setRecordStatusFilter: (value: string) => void,
+  selectedRecord: ModuleRecord | null,
+  setSelectedRecord: (record: ModuleRecord | null) => void
 ) {
   const titles: Record<string, string> = {
     accounting: 'Accounting command center',
@@ -1827,6 +2048,17 @@ function renderModulePage(
   const cards = moduleCards[view] ?? [];
   const pipelineStages = ['Upload', 'Validate', 'Detect duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
   const pipelineRecords = records.filter((record) => ['pipeline_job', 'cleanup', 'dedupe', 'validation', 'import_export'].includes(record.recordType));
+  const normalizedSearch = recordSearch.trim().toLowerCase();
+  const filteredRecords = records
+    .filter((record) => recordStatusFilter === 'all' || record.status === recordStatusFilter)
+    .filter((record) => {
+      if (!normalizedSearch) {
+        return true;
+      }
+      return [record.title, record.recordType, record.status, record.ownerEmail]
+        .filter(Boolean)
+        .some((value) => String(value).toLowerCase().includes(normalizedSearch));
+    });
 
   return (
     <>
@@ -1895,6 +2127,14 @@ function renderModulePage(
           <h2>Create a real module item</h2>
           <p className="persistence-note">{moduleMessage}</p>
         </div>
+        <div className="record-toolbar">
+          <input placeholder="Search records" value={recordSearch} onChange={(event) => setRecordSearch(event.target.value)} />
+          <select value={recordStatusFilter} onChange={(event) => setRecordStatusFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            <option value="open">Open</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
         <form className="module-form" onSubmit={createModuleItem}>
           <select value={moduleForm.recordType} onChange={(event) => setModuleForm({ ...moduleForm, recordType: event.target.value })}>
             {cards.map((card) => <option key={card.type} value={card.type}>{card.title}</option>)}
@@ -1903,12 +2143,30 @@ function renderModulePage(
           <input placeholder="Amount (optional)" value={moduleForm.amount} onChange={(event) => setModuleForm({ ...moduleForm, amount: event.target.value })} />
           <button type="submit">Save record</button>
         </form>
+        {selectedRecord && (
+          <div className="record-detail">
+            <div>
+              <p className="eyebrow">Selected record</p>
+              <h3>{selectedRecord.title}</h3>
+              <span>{selectedRecord.recordType} - {selectedRecord.status}</span>
+              <span>Updated {new Date(selectedRecord.updatedAt).toLocaleString()}</span>
+              {selectedRecord.ownerEmail && <span>Owner {selectedRecord.ownerEmail}</span>}
+            </div>
+            <button className="ghost-button compact" type="button" onClick={() => setSelectedRecord(null)}>Close</button>
+          </div>
+        )}
         <div className="record-list">
-          {records.map((record) => (
+          {filteredRecords.map((record) => (
             <div key={record.id}>
               <strong>{record.title}</strong>
-              <span>{record.recordType} - {record.status} - {new Date(record.updatedAt).toLocaleString()}</span>
+              <span>{record.recordType} - {record.status} - {new Date(record.updatedAt).toLocaleString()}{record.ownerEmail ? ` - ${record.ownerEmail}` : ''}</span>
               <div className="record-actions">
+                <button className="ghost-button compact" type="button" onClick={() => setSelectedRecord(record)}>
+                  View
+                </button>
+                <button className="ghost-button compact" type="button" onClick={() => editModuleItem(record)}>
+                  Edit
+                </button>
                 <button className="ghost-button compact" type="button" onClick={() => updateModuleItem(record, { status: record.status === 'closed' ? 'open' : 'closed' })}>
                   {record.status === 'closed' ? 'Reopen' : 'Close'}
                 </button>
@@ -1918,7 +2176,7 @@ function renderModulePage(
               </div>
             </div>
           ))}
-          {!records.length && <div className="empty-state compact-empty">No records yet. Add the first operational item.</div>}
+          {!filteredRecords.length && <div className="empty-state compact-empty">{records.length ? 'No records match the current filters.' : 'No records yet. Add the first operational item.'}</div>}
         </div>
       </article>
     </>

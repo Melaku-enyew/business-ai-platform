@@ -73,6 +73,10 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
 const jwtSecret = process.env.JWT_SECRET || (!usingSqlServer ? 'local-mvp-secret' : '');
 const requireStoredSessions = usingSqlServer || process.env.REQUIRE_STORED_SESSIONS === 'true';
+const sessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES || 15);
+const sessionTtlMs = Math.max(sessionTtlMinutes, 5) * 60 * 1000;
+const warningSeconds = Number(process.env.SESSION_WARNING_SECONDS || 60);
+const isEphemeralProductionStorage = !usingSqlServer && process.env.VERCEL === '1';
 const adminEmails = (process.env.ADMIN_EMAILS || ownerEmail)
   .split(',')
   .map((email) => email.trim().toLowerCase())
@@ -81,7 +85,7 @@ const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 const frontendDist = join(rootDir, 'frontend/dist');
 const legacyDatasetsFile = join(rootDir, 'backend/data/uploads/datasets.json');
 const authAttempts = new Map();
-const emailFrom = process.env.EMAIL_FROM || `Metenova AI <support@${process.env.EMAIL_DOMAIN || 'metenovaai.com'}>`;
+const emailFrom = process.env.EMAIL_FROM || `Metenova AI <onboarding@resend.dev>`;
 const appBaseUrl = process.env.APP_BASE_URL || clientOrigin;
 
 const insights = {
@@ -362,7 +366,7 @@ function base64Url(input) {
   return Buffer.from(input).toString('base64url');
 }
 
-function signJwt(payload, expiresAt = new Date(Date.now() + 60 * 60 * 24 * 1000)) {
+function signJwt(payload, expiresAt = new Date(Date.now() + sessionTtlMs)) {
   const header = { alg: 'HS256', typ: 'JWT' };
   const body = {
     ...payload,
@@ -377,7 +381,7 @@ async function createLoginSession(user) {
   const session = await createSession({
     id: randomUUID(),
     userId: user.id,
-    expiresAt: new Date(Date.now() + 60 * 60 * 24 * 1000).toISOString()
+    expiresAt: new Date(Date.now() + sessionTtlMs).toISOString()
   });
   const token = signJwt(
     {
@@ -510,9 +514,9 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
   });
 }
 
-async function sendEmail({ to, subject, text }) {
+async function sendEmail({ to, subject, text, replyTo, attachments }) {
   if (!process.env.RESEND_API_KEY) {
-    return { delivered: false, provider: 'not-configured', error: 'Production email provider is not configured.' };
+    return { delivered: false, provider: 'not-configured', error: 'Support email delivery is not fully configured.' };
   }
 
   const response = await fetch('https://api.resend.com/emails', {
@@ -525,7 +529,9 @@ async function sendEmail({ to, subject, text }) {
       from: emailFrom,
       to,
       subject,
-      text
+      text,
+      ...(replyTo ? { reply_to: replyTo } : {}),
+      ...(attachments?.length ? { attachments } : {})
     })
   });
 
@@ -537,13 +543,13 @@ async function sendEmail({ to, subject, text }) {
   return { delivered: true, provider: 'resend' };
 }
 
-async function deliverEmail({ type, to, subject, text, userId, companyId }) {
+async function deliverEmail({ type, to, subject, text, userId, companyId, replyTo, attachments }) {
   let result;
   let status = 'sent';
   let error = null;
 
   try {
-    result = await sendEmail({ to, subject, text });
+    result = await sendEmail({ to, subject, text, replyTo, attachments });
     if (!result.delivered) {
       status = 'failed';
       error = result.error || 'Email delivery is not configured.';
@@ -569,6 +575,18 @@ async function deliverEmail({ type, to, subject, text, userId, companyId }) {
   });
 
   return { ...result, status, error, log };
+}
+
+function requireDurableStorage(req, res, next) {
+  if (isEphemeralProductionStorage) {
+    res.status(503).json({
+      error: 'Protected workspace storage must be connected before saving changes in production.',
+      code: 'DURABLE_STORAGE_REQUIRED'
+    });
+    return;
+  }
+
+  next();
 }
 
 function canManageTargetUser(actor, target) {
@@ -784,14 +802,20 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'business-ai-platform-backend',
-    mode: authDisabled ? 'auth-disabled' : usingSqlServer ? 'secure-sql-server' : 'local-auth'
+    mode: authDisabled ? 'auth-disabled' : usingSqlServer ? 'secure-sql-server' : 'local-auth',
+    durableStorage: usingSqlServer,
+    emailConfigured: Boolean(process.env.RESEND_API_KEY)
   });
 });
 
 app.get('/api/config', (_req, res) => {
   res.json({
     authDisabled,
-    storage: usingSqlServer ? 'sql-server' : 'local-json'
+    storage: usingSqlServer ? 'sql-server' : 'local-json',
+    durableStorage: usingSqlServer,
+    emailConfigured: Boolean(process.env.RESEND_API_KEY),
+    sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
+    sessionWarningSeconds: warningSeconds
   });
 });
 
@@ -1060,6 +1084,9 @@ app.get('/api/auth/me', requireAuth, (req, res) => {
 
 app.post('/api/auth/refresh', requireAuth, async (req, res, next) => {
   try {
+    if (req.session?.id) {
+      await revokeSession(req.session.id, req.user.id);
+    }
     const { token, session } = await createLoginSession(req.user);
     res.json({ token, user: publicUser(req.user), session });
   } catch (error) {
@@ -1101,7 +1128,7 @@ app.get('/api/admin/users', requireAuth, requireRole('admin'), async (req, res, 
   }
 });
 
-app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
+app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), requireDurableStorage, async (req, res, next) => {
   try {
     const updates = {};
 
@@ -1139,6 +1166,9 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
       return;
     }
 
+    if (user.id !== req.user.id && (updates.role != null || updates.active === false)) {
+      await revokeUserSessions(user.id);
+    }
     res.json({ user: publicUser(user) });
     await audit(req, 'admin.user_updated', 'user', user.id, updates);
   } catch (error) {
@@ -1200,7 +1230,7 @@ app.get('/api/admin/invitations', requireAuth, requireRole('admin'), async (req,
   }
 });
 
-app.post('/api/admin/invitations', requireAuth, requireRole('admin'), async (req, res, next) => {
+app.post('/api/admin/invitations', requireAuth, requireRole('admin'), requireDurableStorage, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const requestedRole = String(req.body?.role || 'employee');
@@ -1233,7 +1263,8 @@ app.post('/api/admin/invitations', requireAuth, requireRole('admin'), async (req
       subject: 'You are invited to Metenova AI',
       text: `${req.user.name} invited you to join their Metenova AI workspace as ${roleLabel(role)}. Accept here: ${acceptUrl}`,
       userId: req.user.id,
-      companyId: req.user.companyId
+      companyId: req.user.companyId,
+      replyTo: req.user.email
     });
     await audit(req, 'admin.invitation_created', 'invitation', invitation.id, { email, role, delivery: delivery.status });
     res.status(201).json({
@@ -1314,7 +1345,7 @@ app.get('/api/profile', (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
-app.patch('/api/profile', async (req, res, next) => {
+app.patch('/api/profile', requireDurableStorage, async (req, res, next) => {
   try {
     const user = await updateUser(req.user.id, {
       name: req.body?.name,
@@ -1330,7 +1361,7 @@ app.patch('/api/profile', async (req, res, next) => {
   }
 });
 
-app.post('/api/profile/change-password', async (req, res, next) => {
+app.post('/api/profile/change-password', requireDurableStorage, async (req, res, next) => {
   try {
     const currentPassword = String(req.body?.currentPassword || '');
     const nextPassword = String(req.body?.newPassword || '');
@@ -1366,8 +1397,10 @@ app.get('/api/admin/audit-logs', requireRole('admin'), async (_req, res, next) =
 app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
   res.json({
     status: 'operational',
-    storage: usingSqlServer ? 'sql-server' : 'local-json',
-    auth: requireStoredSessions ? 'jwt-with-stored-sessions' : 'jwt-stateless-local',
+    storage: usingSqlServer ? 'protected-workspace-storage' : 'workspace-storage-pending',
+    auth: requireStoredSessions ? 'protected-workspace-sessions' : 'local-session-mode',
+    durableStorage: usingSqlServer,
+    emailConfigured: Boolean(process.env.RESEND_API_KEY),
     uptimeSeconds: Math.round(process.uptime()),
     uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
     maxSpreadsheetRows
@@ -1390,7 +1423,7 @@ app.get('/api/modules/:module/records', async (req, res, next) => {
   }
 });
 
-app.post('/api/modules/:module/records', async (req, res, next) => {
+app.post('/api/modules/:module/records', requireDurableStorage, async (req, res, next) => {
   try {
     const title = String(req.body?.title || '').trim();
     const recordType = String(req.body?.recordType || 'item').trim();
@@ -1418,7 +1451,7 @@ app.post('/api/modules/:module/records', async (req, res, next) => {
   }
 });
 
-app.patch('/api/modules/:module/records/:id', async (req, res, next) => {
+app.patch('/api/modules/:module/records/:id', requireDurableStorage, async (req, res, next) => {
   try {
     const record = await updateModuleRecord(req.user, req.params.id, {
       title: req.body?.title,
@@ -1437,7 +1470,7 @@ app.patch('/api/modules/:module/records/:id', async (req, res, next) => {
   }
 });
 
-app.delete('/api/modules/:module/records/:id', async (req, res, next) => {
+app.delete('/api/modules/:module/records/:id', requireDurableStorage, async (req, res, next) => {
   try {
     const deleted = await deleteModuleRecord(req.user, req.params.id);
     if (!deleted) {
@@ -1451,25 +1484,44 @@ app.delete('/api/modules/:module/records/:id', async (req, res, next) => {
   }
 });
 
-app.post('/api/contact', async (req, res, next) => {
+app.post('/api/contact', upload.array('attachments', 3), async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim();
     const message = String(req.body?.message || '').trim();
+    const pageContext = String(req.body?.pageContext || '').trim();
+    const attachments = (req.files ?? []).map((file) => ({
+      filename: file.originalname,
+      content: file.buffer.toString('base64')
+    }));
+    const attachmentSummary = (req.files ?? [])
+      .map((file) => `${file.originalname} (${Math.round(file.size / 1024)} KB)`)
+      .join(', ');
 
     if (!name || !email || !message) {
       res.status(400).json({ error: 'Name, email, and message are required.' });
       return;
     }
 
-    await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email });
+    await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email, pageContext, attachments: attachmentSummary });
     const delivery = await deliverEmail({
       type: 'support_request',
       to: ownerEmail,
       subject: `Metenova AI support request from ${name}`,
-      text: `From: ${name} <${email}>\n\n${message}`,
+      text: [
+        `From: ${name} <${email}>`,
+        `User: ${req.user.name} <${req.user.email}>`,
+        `Role: ${req.user.role}`,
+        `Company: ${req.user.companyId ?? 'default'}`,
+        pageContext ? `Page/module: ${pageContext}` : '',
+        attachmentSummary ? `Attachments: ${attachmentSummary}` : '',
+        '',
+        message
+      ].filter(Boolean).join('\n'),
       userId: req.user.id,
-      companyId: req.user.companyId
+      companyId: req.user.companyId,
+      replyTo: email,
+      attachments
     });
     res.status(201).json({
       message: delivery.delivered
@@ -1541,7 +1593,7 @@ async function handleDatasetUpload(req, res) {
   res.json(publicDataset(dataset));
 }
 
-app.post('/api/files/upload', upload.single('file'), (req, res) => {
+app.post('/api/files/upload', requireDurableStorage, upload.single('file'), (req, res) => {
   Promise.resolve().then(async () => {
     await handleDatasetUpload(req, res);
   }).catch((error) => {
@@ -1549,7 +1601,7 @@ app.post('/api/files/upload', upload.single('file'), (req, res) => {
   });
 });
 
-app.post('/api/csv/upload', upload.single('file'), (req, res) => {
+app.post('/api/csv/upload', requireDurableStorage, upload.single('file'), (req, res) => {
   Promise.resolve().then(async () => {
     await handleDatasetUpload(req, res);
   }).catch((error) => {
@@ -1608,7 +1660,7 @@ app.get('/api/dashboards', async (req, res, next) => {
   }
 });
 
-app.post('/api/dashboards', async (req, res, next) => {
+app.post('/api/dashboards', requireDurableStorage, async (req, res, next) => {
   try {
     const dataset = await getDataset(req.body?.datasetId, req.user);
     if (!dataset) {
@@ -1643,7 +1695,7 @@ app.get('/api/reports', async (req, res, next) => {
   }
 });
 
-app.post('/api/reports', async (req, res, next) => {
+app.post('/api/reports', requireDurableStorage, async (req, res, next) => {
   try {
     const dataset = await getDataset(req.body?.datasetId, req.user);
     if (!dataset) {
