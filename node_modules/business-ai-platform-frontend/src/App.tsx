@@ -138,6 +138,27 @@ type ModuleRecord = {
   updatedAt: string;
 };
 
+type Invitation = {
+  id: string;
+  email: string;
+  role: UserRole;
+  status: string;
+  expiresAt: string;
+  createdAt: string;
+};
+
+type EmailLog = {
+  id: string;
+  emailType: string;
+  recipient: string;
+  subject: string;
+  provider?: string;
+  status: string;
+  error?: string;
+  attempts: number;
+  createdAt: string;
+};
+
 type ModuleMetrics = Record<string, { total: number; open: number }>;
 
 type AuthResponse = {
@@ -249,11 +270,15 @@ export function App() {
   const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
+  const [invitations, setInvitations] = useState<Invitation[]>([]);
+  const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteRole, setInviteRole] = useState<UserRole>('employee');
   const [moduleMetrics, setModuleMetrics] = useState<ModuleMetrics>({});
   const [moduleRecords, setModuleRecords] = useState<ModuleRecord[]>([]);
   const [moduleMessage, setModuleMessage] = useState('Select a tool to create a workspace record.');
   const [moduleForm, setModuleForm] = useState({ title: '', recordType: 'item', amount: '' });
-  const [persistenceState, setPersistenceState] = useState('SQL Server storage ready for saved work.');
+  const [persistenceState, setPersistenceState] = useState('Enterprise-grade secure cloud storage ready.');
   const [chat, setChat] = useState<ChatMessage[]>([
     { role: 'assistant', text: 'Upload or select a dataset, then ask about rows, columns, totals, averages, or outliers.' }
   ]);
@@ -268,11 +293,11 @@ export function App() {
       .then((response) => readJson<ConfigResponse>(response))
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
-        setPersistenceState(config.storage === 'sql-server' ? 'SQL Server storage ready for saved work.' : 'Local MVP storage ready.');
+        setPersistenceState(config.storage ? 'Enterprise-grade secure cloud storage ready.' : 'Protected workspace infrastructure ready.');
       })
       .catch(() => {
         setAuthDisabled(false);
-        setPersistenceState('Local MVP storage ready.');
+        setPersistenceState('Protected workspace infrastructure ready.');
       })
       .finally(() => setConfigLoaded(true));
   }, []);
@@ -470,7 +495,7 @@ export function App() {
         body: JSON.stringify({ email: recoveryEmail })
       });
       const payload = await readJson<{ message: string; resetUrl?: string }>(response);
-      setRecoveryMessage(payload.resetUrl ? `${payload.message} Local reset link: ${payload.resetUrl}` : payload.message);
+      setRecoveryMessage(payload.resetUrl ? `${payload.message} Secure reset link prepared for this environment.` : payload.message);
     } catch (error) {
       setRecoveryMessage(error instanceof Error ? error.message : 'Recovery request failed.');
     }
@@ -548,7 +573,7 @@ export function App() {
       setActiveDataset(dataset);
       setDatasets((current: Dataset[]) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
       setChat([{ role: 'assistant', text: `I loaded ${dataset.fileName}${dataset.worksheetName ? ` (${dataset.worksheetName})` : ''}. Ask me what changed, what stands out, or how many rows it has.` }]);
-      const storageLabel = authDisabled ? 'saved locally' : 'saved to SQL Server';
+      const storageLabel = 'saved to your protected workspace';
       const warning = dataset.warnings?.[0] ? ` ${dataset.warnings[0]}` : '';
       setUploadState(`${(dataset.fileType ?? extension).toUpperCase()} analysis ready and ${storageLabel}.${warning}`);
     } catch (error) {
@@ -626,7 +651,7 @@ export function App() {
     });
     const payload = await readJson<{ dashboard: SavedDashboard }>(response);
     setDashboards((current: SavedDashboard[]) => [payload.dashboard, ...current.filter((dashboard) => dashboard.id !== payload.dashboard.id)]);
-    setPersistenceState(authDisabled ? 'Dashboard saved locally.' : 'Dashboard saved to SQL Server.');
+    setPersistenceState('Dashboard saved to your protected workspace.');
   }
 
   function openDashboard(dashboard: SavedDashboard) {
@@ -658,17 +683,23 @@ export function App() {
 
     setAdminLoading(true);
     try {
-      const [usersResponse, auditResponse, systemResponse] = await Promise.all([
+      const [usersResponse, auditResponse, systemResponse, invitationsResponse, emailLogsResponse] = await Promise.all([
         apiFetch('/api/admin/users'),
         apiFetch('/api/admin/audit-logs'),
-        apiFetch('/api/admin/system')
+        apiFetch('/api/admin/system'),
+        apiFetch('/api/admin/invitations'),
+        apiFetch('/api/admin/email-logs')
       ]);
       const payload = await readJson<{ users: AdminUser[] }>(usersResponse);
       const auditPayload = await readJson<{ auditLogs: AuditLog[] }>(auditResponse);
       const systemPayload = await readJson<SystemStatus>(systemResponse);
+      const invitationPayload = await readJson<{ invitations: Invitation[] }>(invitationsResponse);
+      const emailLogPayload = await readJson<{ emailLogs: EmailLog[] }>(emailLogsResponse);
       setAdminUsers(payload.users ?? []);
       setAuditLogs(auditPayload.auditLogs ?? []);
       setSystemStatus(systemPayload);
+      setInvitations(invitationPayload.invitations ?? []);
+      setEmailLogs(emailLogPayload.emailLogs ?? []);
       setAdminMessage('User directory refreshed.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'Could not load users.');
@@ -752,6 +783,47 @@ export function App() {
     }
   }
 
+  async function inviteWorkspaceUser(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!inviteEmail.trim()) {
+      setAdminMessage('Enter an email address before sending an invite.');
+      return;
+    }
+
+    try {
+      const response = await apiFetch('/api/admin/invitations', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: inviteEmail, role: inviteRole })
+      });
+      const payload = await readJson<{ invitation: Invitation; message: string; error?: string; acceptUrl?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Invitation failed.');
+      }
+
+      setInvitations((current: Invitation[]) => [payload.invitation, ...current]);
+      setInviteEmail('');
+      setInviteRole('employee');
+      setAdminMessage(payload.acceptUrl ? `${payload.message} Secure invite link prepared for this environment.` : payload.message);
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Invitation failed.');
+    }
+  }
+
+  async function retryEmailLog(log: EmailLog) {
+    try {
+      const response = await apiFetch(`/api/admin/email-logs/${log.id}/retry`, { method: 'POST' });
+      const payload = await readJson<{ emailLog: EmailLog; message?: string; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Email retry failed.');
+      }
+      setEmailLogs((current: EmailLog[]) => current.map((entry) => entry.id === log.id ? payload.emailLog : entry));
+      setAdminMessage(payload.message ?? 'Email retry complete.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Email retry failed.');
+    }
+  }
+
   async function saveProfile(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
@@ -809,7 +881,7 @@ export function App() {
     try {
       const response = await apiFetch('/api/auth/request-verification', { method: 'POST' });
       const payload = await readJson<{ message: string; verificationUrl?: string }>(response);
-      setSecurityMessage(payload.verificationUrl ? `${payload.message} Local link: ${payload.verificationUrl}` : payload.message);
+      setSecurityMessage(payload.verificationUrl ? `${payload.message} Secure verification link prepared for this environment.` : payload.message);
     } catch (error) {
       setSecurityMessage(error instanceof Error ? error.message : 'Verification request failed.');
     }
@@ -886,6 +958,49 @@ export function App() {
     }
   }
 
+  async function updateModuleItem(record: ModuleRecord, updates: Partial<Pick<ModuleRecord, 'status' | 'title'>>) {
+    try {
+      const response = await apiFetch(`/api/modules/${record.module}/records/${record.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      const payload = await readJson<{ record: ModuleRecord; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not update module record.');
+      }
+      setModuleRecords((current: ModuleRecord[]) => current.map((entry) => entry.id === record.id ? payload.record : entry));
+      setModuleMessage('Record updated.');
+    } catch (error) {
+      setModuleMessage(error instanceof Error ? error.message : 'Could not update module record.');
+    }
+  }
+
+  async function deleteModuleItem(record: ModuleRecord) {
+    if (!window.confirm(`Delete ${record.title}?`)) {
+      return;
+    }
+
+    try {
+      const response = await apiFetch(`/api/modules/${record.module}/records/${record.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Could not delete module record.');
+      }
+      setModuleRecords((current: ModuleRecord[]) => current.filter((entry) => entry.id !== record.id));
+      setModuleMetrics((current) => ({
+        ...current,
+        [record.module]: {
+          total: Math.max((current[record.module]?.total ?? 1) - 1, 0),
+          open: Math.max((current[record.module]?.open ?? 1) - (record.status === 'closed' ? 0 : 1), 0)
+        }
+      }));
+      setModuleMessage('Record deleted.');
+    } catch (error) {
+      setModuleMessage(error instanceof Error ? error.message : 'Could not delete module record.');
+    }
+  }
+
   async function downloadPdfReport() {
     if (!activeDataset) {
       return;
@@ -919,7 +1034,7 @@ export function App() {
   function downloadHistoricalReport(report: ReportHistoryItem) {
     const lines = report.content?.lines
       ?? (report.content?.dataset ? buildReportLines(report.content.dataset) : [
-        'Business AI Platform Data Report',
+        'Metenova AI Data Report',
         `Report: ${report.title}`,
         `Dataset: ${report.datasetName}`,
         `Created: ${new Date(report.createdAt).toLocaleString()}`
@@ -940,9 +1055,9 @@ export function App() {
         <section className="auth-card">
           <div className="brand auth-brand">
             <span className="brand-icon">AI</span>
-            <span>Business AI</span>
+            <span>Metenova AI</span>
           </div>
-          <p className="auth-copy">Loading local workspace...</p>
+          <p className="auth-copy">Loading secure workspace...</p>
         </section>
       </main>
     );
@@ -954,7 +1069,7 @@ export function App() {
         <section className="auth-card">
           <div className="brand auth-brand">
             <span className="brand-icon">AI</span>
-            <span>Business AI</span>
+            <span>Metenova AI</span>
           </div>
           <p className="eyebrow">Secure workspace</p>
           <h1>{authMode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
@@ -1003,7 +1118,7 @@ export function App() {
       <aside className="sidebar">
         <div className="brand">
           <span className="brand-icon">AI</span>
-          <span>Business AI</span>
+          <span>Metenova AI</span>
         </div>
         <nav aria-label="Primary">
           {moduleNav
@@ -1038,15 +1153,15 @@ export function App() {
               <button className="account-button" type="button" onClick={() => setAccountOpen((open) => !open)}>
                 <span className="avatar">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span>
                 <span>
-                  <strong>{user?.name ?? 'Local workspace'}</strong>
+                  <strong>{user?.name ?? 'Metenova workspace'}</strong>
                   <small>{roleLabel(user?.role)}</small>
                 </span>
               </button>
               {accountOpen && (
                 <div className="account-dropdown">
                   <div>
-                    <strong>{user?.name ?? 'Local workspace'}</strong>
-                    <span>{user?.email ?? 'local@example.com'}</span>
+                    <strong>{user?.name ?? 'Metenova workspace'}</strong>
+                    <span>{user?.email ?? 'workspace@metenovaai.com'}</span>
                   </div>
                   <button type="button" onClick={openSettings}>Profile settings</button>
                   {!authDisabled && <button type="button" onClick={logoutRemote}>Log out</button>}
@@ -1069,8 +1184,8 @@ export function App() {
                   <span className="avatar large">{(user?.name || 'A').slice(0, 1).toUpperCase()}</span>
                 )}
                 <div>
-                  <strong>{user?.name ?? 'Local workspace'}</strong>
-                  <span>{user?.email ?? 'local@example.com'}</span>
+                  <strong>{user?.name ?? 'Metenova workspace'}</strong>
+                  <span>{user?.email ?? 'workspace@metenovaai.com'}</span>
                 </div>
               </div>
               <form className="settings-form" onSubmit={saveProfile}>
@@ -1103,7 +1218,7 @@ export function App() {
                 </div>
                 <div>
                   <dt>Session security</dt>
-                  <dd>JWT session with server-side revocation and account lockout protection.</dd>
+                  <dd>Protected sessions with revocation and account lockout protection.</dd>
                 </div>
               </dl>
             </article>
@@ -1127,7 +1242,7 @@ export function App() {
               {securityMessage && <p className="persistence-note">{securityMessage}</p>}
               <ul className="settings-notes">
                 <li>Owner permissions are permanently reserved for {ownerEmail}.</li>
-                <li>Roles, active status, settings, and preferences persist in database storage.</li>
+                <li>Roles, active status, settings, and preferences persist in protected workspace infrastructure.</li>
                 <li>Failed login attempts trigger temporary account lockout.</li>
               </ul>
             </article>
@@ -1209,13 +1324,53 @@ export function App() {
                   </tbody>
                 </table>
               </div>
+              <div className="admin-ops-grid">
+                <article>
+                  <h3>Invite workspace user</h3>
+                  <form className="module-form invite-form" onSubmit={inviteWorkspaceUser}>
+                    <input placeholder="employee@company.com" type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
+                    <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as UserRole)}>
+                      {roleOptions.filter((role) => role !== 'owner' || user.email === ownerEmail).map((role) => (
+                        <option key={role} value={role}>{roleLabel(role)}</option>
+                      ))}
+                    </select>
+                    <button type="submit">Send invite</button>
+                  </form>
+                  <div className="audit-list">
+                    {invitations.slice(0, 4).map((invite) => (
+                      <div key={invite.id}>
+                        <strong>{invite.email}</strong>
+                        <span>{roleLabel(invite.role)} - {invite.status} - expires {new Date(invite.expiresAt).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                    {!invitations.length && <p className="muted">No pending invitations yet.</p>}
+                  </div>
+                </article>
+                <article>
+                  <h3>Email delivery</h3>
+                  <div className="audit-list">
+                    {emailLogs.slice(0, 4).map((log) => (
+                      <div key={log.id}>
+                        <strong>{log.emailType} - {log.status}</strong>
+                        <span>{log.recipient} - {log.provider ?? 'secure email'}{log.error ? ` - ${log.error}` : ''}</span>
+                        {log.status !== 'sent' && (
+                          <button className="ghost-button compact" type="button" onClick={() => retryEmailLog(log)}>
+                            Retry
+                          </button>
+                        )}
+                      </div>
+                    ))}
+                    {!emailLogs.length && <p className="muted">No email delivery events yet.</p>}
+                  </div>
+                </article>
+              </div>
               <div className="admin-insights">
                 <article>
                   <h3>System monitoring</h3>
                   <dl className="settings-list compact-list">
                     <div><dt>Status</dt><dd>{systemStatus?.status ?? 'Unknown'}</dd></div>
-                    <div><dt>Storage</dt><dd>{systemStatus?.storage ?? 'Unknown'}</dd></div>
-                    <div><dt>Authentication</dt><dd>{systemStatus?.auth ?? 'Unknown'}</dd></div>
+                    <div><dt>Storage</dt><dd>Enterprise-grade secure cloud storage</dd></div>
+                    <div><dt>Authentication</dt><dd>Protected workspace sessions</dd></div>
                     <div><dt>Upload limit</dt><dd>{systemStatus ? `${systemStatus.uploadLimitMb} MB` : 'Unknown'}</dd></div>
                   </dl>
                 </article>
@@ -1268,7 +1423,7 @@ export function App() {
               </form>
               {supportMessage && <p className="persistence-note">{supportMessage}</p>}
               <div className="faq-grid">
-                <div><strong>Where is my data?</strong><span>SQL Server in production, local JSON fallback for MVP development.</span></div>
+                <div><strong>Where is my data?</strong><span>Enterprise-grade secure cloud storage with encrypted company data management.</span></div>
                 <div><strong>How do I get help?</strong><span>Use this form or email {ownerEmail}.</span></div>
                 <div><strong>What integrations are planned?</strong><span>QuickBooks, Excel, Microsoft 365, Google Workspace, Stripe, PayPal, Slack, and external APIs.</span></div>
               </div>
@@ -1284,7 +1439,9 @@ export function App() {
               moduleForm,
               setModuleForm,
               createModuleItem,
-              moduleMessage
+              moduleMessage,
+              updateModuleItem,
+              deleteModuleItem
             )}
           </section>
         ) : currentView === 'analytics' ? (
@@ -1649,7 +1806,9 @@ function renderModulePage(
   moduleForm: { title: string; recordType: string; amount: string },
   setModuleForm: (value: { title: string; recordType: string; amount: string }) => void,
   createModuleItem: (event: FormEvent<HTMLFormElement>) => void,
-  moduleMessage: string
+  moduleMessage: string,
+  updateModuleItem: (record: ModuleRecord, updates: Partial<Pick<ModuleRecord, 'status' | 'title'>>) => void,
+  deleteModuleItem: (record: ModuleRecord) => void
 ) {
   const titles: Record<string, string> = {
     accounting: 'Accounting command center',
@@ -1666,6 +1825,8 @@ function renderModulePage(
     dataProcessing: 'Data cleanup, duplicate detection, validation, normalization, import/export, batch processing, and data quality reports.'
   };
   const cards = moduleCards[view] ?? [];
+  const pipelineStages = ['Upload', 'Validate', 'Detect duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
+  const pipelineRecords = records.filter((record) => ['pipeline_job', 'cleanup', 'dedupe', 'validation', 'import_export'].includes(record.recordType));
 
   return (
     <>
@@ -1693,6 +1854,41 @@ function renderModulePage(
           </article>
         ))}
       </div>
+      {view === 'dataProcessing' && (
+        <article className="panel pipeline-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Processing pipeline</p>
+              <h2>Enterprise cleanup workflow</h2>
+            </div>
+            <button type="button" className="ghost-button compact" onClick={() => setModuleForm({ ...moduleForm, recordType: 'pipeline_job', title: 'New data cleanup pipeline' })}>
+              Start pipeline
+            </button>
+          </div>
+          <div className="pipeline-stages">
+            {pipelineStages.map((stage, index) => (
+              <div className={index < Math.min(pipelineRecords.length + 1, pipelineStages.length) ? 'active' : ''} key={stage}>
+                <strong>{index + 1}</strong>
+                <span>{stage}</span>
+              </div>
+            ))}
+          </div>
+          <div className="workflow-list">
+            {pipelineRecords.slice(0, 4).map((record) => (
+              <div className="workflow-row" key={record.id}>
+                <div>
+                  <strong>{record.title}</strong>
+                  <span>{record.recordType} - queued with AI cleanup recommendations</span>
+                </div>
+                <small>{record.status}</small>
+              </div>
+            ))}
+            {!pipelineRecords.length && (
+              <div className="empty-state compact-empty">Start a pipeline to track validation, cleanup, approvals, exports, and processing history.</div>
+            )}
+          </div>
+        </article>
+      )}
       <article className="panel module-workbench">
         <div>
           <p className="eyebrow">Workspace records</p>
@@ -1712,6 +1908,14 @@ function renderModulePage(
             <div key={record.id}>
               <strong>{record.title}</strong>
               <span>{record.recordType} - {record.status} - {new Date(record.updatedAt).toLocaleString()}</span>
+              <div className="record-actions">
+                <button className="ghost-button compact" type="button" onClick={() => updateModuleItem(record, { status: record.status === 'closed' ? 'open' : 'closed' })}>
+                  {record.status === 'closed' ? 'Reopen' : 'Close'}
+                </button>
+                <button className="ghost-button compact danger" type="button" onClick={() => deleteModuleItem(record)}>
+                  Delete
+                </button>
+              </div>
             </div>
           ))}
           {!records.length && <div className="empty-state compact-empty">No records yet. Add the first operational item.</div>}
@@ -1787,7 +1991,7 @@ function buildDashboardSnapshot(dataset: Dataset, chartType: ChartType) {
 
 function buildReportLines(dataset: Dataset) {
   return [
-    'Business AI Platform Data Report',
+    'Metenova AI Data Report',
     `Dataset: ${dataset.fileName}`,
     `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
     ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),

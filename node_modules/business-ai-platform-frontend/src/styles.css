@@ -1056,6 +1056,57 @@ th {
   font-size: 13px;
 }
 
+.record-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.pipeline-panel,
+.admin-ops-grid {
+  display: grid;
+  gap: 16px;
+}
+
+.pipeline-stages {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.pipeline-stages div {
+  display: grid;
+  gap: 7px;
+  min-height: 92px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+}
+
+.pipeline-stages div.active {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
+  background: color-mix(in srgb, var(--accent-wash) 70%, var(--panel));
+}
+
+.pipeline-stages strong {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  font-size: 13px;
+}
+
+.pipeline-stages span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
 .compact-empty {
   min-height: 90px;
 }
@@ -1139,6 +1190,23 @@ th {
 .admin-insights {
   margin-top: 22px;
   grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+}
+
+.admin-ops-grid {
+  grid-template-columns: 1fr 1fr;
+  margin-top: 18px;
+}
+
+.admin-ops-grid article {
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+}
+
+.invite-form {
+  grid-template-columns: minmax(0, 1fr) 170px auto;
+  margin-bottom: 14px;
 }
 
 .compact-list {
@@ -1458,7 +1526,9 @@ th {
   .module-grid,
   .support-grid,
   .faq-grid,
-  .admin-insights {
+  .admin-insights,
+  .admin-ops-grid,
+  .pipeline-stages {
     grid-template-columns: 1fr;
   }
 }
@@ -1550,6 +1620,13 @@ th {
   .settings-list div {
     grid-template-columns: 1fr;
     gap: 4px;
+  }
+
+  .floating-help {
+    right: 14px;
+    bottom: 14px;
+    min-width: 56px;
+    min-height: 46px;
   }
 }
 

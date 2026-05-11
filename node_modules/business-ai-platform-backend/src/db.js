@@ -17,7 +17,7 @@ const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Work
 const devUser = {
   id: 'local-dev-user',
   companyId: defaultCompanyId,
-  name: 'Local MVP',
+  name: 'Metenova Workspace Owner',
   email: 'local@example.com',
   role: 'owner',
   active: true,
@@ -310,6 +310,49 @@ export async function initDatabase() {
 
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_logs_created_at' AND object_id = OBJECT_ID('dbo.audit_logs'))
       CREATE INDEX IX_audit_logs_created_at ON dbo.audit_logs (created_at DESC);
+
+    IF OBJECT_ID('dbo.email_logs', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.email_logs (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_email_logs_company_id DEFAULT '${defaultCompanyId}',
+        user_id NVARCHAR(64) NULL,
+        email_type NVARCHAR(80) NOT NULL,
+        recipient NVARCHAR(320) NOT NULL,
+        subject NVARCHAR(500) NOT NULL,
+        body NVARCHAR(MAX) NOT NULL CONSTRAINT DF_email_logs_body DEFAULT '',
+        provider NVARCHAR(80) NULL,
+        status NVARCHAR(40) NOT NULL,
+        error NVARCHAR(1000) NULL,
+        attempts INT NOT NULL CONSTRAINT DF_email_logs_attempts DEFAULT 1,
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_email_logs_created_at DEFAULT SYSUTCDATETIME(),
+        updated_at DATETIME2 NOT NULL CONSTRAINT DF_email_logs_updated_at DEFAULT SYSUTCDATETIME()
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_email_logs_company_created_at' AND object_id = OBJECT_ID('dbo.email_logs'))
+      CREATE INDEX IX_email_logs_company_created_at ON dbo.email_logs (company_id, created_at DESC);
+
+    IF OBJECT_ID('dbo.invitations', 'U') IS NULL
+    BEGIN
+      CREATE TABLE dbo.invitations (
+        id NVARCHAR(64) NOT NULL PRIMARY KEY,
+        company_id NVARCHAR(64) NOT NULL,
+        email NVARCHAR(320) NOT NULL,
+        role NVARCHAR(40) NOT NULL,
+        token_hash NVARCHAR(500) NOT NULL,
+        invited_by NVARCHAR(64) NOT NULL,
+        status NVARCHAR(40) NOT NULL CONSTRAINT DF_invitations_status DEFAULT 'pending',
+        expires_at DATETIME2 NOT NULL,
+        accepted_at DATETIME2 NULL,
+        created_at DATETIME2 NOT NULL CONSTRAINT DF_invitations_created_at DEFAULT SYSUTCDATETIME(),
+        CONSTRAINT FK_invitations_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id),
+        CONSTRAINT FK_invitations_users FOREIGN KEY (invited_by) REFERENCES dbo.users(id)
+      );
+    END;
+
+    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_invitations_company_created_at' AND object_id = OBJECT_ID('dbo.invitations'))
+      CREATE INDEX IX_invitations_company_created_at ON dbo.invitations (company_id, created_at DESC);
   `);
 }
 
@@ -398,19 +441,26 @@ export async function findUserById(id) {
   return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
 }
 
-export async function listUsers() {
+export async function listUsers(requestingUser) {
   if (!usingSqlServer) {
     const store = await loadDevStore();
     return store.users
+      .filter((user) => !requestingUser || isOwner(requestingUser) || user.companyId === getCompanyId(requestingUser))
       .map((user) => rowToUser(user))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
   const db = await getPool();
-  const result = await db.request().query(`
-    SELECT id, name, email, role, active, email_verified, profile_photo_url, notification_settings,
+  const request = db.request();
+  const companyFilter = requestingUser && !isOwner(requestingUser) ? 'WHERE company_id = @companyId' : '';
+  if (companyFilter) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(requestingUser));
+  }
+  const result = await request.query(`
+    SELECT id, company_id, name, email, role, active, email_verified, profile_photo_url, notification_settings,
       preferences, two_factor_enabled, last_login_at, failed_login_count, locked_until, created_at
     FROM dbo.users
+    ${companyFilter}
     ORDER BY created_at DESC;
   `);
   return result.recordset.map(rowToUser);
@@ -1219,6 +1269,72 @@ export async function listModuleRecords(user, module) {
   return result.recordset.map(rowToModuleRecord);
 }
 
+export async function updateModuleRecord(user, id, updates) {
+  const amountProvided = updates.amount !== undefined;
+  const normalized = {
+    ...(updates.title != null ? { title: String(updates.title).trim() } : {}),
+    ...(updates.status != null ? { status: String(updates.status).trim() || 'open' } : {}),
+    ...(updates.amount !== undefined ? { amount: updates.amount === '' || updates.amount == null ? null : Number(updates.amount) } : {}),
+    ...(updates.metadata != null ? { metadata: updates.metadata } : {})
+  };
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    let updated;
+    store.moduleRecords = (store.moduleRecords ?? []).map((record) => {
+      if (record.id !== id || !canAccessCompanyRecord(user, record)) {
+        return record;
+      }
+      updated = { ...record, ...normalized, updatedAt: new Date().toISOString() };
+      return updated;
+    });
+    await saveDevStore(store);
+    return updated;
+  }
+
+  const db = await getPool();
+  const request = db.request()
+    .input('id', sql.NVarChar(64), id)
+    .input('title', sql.NVarChar(260), normalized.title ?? null)
+    .input('status', sql.NVarChar(80), normalized.status ?? null)
+    .input('amount', sql.Decimal(18, 2), normalized.amount ?? null)
+    .input('metadata', sql.NVarChar(sql.MAX), normalized.metadata ? JSON.stringify(normalized.metadata) : null);
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`
+    UPDATE dbo.module_records
+    SET title = COALESCE(@title, title),
+        status = COALESCE(@status, status),
+        amount = CASE WHEN ${amountProvided ? '1' : '0'} = 1 THEN @amount ELSE amount END,
+        metadata = COALESCE(@metadata, metadata),
+        updated_at = SYSUTCDATETIME()
+    OUTPUT inserted.*
+    WHERE id = @id ${companyFilter};
+  `);
+  return result.recordset[0] ? rowToModuleRecord(result.recordset[0]) : undefined;
+}
+
+export async function deleteModuleRecord(user, id) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const before = store.moduleRecords?.length ?? 0;
+    store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.id !== id || !canAccessCompanyRecord(user, record));
+    await saveDevStore(store);
+    return (store.moduleRecords?.length ?? 0) < before;
+  }
+
+  const db = await getPool();
+  const request = db.request().input('id', sql.NVarChar(64), id);
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`DELETE FROM dbo.module_records WHERE id = @id ${companyFilter}; SELECT @@ROWCOUNT AS deleted_count;`);
+  return Number(result.recordset?.[0]?.deleted_count ?? 0) > 0;
+}
+
 export async function getModuleMetrics(user) {
   const modules = ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'];
 
@@ -1257,6 +1373,226 @@ export async function getModuleMetrics(user) {
     };
   });
   return metrics;
+}
+
+export async function saveEmailLog(log) {
+  const saved = {
+    id: log.id,
+    companyId: log.companyId ?? defaultCompanyId,
+    userId: log.userId ?? null,
+    emailType: log.emailType,
+    recipient: log.recipient,
+    subject: log.subject,
+    body: log.body ?? '',
+    provider: log.provider ?? null,
+    status: log.status,
+    error: log.error ?? null,
+    attempts: log.attempts ?? 1,
+    createdAt: log.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.emailLogs = [saved, ...(store.emailLogs ?? [])].slice(0, 500);
+    await saveDevStore(store);
+    return saved;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('id', sql.NVarChar(64), saved.id)
+    .input('companyId', sql.NVarChar(64), saved.companyId)
+    .input('userId', sql.NVarChar(64), saved.userId)
+    .input('emailType', sql.NVarChar(80), saved.emailType)
+    .input('recipient', sql.NVarChar(320), saved.recipient)
+    .input('subject', sql.NVarChar(500), saved.subject)
+    .input('body', sql.NVarChar(sql.MAX), saved.body)
+    .input('provider', sql.NVarChar(80), saved.provider)
+    .input('status', sql.NVarChar(40), saved.status)
+    .input('error', sql.NVarChar(1000), saved.error)
+    .input('attempts', sql.Int, saved.attempts)
+    .query(`
+      INSERT INTO dbo.email_logs (id, company_id, user_id, email_type, recipient, subject, body, provider, status, error, attempts)
+      OUTPUT inserted.*
+      VALUES (@id, @companyId, @userId, @emailType, @recipient, @subject, @body, @provider, @status, @error, @attempts);
+    `);
+  return rowToEmailLog(result.recordset[0]);
+}
+
+export async function listEmailLogs(user) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return (store.emailLogs ?? [])
+      .filter((log) => isOwner(user) || log.companyId === getCompanyId(user))
+      .slice(0, 100);
+  }
+
+  const db = await getPool();
+  const request = db.request();
+  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`
+    SELECT TOP (100) *
+    FROM dbo.email_logs
+    ${companyFilter}
+    ORDER BY created_at DESC;
+  `);
+  return result.recordset.map(rowToEmailLog);
+}
+
+export async function findEmailLog(user, id) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const log = (store.emailLogs ?? []).find((entry) => entry.id === id);
+    return log && (isOwner(user) || log.companyId === getCompanyId(user)) ? rowToEmailLog(log) : undefined;
+  }
+
+  const db = await getPool();
+  const request = db.request().input('id', sql.NVarChar(64), id);
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`SELECT TOP (1) * FROM dbo.email_logs WHERE id = @id ${companyFilter};`);
+  return result.recordset[0] ? rowToEmailLog(result.recordset[0]) : undefined;
+}
+
+export async function updateEmailLog(id, updates) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    let updated;
+    store.emailLogs = (store.emailLogs ?? []).map((log) => {
+      if (log.id !== id) {
+        return log;
+      }
+      updated = { ...log, ...updates, updatedAt: new Date().toISOString() };
+      return updated;
+    });
+    await saveDevStore(store);
+    return updated ? rowToEmailLog(updated) : undefined;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('id', sql.NVarChar(64), id)
+    .input('status', sql.NVarChar(40), updates.status)
+    .input('provider', sql.NVarChar(80), updates.provider ?? null)
+    .input('error', sql.NVarChar(1000), updates.error ?? null)
+    .query(`
+      UPDATE dbo.email_logs
+      SET status = @status,
+          provider = @provider,
+          error = @error,
+          attempts = attempts + 1,
+          updated_at = SYSUTCDATETIME()
+      OUTPUT inserted.*
+      WHERE id = @id;
+    `);
+  return result.recordset[0] ? rowToEmailLog(result.recordset[0]) : undefined;
+}
+
+export async function createInvitation(invitation) {
+  const saved = {
+    id: invitation.id,
+    companyId: invitation.companyId ?? defaultCompanyId,
+    email: invitation.email.toLowerCase(),
+    role: normalizeRole(invitation.role),
+    tokenHash: invitation.tokenHash,
+    invitedBy: invitation.invitedBy,
+    status: 'pending',
+    expiresAt: invitation.expiresAt,
+    acceptedAt: null,
+    createdAt: new Date().toISOString()
+  };
+
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.invitations = [saved, ...(store.invitations ?? [])].slice(0, 300);
+    await saveDevStore(store);
+    return saved;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('id', sql.NVarChar(64), saved.id)
+    .input('companyId', sql.NVarChar(64), saved.companyId)
+    .input('email', sql.NVarChar(320), saved.email)
+    .input('role', sql.NVarChar(40), saved.role)
+    .input('tokenHash', sql.NVarChar(500), saved.tokenHash)
+    .input('invitedBy', sql.NVarChar(64), saved.invitedBy)
+    .input('expiresAt', sql.DateTime2, new Date(saved.expiresAt))
+    .query(`
+      INSERT INTO dbo.invitations (id, company_id, email, role, token_hash, invited_by, expires_at)
+      OUTPUT inserted.*
+      VALUES (@id, @companyId, @email, @role, @tokenHash, @invitedBy, @expiresAt);
+    `);
+  return rowToInvitation(result.recordset[0]);
+}
+
+export async function listInvitations(user) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    return (store.invitations ?? [])
+      .filter((invite) => isOwner(user) || invite.companyId === getCompanyId(user))
+      .slice(0, 100);
+  }
+
+  const db = await getPool();
+  const request = db.request();
+  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
+  if (!isOwner(user)) {
+    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+  }
+  const result = await request.query(`
+    SELECT TOP (100) *
+    FROM dbo.invitations
+    ${companyFilter}
+    ORDER BY created_at DESC;
+  `);
+  return result.recordset.map(rowToInvitation);
+}
+
+export async function findInvitationByToken(tokenHash) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    const invitation = (store.invitations ?? []).find((entry) =>
+      entry.tokenHash === tokenHash &&
+      entry.status === 'pending' &&
+      new Date(entry.expiresAt).getTime() > Date.now()
+    );
+    return invitation ? rowToInvitation(invitation) : undefined;
+  }
+
+  const db = await getPool();
+  const result = await db.request()
+    .input('tokenHash', sql.NVarChar(500), tokenHash)
+    .query(`
+      SELECT TOP (1) *
+      FROM dbo.invitations
+      WHERE token_hash = @tokenHash
+        AND status = 'pending'
+        AND expires_at > SYSUTCDATETIME();
+    `);
+  return result.recordset[0] ? rowToInvitation(result.recordset[0]) : undefined;
+}
+
+export async function markInvitationAccepted(id) {
+  if (!usingSqlServer) {
+    const store = await loadDevStore();
+    store.invitations = (store.invitations ?? []).map((invite) =>
+      invite.id === id ? { ...invite, status: 'accepted', acceptedAt: new Date().toISOString() } : invite
+    );
+    await saveDevStore(store);
+    return;
+  }
+
+  const db = await getPool();
+  await db.request()
+    .input('id', sql.NVarChar(64), id)
+    .query("UPDATE dbo.invitations SET status = 'accepted', accepted_at = SYSUTCDATETIME() WHERE id = @id;");
 }
 
 function rowToDashboard(row) {
@@ -1378,6 +1714,38 @@ function rowToAuditLog(row) {
   };
 }
 
+function rowToEmailLog(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    emailType: row.email_type ?? row.emailType,
+    recipient: row.recipient,
+    subject: row.subject,
+    body: row.body,
+    provider: row.provider,
+    status: row.status,
+    error: row.error,
+    attempts: row.attempts ?? 1,
+    createdAt: row.created_at ?? row.createdAt,
+    updatedAt: row.updated_at ?? row.updatedAt
+  };
+}
+
+function rowToInvitation(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    email: row.email,
+    role: normalizeRole(row.role),
+    invitedBy: row.invited_by ?? row.invitedBy,
+    status: row.status,
+    expiresAt: row.expires_at ?? row.expiresAt,
+    acceptedAt: row.accepted_at ?? row.acceptedAt,
+    createdAt: row.created_at ?? row.createdAt
+  };
+}
+
 function getUserId(user) {
   return typeof user === 'string' ? user : user.id;
 }
@@ -1454,7 +1822,9 @@ async function loadDevStore() {
       reports: [],
       moduleRecords: [],
       accountTokens: [],
-      auditLogs: []
+      auditLogs: [],
+      emailLogs: [],
+      invitations: []
     };
   }
 
@@ -1467,7 +1837,9 @@ async function loadDevStore() {
     reports: store.reports ?? [],
     moduleRecords: store.moduleRecords ?? [],
     accountTokens: store.accountTokens ?? [],
-    auditLogs: store.auditLogs ?? []
+    auditLogs: store.auditLogs ?? [],
+    emailLogs: store.emailLogs ?? [],
+    invitations: store.invitations ?? []
   };
 }
 
@@ -1476,7 +1848,7 @@ async function saveDevStore(store) {
   try {
     await writeFile(devStoreFile, JSON.stringify(store, null, 2));
   } catch {
-    // Serverless environments may expose a read-only filesystem; local MVP mode keeps running without persistence.
+    // Some deployment environments expose a read-only filesystem; keep the API running if optional file persistence is unavailable.
   }
 }
 

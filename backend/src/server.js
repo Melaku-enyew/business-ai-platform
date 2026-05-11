@@ -11,14 +11,18 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
   createAccountToken,
+  createInvitation,
   createModuleRecord,
   createSession,
   createUser,
   deleteUser,
+  deleteModuleRecord,
   ensureOwnerAccount,
   findUserByEmail,
   findUserById,
   findAccountToken,
+  findInvitationByToken,
+  findEmailLog,
   hasRole,
   findSessionById,
   getDevUser,
@@ -28,11 +32,14 @@ import {
   listAuditLogs,
   listDashboards,
   listDatasets,
+  listEmailLogs,
+  listInvitations,
   listModuleRecords,
   listReports,
   listSessions,
   listUsers,
   markAccountTokenUsed,
+  markInvitationAccepted,
   ownerEmail,
   promoteAdminEmails,
   recordLoginFailure,
@@ -40,12 +47,15 @@ import {
   removeDemoAccounts,
   saveDashboard,
   saveDataset,
+  saveEmailLog,
   saveReport,
   saveAuditLog,
   revokeSession,
   revokeUserSessions,
   roles,
   updateUserPassword,
+  updateEmailLog,
+  updateModuleRecord,
   updateUser,
   usingSqlServer
 } from './db.js';
@@ -304,7 +314,7 @@ function dashboardSnapshot(dataset, chartType) {
 
 function reportLines(dataset) {
   return [
-    'Business AI Platform Data Report',
+    'Metenova AI Data Report',
     `Dataset: ${dataset.fileName}`,
     `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
     ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),
@@ -502,7 +512,7 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
 
 async function sendEmail({ to, subject, text }) {
   if (!process.env.RESEND_API_KEY) {
-    return { delivered: false, provider: 'local-dev' };
+    return { delivered: false, provider: 'not-configured', error: 'Production email provider is not configured.' };
   }
 
   const response = await fetch('https://api.resend.com/emails', {
@@ -520,10 +530,66 @@ async function sendEmail({ to, subject, text }) {
   });
 
   if (!response.ok) {
-    throw new Error('Email provider rejected the message.');
+    const details = await response.text().catch(() => '');
+    throw new Error(details || 'Email provider rejected the message.');
   }
 
   return { delivered: true, provider: 'resend' };
+}
+
+async function deliverEmail({ type, to, subject, text, userId, companyId }) {
+  let result;
+  let status = 'sent';
+  let error = null;
+
+  try {
+    result = await sendEmail({ to, subject, text });
+    if (!result.delivered) {
+      status = 'failed';
+      error = result.error || 'Email delivery is not configured.';
+    }
+  } catch (deliveryError) {
+    result = { delivered: false, provider: process.env.RESEND_API_KEY ? 'resend' : 'not-configured' };
+    status = 'failed';
+    error = deliveryError instanceof Error ? deliveryError.message : 'Email delivery failed.';
+  }
+
+  const log = await saveEmailLog({
+    id: randomUUID(),
+    companyId,
+    userId,
+    emailType: type,
+    recipient: to,
+    subject,
+    body: text,
+    provider: result.provider,
+    status,
+    error,
+    attempts: 1
+  });
+
+  return { ...result, status, error, log };
+}
+
+function canManageTargetUser(actor, target) {
+  return Boolean(target && (actor.email === ownerEmail || actor.role === 'owner' || target.companyId === actor.companyId));
+}
+
+function canAssignRole(actor, role) {
+  if (role === 'owner') {
+    return actor.email === ownerEmail;
+  }
+  return hasRole(actor, 'admin');
+}
+
+function roleLabel(role) {
+  return {
+    owner: 'Owner / Super Admin',
+    admin: 'Company Admin',
+    manager: 'Manager',
+    employee: 'Employee',
+    viewer: 'Viewer'
+  }[role] || 'Employee';
 }
 
 function formatNumber(value) {
@@ -770,6 +836,49 @@ app.post('/api/auth/signup', authRateLimit, async (req, res, next) => {
   }
 });
 
+app.post('/api/auth/accept-invite', authRateLimit, async (req, res, next) => {
+  try {
+    const token = String(req.body?.token || '').trim();
+    const name = String(req.body?.name || '').trim();
+    const password = String(req.body?.password || '');
+    const invitation = token ? await findInvitationByToken(hashToken(token)) : undefined;
+
+    if (!invitation || !name || password.length < 8) {
+      res.status(400).json({ error: 'A valid invite, name, and 8+ character password are required.' });
+      return;
+    }
+
+    let user = await findUserByEmail(invitation.email);
+    if (user) {
+      user = await updateUser(user.id, {
+        name,
+        role: invitation.role,
+        active: true,
+        emailVerified: true
+      });
+      await updateUserPassword(user.id, await hashPassword(password));
+    } else {
+      user = await createUser({
+        id: randomUUID(),
+        companyId: invitation.companyId,
+        name,
+        email: invitation.email,
+        role: invitation.role,
+        active: true,
+        emailVerified: true,
+        passwordHash: await hashPassword(password)
+      });
+    }
+
+    await markInvitationAccepted(invitation.id);
+    await audit({ user, body: { email: user.email } }, 'auth.invitation_accepted', 'invitation', invitation.id, { role: user.role });
+    const sessionPayload = await createLoginSession(user);
+    res.status(201).json({ token: sessionPayload.token, user: publicUser(user), session: sessionPayload.session });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -786,10 +895,13 @@ app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
         expiresAt: new Date(Date.now() + 60 * 60 * 1000).toISOString()
       });
       resetUrl = `${appBaseUrl}/reset-password?token=${encodeURIComponent(token)}`;
-      await sendEmail({
+      await deliverEmail({
+        type: 'password_reset',
         to: user.email,
         subject: 'Reset your Metenova AI password',
-        text: `Use this secure link to reset your password: ${resetUrl}`
+        text: `Use this secure link to reset your password: ${resetUrl}`,
+        userId: user.id,
+        companyId: user.companyId
       });
       await saveAuditLog({
         id: randomUUID(),
@@ -840,10 +952,13 @@ app.post('/api/auth/recover-username', async (req, res, next) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const user = email ? await findUserByEmail(email) : undefined;
     if (user) {
-      await sendEmail({
+      await deliverEmail({
+        type: 'username_recovery',
         to: user.email,
         subject: 'Your Metenova AI username',
-        text: `Your Metenova AI username is ${user.email}.`
+        text: `Your Metenova AI username is ${user.email}.`,
+        userId: user.id,
+        companyId: user.companyId
       });
     }
     res.json({
@@ -866,13 +981,16 @@ app.post('/api/auth/request-verification', requireAuth, async (req, res, next) =
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
     });
     const verificationUrl = `${appBaseUrl}/verify-email?token=${encodeURIComponent(token)}`;
-    await sendEmail({
+    const delivery = await deliverEmail({
+      type: 'email_verification',
       to: req.user.email,
       subject: 'Verify your Metenova AI email',
-      text: `Verify your email address here: ${verificationUrl}`
+      text: `Verify your email address here: ${verificationUrl}`,
+      userId: req.user.id,
+      companyId: req.user.companyId
     });
     res.json({
-      message: 'Verification instructions have been prepared.',
+      message: delivery.delivered ? 'Verification email sent.' : 'Verification request was saved, but delivery could not be completed.',
       ...(!process.env.RESEND_API_KEY ? { verificationUrl } : {})
     });
   } catch (error) {
@@ -975,9 +1093,9 @@ app.get('/api/admin/workspace', requireAuth, requireRole('admin'), async (req, r
   }
 });
 
-app.get('/api/admin/users', requireAuth, requireRole('admin'), async (_req, res, next) => {
+app.get('/api/admin/users', requireAuth, requireRole('admin'), async (req, res, next) => {
   try {
-    res.json({ users: (await listUsers()).map(publicUser) });
+    res.json({ users: (await listUsers(req.user)).map(publicUser) });
   } catch (error) {
     next(error);
   }
@@ -989,7 +1107,7 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
 
     if (req.body?.role != null) {
       const requestedRole = String(req.body.role);
-      if (requestedRole === 'owner' && req.user.email !== ownerEmail) {
+      if (!canAssignRole(req.user, requestedRole)) {
         res.status(403).json({ error: 'Only the permanent owner can assign owner permissions.' });
         return;
       }
@@ -1006,6 +1124,10 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req,
     }
 
     const existing = await findUserById(req.params.id);
+    if (!canManageTargetUser(req.user, existing)) {
+      res.status(403).json({ error: 'You can only manage users in your company workspace.' });
+      return;
+    }
     if (existing?.email === ownerEmail && req.user.email !== ownerEmail) {
       res.status(403).json({ error: 'Owner permissions cannot be changed by another account.' });
       return;
@@ -1032,6 +1154,10 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req
     }
 
     const existing = await findUserById(req.params.id);
+    if (!canManageTargetUser(req.user, existing)) {
+      res.status(403).json({ error: 'You can only manage users in your company workspace.' });
+      return;
+    }
     if (existing?.email === ownerEmail) {
       res.status(403).json({ error: 'The permanent owner account cannot be deleted.' });
       return;
@@ -1052,9 +1178,107 @@ app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('admin'), async
       return;
     }
 
+    const existing = await findUserById(req.params.id);
+    if (!canManageTargetUser(req.user, existing)) {
+      res.status(403).json({ error: 'You can only manage users in your company workspace.' });
+      return;
+    }
+
     await revokeUserSessions(req.params.id);
     await audit(req, 'admin.sessions_revoked', 'user', req.params.id);
     res.json({ revoked: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/invitations', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    res.json({ invitations: await listInvitations(req.user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/invitations', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const requestedRole = String(req.body?.role || 'employee');
+    const role = roles.includes(requestedRole) ? requestedRole : 'employee';
+
+    if (!email.includes('@')) {
+      res.status(400).json({ error: 'A valid email is required.' });
+      return;
+    }
+
+    if (!canAssignRole(req.user, role)) {
+      res.status(403).json({ error: 'You cannot assign that role.' });
+      return;
+    }
+
+    const token = issueAccountToken();
+    const invitation = await createInvitation({
+      id: randomUUID(),
+      companyId: req.user.companyId,
+      email,
+      role,
+      tokenHash: hashToken(token),
+      invitedBy: req.user.id,
+      expiresAt: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString()
+    });
+    const acceptUrl = `${appBaseUrl}/accept-invite?token=${encodeURIComponent(token)}`;
+    const delivery = await deliverEmail({
+      type: 'workspace_invitation',
+      to: email,
+      subject: 'You are invited to Metenova AI',
+      text: `${req.user.name} invited you to join their Metenova AI workspace as ${roleLabel(role)}. Accept here: ${acceptUrl}`,
+      userId: req.user.id,
+      companyId: req.user.companyId
+    });
+    await audit(req, 'admin.invitation_created', 'invitation', invitation.id, { email, role, delivery: delivery.status });
+    res.status(201).json({
+      invitation,
+      message: delivery.delivered ? 'Invitation sent.' : 'Invitation created, but email delivery could not be completed.',
+      ...(!process.env.RESEND_API_KEY ? { acceptUrl } : {})
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/email-logs', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    res.json({ emailLogs: await listEmailLogs(req.user) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/admin/email-logs/:id/retry', requireAuth, requireRole('admin'), async (req, res, next) => {
+  try {
+    const log = await findEmailLog(req.user, req.params.id);
+    if (!log) {
+      res.status(404).json({ error: 'Email delivery record not found.' });
+      return;
+    }
+
+    let delivery;
+    try {
+      delivery = await sendEmail({ to: log.recipient, subject: log.subject, text: log.body });
+      if (!delivery.delivered) {
+        throw new Error(delivery.error || 'Email delivery could not be completed.');
+      }
+      const emailLog = await updateEmailLog(log.id, { status: 'sent', provider: delivery.provider, error: null });
+      await audit(req, 'admin.email_retry_sent', 'email', log.id, { recipient: log.recipient });
+      res.json({ emailLog, message: 'Email resent.' });
+    } catch (error) {
+      const emailLog = await updateEmailLog(log.id, {
+        status: 'failed',
+        provider: delivery?.provider ?? (process.env.RESEND_API_KEY ? 'resend' : 'not-configured'),
+        error: error instanceof Error ? error.message : 'Email retry failed.'
+      });
+      res.status(502).json({ emailLog, error: 'Email retry failed.' });
+    }
   } catch (error) {
     next(error);
   }
@@ -1194,6 +1418,39 @@ app.post('/api/modules/:module/records', async (req, res, next) => {
   }
 });
 
+app.patch('/api/modules/:module/records/:id', async (req, res, next) => {
+  try {
+    const record = await updateModuleRecord(req.user, req.params.id, {
+      title: req.body?.title,
+      status: req.body?.status,
+      amount: req.body?.amount,
+      metadata: req.body?.metadata
+    });
+    if (!record || record.module !== req.params.module) {
+      res.status(404).json({ error: 'Workspace record not found.' });
+      return;
+    }
+    await audit(req, 'module.record_updated', req.params.module, record.id, { status: record.status });
+    res.json({ record });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/modules/:module/records/:id', async (req, res, next) => {
+  try {
+    const deleted = await deleteModuleRecord(req.user, req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: 'Workspace record not found.' });
+      return;
+    }
+    await audit(req, 'module.record_deleted', req.params.module, req.params.id);
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/contact', async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
@@ -1206,13 +1463,23 @@ app.post('/api/contact', async (req, res, next) => {
     }
 
     await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email });
-    await sendEmail({
+    const delivery = await deliverEmail({
+      type: 'support_request',
       to: ownerEmail,
       subject: `Metenova AI support request from ${name}`,
-      text: `From: ${name} <${email}>\n\n${message}`
+      text: `From: ${name} <${email}>\n\n${message}`,
+      userId: req.user.id,
+      companyId: req.user.companyId
     });
     res.status(201).json({
-      message: 'Support request received. Metenova AI will follow up by email.',
+      message: delivery.delivered
+        ? 'Support request sent. Metenova AI will follow up by email.'
+        : 'Support request saved, but email delivery could not be completed. Please email support directly if urgent.',
+      delivery: {
+        status: delivery.status,
+        provider: delivery.provider,
+        error: delivery.error
+      },
       contact: {
         owner: 'Melaku',
         email: ownerEmail,
