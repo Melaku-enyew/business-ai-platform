@@ -1,71 +1,89 @@
-# Business AI Platform
+# Metenova AI Platform
 
-A starter full-stack app with a React/Vite frontend and an Express backend.
+Metenova AI is a modular AI-powered business operations platform for company workspaces, analytics, reporting, user management, data processing, and enterprise workflows.
 
 ## Structure
 
-- `frontend`: React dashboard with dark/light mode, drag-and-drop CSV upload, preview tables, chart controls, PDF report download, and an AI data chat
-- `backend`: Express API server with local/JWT auth, stored login sessions, CSV parsing, SQL Server persistence, saved dashboards, report history, and dataset-aware chat responses
+- `frontend`: React/Vite executive dashboard, workspace modules, CSV/Excel analysis, charts, reports, admin controls, support UI, and session timeout handling.
+- `backend`: Express API with JWT authentication, role-based access, company-scoped records, invitations, support delivery logs, SQL Server persistence, and CSV/Excel processing.
 
-## Run locally
+## Local Development
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open `http://localhost:5174` to use the app. The frontend proxies `/api` calls to the backend deployment URL from `frontend/.env`.
+Open `http://localhost:5174`. The backend runs on `http://localhost:4000`.
 
-For local MVP development, SQL Server is optional. If SQL Server environment variables are not set, the backend uses `backend/data/dev-store.json` and keeps a simple local login/signup system backed by that file.
+For local development, the app can run without production storage credentials. Production deployments must connect protected workspace storage before saving uploads, dashboards, reports, module records, role changes, profile updates, and invitations.
 
-Temporary demo login for local testing:
+## Required Production Environment
 
-- Email: `admin@businessai.com`
-- Password: `admin123`
-
-Roles are stored with each user as `admin` or `user`. Users can only view their own datasets, dashboards, and reports. Admins can view all saved dashboards and reports. Configure initial admin accounts with `ADMIN_EMAILS` in `backend/.env`:
+Configure these variables in the backend Vercel project:
 
 ```env
-ADMIN_EMAILS=admin@businessai.com,ops-lead@example.com
+JWT_SECRET=replace-with-long-random-secret
+OWNER_EMAIL=melakue@metenovaai.com
+CLIENT_ORIGIN=https://your-frontend-domain
+APP_BASE_URL=https://your-frontend-domain
+SESSION_TTL_MINUTES=15
+SESSION_WARNING_SECONDS=60
+
+SQLSERVER_HOST=your-sql-host
+SQLSERVER_PORT=1433
+SQLSERVER_DATABASE=business_ai_platform
+SQLSERVER_USER=your-sql-user
+SQLSERVER_PASSWORD=your-sql-password
+SQLSERVER_ENCRYPT=true
+SQLSERVER_TRUST_SERVER_CERTIFICATE=false
+
+RESEND_API_KEY=your-resend-api-key
+EMAIL_FROM=Metenova AI <support@your-verified-domain>
 ```
 
-To enable SQL Server mode, copy `backend/.env.example` to `backend/.env`, set the `SQLSERVER_*` credentials and `JWT_SECRET`, then start SQL Server:
+Production email delivery requires a verified sender/domain in the email provider. Support requests, invitations, verification messages, username recovery, and password reset emails are logged and can be retried from the admin area.
 
-```bash
-cp backend/.env.example backend/.env
-docker compose up -d sqlserver
-npm run dev
-```
+## Roles
 
-Default local SQL Server credentials in `docker-compose.yml` and `backend/.env.example`:
+Supported roles:
 
-- Host: `localhost`
-- Port: `1433`
-- Database: `business_ai_platform`
-- User: `sa`
-- Password: `YourStrong!Passw0rd`
+- Owner / Super Admin
+- Admin
+- Manager
+- Employee
+- Viewer
 
-Tables are created automatically on startup. If `backend/data/uploads/datasets.json` exists from an older local build, those datasets are imported during startup.
-SQL Server mode creates `users`, `sessions`, `datasets`, `dashboards`, and `reports` tables. Local mode stores the same model shape in `backend/data/dev-store.json`.
+The permanent owner is `melakue@metenovaai.com`. Owner permissions cannot be downgraded, disabled, deleted, or overwritten.
 
-## API
+## API Highlights
 
 - `GET /health`
+- `GET /api/config`
 - `POST /api/auth/signup`
 - `POST /api/auth/login`
 - `GET /api/auth/me`
-- `GET /api/auth/sessions`
+- `POST /api/auth/refresh`
 - `POST /api/auth/logout`
-- `GET /api/admin/workspace`
-- `GET /api/insights`
-- `GET /api/workflows`
-- `POST /api/csv/upload` with a `file` form field containing a `.csv`
+- `GET /api/admin/users`
+- `PATCH /api/admin/users/:id`
+- `POST /api/admin/invitations`
+- `GET /api/modules/:module/records`
+- `POST /api/modules/:module/records`
+- `PATCH /api/modules/:module/records/:id`
+- `DELETE /api/modules/:module/records/:id`
+- `POST /api/files/upload`
 - `GET /api/datasets`
-- `GET /api/datasets/:id`
 - `POST /api/datasets/:id/chat`
 - `GET /api/dashboards`
 - `POST /api/dashboards`
 - `GET /api/reports`
 - `POST /api/reports`
+- `POST /api/contact`
 
-Dataset, dashboard, report, and assistant routes require a bearer token from the login/signup flow. Admin routes also require the `admin` role. Login sessions are persisted and checked on protected requests. Uploaded CSV metadata, saved dashboards, generated reports, and report history are stored by user in SQL Server or in the local JSON fallback.
+## Validation
+
+```bash
+node --check backend/src/server.js
+npm run build
+```
