@@ -20,6 +20,8 @@ export const usingPostgres = Boolean(process.env.DATABASE_URL || process.env.PGH
 export let pool = null;
 
 let connected = false;
+let tablesInitialized = false;
+let lastConnectionError = null;
 
 const devUser = {
   id: 'local-dev-user',
@@ -61,8 +63,8 @@ function postgresSslConfig() {
   if (process.env.PGSSLMODE === 'disable') {
     return false;
   }
-  if (process.env.PGSSL === 'true' || process.env.VERCEL === '1' || process.env.RAILWAY_ENVIRONMENT) {
-    return { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true' };
+  if (process.env.DATABASE_URL || process.env.PGSSL === 'true' || process.env.VERCEL === '1' || process.env.RAILWAY_ENVIRONMENT) {
+    return { rejectUnauthorized: false };
   }
   return false;
 }
@@ -73,6 +75,11 @@ async function getPool() {
       ...getPostgresConfig(),
       max: Number(process.env.PGPOOL_MAX || 10),
       idleTimeoutMillis: 30000
+    });
+    pool.on('error', (error) => {
+      connected = false;
+      lastConnectionError = error instanceof Error ? error.message : 'PostgreSQL pool error.';
+      console.error(`PostgreSQL pool error: ${lastConnectionError}`);
     });
   }
 
@@ -86,6 +93,7 @@ async function getPool() {
       }
     }, 'PostgreSQL');
     connected = true;
+    lastConnectionError = null;
   }
 
   return pool;
@@ -99,6 +107,7 @@ async function pgQuery(text, params = []) {
 export async function initDatabase() {
   if (!usingPostgres) {
     await saveDevStore(await loadDevStore());
+    tablesInitialized = false;
     return;
   }
 
@@ -258,6 +267,7 @@ export async function initDatabase() {
      ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;`,
     [defaultCompanyId, defaultCompanyName]
   );
+  tablesInitialized = true;
 }
 
 export function getDatabaseRuntimeStatus() {
@@ -266,6 +276,8 @@ export function getDatabaseRuntimeStatus() {
     hostConfigured: Boolean(process.env.DATABASE_URL || process.env.PGHOST),
     database: usingPostgres ? process.env.PGDATABASE || databaseFromUrl(process.env.DATABASE_URL) : null,
     connected,
+    tablesInitialized,
+    connectionError: lastConnectionError,
     retries: postgresConnectRetries
   };
 }
@@ -1449,6 +1461,7 @@ async function connectWithRetry(connect, label) {
       return await connect();
     } catch (error) {
       lastError = error;
+      lastConnectionError = error instanceof Error ? error.message : 'Unknown PostgreSQL connection error.';
       console.error(`${label} connection attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       if (attempt < attempts) await sleep(postgresRetryDelayMs);
     }

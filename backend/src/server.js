@@ -580,10 +580,18 @@ async function deliverEmail({ type, to, subject, text, userId, companyId, replyT
 }
 
 function requireDurableStorage(req, res, next) {
+  const dbStatus = getDatabaseRuntimeStatus();
   if (isEphemeralProductionStorage) {
     res.status(503).json({
       error: 'Protected workspace storage must be connected before saving changes in production.',
       code: 'DURABLE_STORAGE_REQUIRED'
+    });
+    return;
+  }
+  if (dbStatus.usingPostgres && !dbStatus.connected) {
+    res.status(503).json({
+      error: 'PostgreSQL storage is not connected. Please check the production database configuration.',
+      code: 'POSTGRESQL_UNAVAILABLE'
     });
     return;
   }
@@ -808,6 +816,8 @@ app.get('/health', (_req, res) => {
     mode: authDisabled ? 'auth-disabled' : usingPostgres ? 'secure-postgresql' : 'local-auth',
     durableStorage: dbStatus.usingPostgres && dbStatus.connected,
     postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
+    tablesInitialized: dbStatus.tablesInitialized,
+    databaseError: dbStatus.connectionError,
     emailConfigured
   });
 });
@@ -818,6 +828,7 @@ app.get('/api/config', (_req, res) => {
     authDisabled,
     storage: usingPostgres ? 'postgresql' : 'local-development',
     durableStorage: dbStatus.usingPostgres && dbStatus.connected,
+    postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
     emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
     sessionWarningSeconds: warningSeconds
@@ -1400,11 +1411,14 @@ app.get('/api/admin/audit-logs', requireRole('admin'), async (_req, res, next) =
 });
 
 app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
   res.json({
     status: 'operational',
     storage: usingPostgres ? 'protected-workspace-storage' : 'workspace-storage-pending',
     auth: requireStoredSessions ? 'protected-workspace-sessions' : 'local-session-mode',
-    durableStorage: usingPostgres,
+    durableStorage: dbStatus.usingPostgres && dbStatus.connected,
+    postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
+    tablesInitialized: dbStatus.tablesInitialized,
     emailConfigured,
     uptimeSeconds: Math.round(process.uptime()),
     uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
@@ -1751,17 +1765,20 @@ initDatabase()
   .then(() => promoteAdminEmails(adminEmails))
   .then(ensureOwnerAccount)
   .then(importLegacyDatasets)
-  .then(() => {
+  .catch((error) => {
+    console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
+  })
+  .finally(() => {
     const dbStatus = getDatabaseRuntimeStatus();
     console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
+    console.log(`PostgreSQL configured: ${dbStatus.usingPostgres ? 'true' : 'false'}`);
     console.log(`PostgreSQL connected: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
-    console.log(`PostgreSQL tables initialized: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'local-mode'}`);
+    console.log(`PostgreSQL tables initialized: ${dbStatus.tablesInitialized ? 'true' : dbStatus.usingPostgres ? 'false' : 'local-mode'}`);
+    if (dbStatus.connectionError) {
+      console.error(`PostgreSQL startup error: ${dbStatus.connectionError}`);
+    }
     console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
     app.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
     });
-  })
-  .catch((error) => {
-    console.error(`Database startup failed: ${error.message}`);
-    process.exit(1);
   });
