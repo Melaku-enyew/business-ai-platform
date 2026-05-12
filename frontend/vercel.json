@@ -5,7 +5,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://business-ai-platform-backend.vercel.app/api/:path*"
+      "destination": "https://backend-six-pied-39.vercel.app/api/:path*"
     },
     {
       "source": "/(.*)",
