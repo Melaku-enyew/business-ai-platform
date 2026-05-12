@@ -1451,7 +1451,7 @@ app.post('/api/modules/:module/records', requireDurableStorage, async (req, res,
   }
 });
 
-app.patch('/api/modules/:module/records/:id', requireDurableStorage, async (req, res, next) => {
+async function updateModuleRecordHandler(req, res, next) {
   try {
     const record = await updateModuleRecord(req.user, req.params.id, {
       title: req.body?.title,
@@ -1468,7 +1468,10 @@ app.patch('/api/modules/:module/records/:id', requireDurableStorage, async (req,
   } catch (error) {
     next(error);
   }
-});
+}
+
+app.patch('/api/modules/:module/records/:id', requireDurableStorage, updateModuleRecordHandler);
+app.put('/api/modules/:module/records/:id', requireDurableStorage, updateModuleRecordHandler);
 
 app.delete('/api/modules/:module/records/:id', requireDurableStorage, async (req, res, next) => {
   try {

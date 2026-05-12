@@ -1112,19 +1112,102 @@ th {
   gap: 10px;
 }
 
-.pipeline-stages div {
+.pipeline-stages button {
   display: grid;
   gap: 7px;
   min-height: 92px;
   padding: 12px;
   border: 1px solid var(--line);
   border-radius: var(--radius);
+  color: var(--text);
   background: var(--panel-strong);
+  cursor: pointer;
+  text-align: left;
 }
 
-.pipeline-stages div.active {
+.pipeline-stages button.active {
   border-color: color-mix(in srgb, var(--accent) 40%, var(--line));
   background: color-mix(in srgb, var(--accent-wash) 70%, var(--panel));
+}
+
+.routed-page {
+  display: grid;
+  gap: 22px;
+}
+
+.routed-header {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  gap: 16px;
+}
+
+.back-button {
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 14px;
+  color: var(--text);
+  background: var(--panel-strong);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.routed-workspace,
+.routed-form {
+  display: grid;
+  gap: 14px;
+}
+
+.routed-form {
+  grid-template-columns: minmax(0, 1fr) 160px 150px auto;
+}
+
+.routed-empty {
+  min-height: 150px;
+  align-content: center;
+}
+
+.routed-empty span {
+  color: var(--muted);
+}
+
+.loading-card {
+  min-height: 140px;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 850;
+}
+
+.routed-table td {
+  vertical-align: middle;
+}
+
+.table-actions {
+  margin-top: 0;
+}
+
+.workspace-subnav {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.workspace-subnav button {
+  min-height: 38px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  padding: 0 14px;
+  color: var(--muted);
+  background: var(--panel);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.workspace-subnav button.active {
+  color: var(--accent-text);
+  background: var(--accent-soft);
 }
 
 .pipeline-stages strong {
@@ -1683,7 +1766,12 @@ th {
   .bar-row,
   .chat-form,
   .module-form,
+  .routed-form,
   .record-toolbar {
+    grid-template-columns: 1fr;
+  }
+
+  .routed-header {
     grid-template-columns: 1fr;
   }
 

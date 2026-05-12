@@ -1,4 +1,5 @@
-import { ChangeEvent, CSSProperties, DragEvent, FormEvent, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, CSSProperties, DragEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 type InsightResponse = {
   metrics: Array<{ label: string; value: number; trend: string }>;
@@ -164,6 +165,16 @@ type EmailLog = {
 };
 
 type ModuleMetrics = Record<string, { total: number; open: number }>;
+type ModuleAction = {
+  title: string;
+  copy: string;
+  type: string;
+  path: string;
+};
+type WorkspaceRoute = ModuleAction & {
+  module: string;
+  moduleLabel: string;
+};
 
 type AuthResponse = {
   token: string;
@@ -197,42 +208,56 @@ const moduleNav: Array<{ view: AppView; label: string; adminOnly?: boolean }> = 
   { view: 'contact', label: 'Contact Us' }
 ];
 
-const moduleCards: Record<string, Array<{ title: string; copy: string; type: string }>> = {
+const moduleCards: Record<string, ModuleAction[]> = {
   accounting: [
-    { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', type: 'invoice' },
-    { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', type: 'expense' },
-    { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', type: 'payroll' },
-    { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', type: 'financial_report' },
-    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', type: 'assistant' }
+    { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', type: 'invoice', path: '/accounting/invoices' },
+    { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', type: 'expense', path: '/accounting/expenses' },
+    { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', type: 'payroll', path: '/accounting/payroll' },
+    { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', type: 'financial_report', path: '/accounting/financial-reports' },
+    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', type: 'assistant', path: '/accounting/ai-financial-assistant' }
   ],
   engineering: [
-    { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', type: 'project' },
-    { title: 'Task Tracking', copy: 'Prioritize work, assign teams, and monitor delivery commitments.', type: 'task' },
-    { title: 'Blueprint/File Management', copy: 'Prepare document upload, file versioning, and blueprint review workflows.', type: 'blueprint' },
-    { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', type: 'progress_report' }
+    { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', type: 'project', path: '/engineering/projects' },
+    { title: 'Task Tracking', copy: 'Prioritize work, assign teams, and monitor delivery commitments.', type: 'task', path: '/engineering/tasks' },
+    { title: 'Blueprint/File Management', copy: 'Prepare document upload, file versioning, and blueprint review workflows.', type: 'blueprint', path: '/engineering/blueprints' },
+    { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', type: 'progress_report', path: '/engineering/progress-reports' }
   ],
   hr: [
-    { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', type: 'employee' },
-    { title: 'Attendance', copy: 'Prepare attendance, time, and shift tracking workflows.', type: 'attendance' },
-    { title: 'Hiring', copy: 'Track candidates, interviews, and onboarding steps.', type: 'hiring' },
-    { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave' }
+    { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', type: 'employee', path: '/hr/employees' },
+    { title: 'Attendance', copy: 'Prepare attendance, time, and shift tracking workflows.', type: 'attendance', path: '/hr/attendance' },
+    { title: 'Hiring', copy: 'Track candidates, interviews, and onboarding steps.', type: 'hiring', path: '/hr/hiring' },
+    { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave', path: '/hr/leave-management' }
   ],
   crm: [
-    { title: 'Clients', copy: 'Track client accounts, contacts, and relationship health.', type: 'client' },
-    { title: 'Leads', copy: 'Capture prospects and qualify opportunities.', type: 'lead' },
-    { title: 'Sales Pipeline', copy: 'Manage stages, value, and next actions.', type: 'pipeline' },
-    { title: 'Customer Notes', copy: 'Log interaction history and follow-ups.', type: 'note' }
+    { title: 'Clients', copy: 'Track client accounts, contacts, and relationship health.', type: 'client', path: '/crm/clients' },
+    { title: 'Leads', copy: 'Capture prospects and qualify opportunities.', type: 'lead', path: '/crm/leads' },
+    { title: 'Sales Pipeline', copy: 'Manage stages, value, and next actions.', type: 'pipeline', path: '/crm/sales-pipeline' },
+    { title: 'Customer Notes', copy: 'Log interaction history and follow-ups.', type: 'note', path: '/crm/customer-notes' }
   ],
   dataProcessing: [
-    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', type: 'cleanup' },
-    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', type: 'dedupe' },
-    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', type: 'validation' },
-    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', type: 'import_export' },
-    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', type: 'quality_report' }
+    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', type: 'cleanup', path: '/data-processing/cleanup' },
+    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', type: 'dedupe', path: '/data-processing/duplicates' },
+    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', type: 'validation', path: '/data-processing/validation' },
+    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', type: 'import_export', path: '/data-processing/import-export' },
+    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', type: 'quality_report', path: '/data-processing/quality-reports' }
   ]
 };
 
+const moduleLabels: Record<string, string> = {
+  accounting: 'Accounting',
+  engineering: 'Engineering',
+  hr: 'HR',
+  crm: 'CRM',
+  dataProcessing: 'Data Processing'
+};
+
+const workspaceRoutes: WorkspaceRoute[] = Object.entries(moduleCards).flatMap(([module, cards]) =>
+  cards.map((card) => ({ ...card, module, moduleLabel: moduleLabels[module] ?? module }))
+);
+
 export function App() {
+  const navigate = useNavigate();
+  const location = useLocation();
   const [insights, setInsights] = useState<InsightResponse>(fallbackInsights);
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
@@ -369,6 +394,21 @@ export function App() {
       loadModuleRecords(currentView);
     }
   }, [currentView]);
+
+  useEffect(() => {
+    const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname);
+    if (workspaceRoute) {
+      setCurrentView(workspaceRoute.module as AppView);
+      return;
+    }
+    if (location.pathname === '/analytics/dashboard') {
+      setCurrentView('analytics');
+    } else if (location.pathname === '/reports/history') {
+      setCurrentView('reports');
+    } else if (location.pathname.startsWith('/admin/')) {
+      setCurrentView('adminUsers');
+    }
+  }, [location.pathname]);
 
   useEffect(() => {
     const syncAuth = (event: StorageEvent) => {
@@ -1196,8 +1236,26 @@ export function App() {
   }
 
   function openSettings() {
+    navigate('/');
     setCurrentView('settings');
     setAccountOpen(false);
+  }
+
+  function openView(view: AppView) {
+    if (view === 'analytics') {
+      navigate('/analytics/dashboard');
+      return;
+    }
+    if (view === 'reports') {
+      navigate('/reports/history');
+      return;
+    }
+    if (view === 'adminUsers') {
+      navigate('/admin/users');
+      return;
+    }
+    navigate('/');
+    setCurrentView(view);
   }
 
   if (!configLoaded) {
@@ -1294,11 +1352,11 @@ export function App() {
             .filter((item) => !item.adminOnly || canManageUsers(user))
             .map((item) => (
               <button
-                className={currentView === item.view ? 'active' : ''}
-                key={item.view}
-                type="button"
-                onClick={() => item.view === 'settings' ? openSettings() : setCurrentView(item.view)}
-              >
+              className={currentView === item.view ? 'active' : ''}
+              key={item.view}
+              type="button"
+              onClick={() => item.view === 'settings' ? openSettings() : openView(item.view)}
+            >
                 {item.label}
               </button>
             ))}
@@ -1317,7 +1375,7 @@ export function App() {
             </button>
             <button className="ghost-button" type="button" onClick={() => {
               setContactContext(currentView);
-              setCurrentView('contact');
+              openView('contact');
             }}>
               Support
             </button>
@@ -1344,7 +1402,20 @@ export function App() {
           </div>
         </header>
 
-        {currentView === 'settings' ? (
+        {location.pathname !== '/' ? (
+          <RoutedPages
+            apiFetch={apiFetch}
+            auditLogs={auditLogs}
+            canManage={canManageUsers(user)}
+            dashboards={dashboards}
+            deleteAdminUser={deleteAdminUser}
+            downloadHistoricalReport={downloadHistoricalReport}
+            reports={reports}
+            systemStatus={systemStatus}
+            updateAdminUser={updateAdminUser}
+            users={adminUsers}
+          />
+        ) : currentView === 'settings' ? (
           <section className="settings-grid">
             <article className="panel profile-panel">
               <p className="eyebrow">Account</p>
@@ -1631,7 +1702,8 @@ export function App() {
               recordStatusFilter,
               setRecordStatusFilter,
               selectedRecord,
-              setSelectedRecord
+              setSelectedRecord,
+              navigate
             )}
           </section>
         ) : currentView === 'analytics' ? (
@@ -1924,7 +1996,7 @@ export function App() {
       </section>
       <button className="floating-help" type="button" onClick={() => {
         setContactContext(currentView);
-        setCurrentView('contact');
+        openView('contact');
         setContactMessage('I need help with ');
       }}>
         Help
@@ -2012,6 +2084,391 @@ function roleLabel(role?: string) {
   return labels[role ?? ''] ?? 'Employee';
 }
 
+function pipelineStepPath(stage: string) {
+  const normalized = stage.toLowerCase();
+  if (normalized.includes('duplicate')) {
+    return '/data-processing/duplicates';
+  }
+  if (normalized.includes('validate')) {
+    return '/data-processing/validation';
+  }
+  if (normalized.includes('normalize') || normalized.includes('clean') || normalized.includes('approve')) {
+    return '/data-processing/cleanup';
+  }
+  return '/data-processing/import-export';
+}
+
+function PageLayout({ children }: { children: ReactNode }) {
+  return <section className="module-page routed-page">{children}</section>;
+}
+
+function BackButton() {
+  const navigate = useNavigate();
+  return <button className="back-button" type="button" onClick={() => navigate(-1)}>Back</button>;
+}
+
+function PageHeader({ title, eyebrow, copy }: { title: string; eyebrow: string; copy?: string }) {
+  return (
+    <article className="panel routed-header">
+      <BackButton />
+      <div>
+        <p className="eyebrow">{eyebrow}</p>
+        <h2>{title}</h2>
+        {copy && <p className="module-copy">{copy}</p>}
+      </div>
+    </article>
+  );
+}
+
+function EmptyState({ title, copy }: { title: string; copy: string }) {
+  return (
+    <div className="empty-state routed-empty">
+      <strong>{title}</strong>
+      <span>{copy}</span>
+    </div>
+  );
+}
+
+function LoadingCard({ label = 'Loading workspace...' }: { label?: string }) {
+  return <article className="panel loading-card">{label}</article>;
+}
+
+function RecordTable({
+  records,
+  onEdit,
+  onDelete
+}: {
+  records: ModuleRecord[];
+  onEdit: (record: ModuleRecord) => void;
+  onDelete: (record: ModuleRecord) => void;
+}) {
+  if (!records.length) {
+    return <EmptyState title="No records yet" copy="Create the first workspace item to begin tracking this workflow." />;
+  }
+
+  return (
+    <div className="table-wrap routed-table">
+      <table>
+        <thead>
+          <tr>
+            <th>Title</th>
+            <th>Status</th>
+            <th>Amount</th>
+            <th>Updated</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {records.map((record) => (
+            <tr key={record.id}>
+              <td>{record.title}</td>
+              <td>{record.status}</td>
+              <td>{record.amount == null ? '-' : Number(record.amount).toLocaleString()}</td>
+              <td>{new Date(record.updatedAt).toLocaleString()}</td>
+              <td>
+                <div className="record-actions table-actions">
+                  <button className="ghost-button compact" type="button" onClick={() => onEdit(record)}>Edit</button>
+                  <button className="ghost-button compact danger" type="button" onClick={() => onDelete(record)}>Delete</button>
+                </div>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function RoutedPages(props: {
+  apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  auditLogs: AuditLog[];
+  canManage: boolean;
+  dashboards: SavedDashboard[];
+  deleteAdminUser: (user: AdminUser) => void;
+  downloadHistoricalReport: (report: ReportHistoryItem) => void;
+  reports: ReportHistoryItem[];
+  systemStatus: SystemStatus | null;
+  updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
+  users: AdminUser[];
+}) {
+  return (
+    <Routes>
+      {workspaceRoutes.map((route) => (
+        <Route
+          element={<ModuleWorkspacePage apiFetch={props.apiFetch} route={route} />}
+          key={route.path}
+          path={route.path}
+        />
+      ))}
+      <Route path="/analytics/dashboard" element={<AnalyticsWorkspace dashboards={props.dashboards} reports={props.reports} />} />
+      <Route path="/reports/history" element={<ReportsHistoryWorkspace downloadHistoricalReport={props.downloadHistoricalReport} reports={props.reports} />} />
+      <Route path="/admin/users" element={props.canManage ? <AdminUsersWorkspace deleteAdminUser={props.deleteAdminUser} updateAdminUser={props.updateAdminUser} users={props.users} /> : <Navigate to="/" replace />} />
+      <Route path="/admin/audit-logs" element={props.canManage ? <AuditLogsWorkspace auditLogs={props.auditLogs} /> : <Navigate to="/" replace />} />
+      <Route path="/admin/system-monitoring" element={props.canManage ? <SystemMonitoringWorkspace status={props.systemStatus} /> : <Navigate to="/" replace />} />
+      <Route path="*" element={<Navigate to="/" replace />} />
+    </Routes>
+  );
+}
+
+function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, options?: RequestInit) => Promise<Response>; route: WorkspaceRoute }) {
+  const [records, setRecords] = useState<ModuleRecord[]>([]);
+  const [title, setTitle] = useState('');
+  const [amount, setAmount] = useState('');
+  const [status, setStatus] = useState('open');
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  async function loadRecords() {
+    setLoading(true);
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/${route.module}/records`);
+      const payload = await readJson<{ records?: ModuleRecord[]; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not load records.');
+      }
+      setRecords((payload.records ?? []).filter((record) => record.recordType === route.type));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : 'Could not load records.');
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    loadRecords();
+  }, [route.path]);
+
+  async function createRecord(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!title.trim()) {
+      setError('Enter a title before saving.');
+      return;
+    }
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/${route.module}/records`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title, amount, status, recordType: route.type, metadata: { workspacePath: route.path } })
+      });
+      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      if (!response.ok || !payload.record) {
+        throw new Error(payload.error || 'Could not save record.');
+      }
+      setRecords((current) => [payload.record as ModuleRecord, ...current]);
+      setTitle('');
+      setAmount('');
+      setStatus('open');
+    } catch (saveError) {
+      setError(saveError instanceof Error ? saveError.message : 'Could not save record.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function editRecord(record: ModuleRecord) {
+    const nextTitle = window.prompt('Update title', record.title);
+    if (nextTitle == null || !nextTitle.trim()) {
+      return;
+    }
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/${route.module}/records/${record.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: nextTitle.trim() })
+      });
+      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      if (!response.ok || !payload.record) {
+        throw new Error(payload.error || 'Could not update record.');
+      }
+      setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
+    } catch (editError) {
+      setError(editError instanceof Error ? editError.message : 'Could not update record.');
+    }
+  }
+
+  async function deleteRecord(record: ModuleRecord) {
+    if (!window.confirm(`Delete ${record.title}?`)) {
+      return;
+    }
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/${route.module}/records/${record.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Could not delete record.');
+      }
+      setRecords((current) => current.filter((entry) => entry.id !== record.id));
+    } catch (deleteError) {
+      setError(deleteError instanceof Error ? deleteError.message : 'Could not delete record.');
+    }
+  }
+
+  const filteredRecords = records
+    .filter((record) => filter === 'all' || record.status === filter)
+    .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
+
+  return (
+    <PageLayout>
+      <PageHeader title={route.title} eyebrow={route.moduleLabel} copy={route.copy} />
+      <article className="panel routed-workspace">
+        <form className="module-form routed-form" onSubmit={createRecord}>
+          <input placeholder={`${route.title} title`} value={title} onChange={(event) => setTitle(event.target.value)} />
+          <input placeholder="Amount or value" value={amount} onChange={(event) => setAmount(event.target.value)} />
+          <select value={status} onChange={(event) => setStatus(event.target.value)}>
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="closed">Closed</option>
+          </select>
+          <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Create record'}</button>
+        </form>
+        <div className="record-toolbar">
+          <input placeholder="Search this workspace" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+            <option value="all">All statuses</option>
+            <option value="open">Open</option>
+            <option value="in_progress">In progress</option>
+            <option value="closed">Closed</option>
+          </select>
+        </div>
+        {error && <p className="persistence-note warning-note">{error}</p>}
+        {loading ? <LoadingCard /> : <RecordTable records={filteredRecords} onDelete={deleteRecord} onEdit={editRecord} />}
+      </article>
+    </PageLayout>
+  );
+}
+
+function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboard[]; reports: ReportHistoryItem[] }) {
+  return (
+    <PageLayout>
+      <PageHeader title="Analytics Dashboard" eyebrow="Analytics" copy="Executive KPI workspace for dashboards, reports, and AI-ready analysis." />
+      <article className="panel">
+        <div className="module-grid">
+          <div><strong>{dashboards.length}</strong><span>Saved dashboards</span></div>
+          <div><strong>{reports.length}</strong><span>Generated reports</span></div>
+          <div><strong>Live</strong><span>AI analytics workspace</span></div>
+        </div>
+      </article>
+    </PageLayout>
+  );
+}
+
+function ReportsHistoryWorkspace({ reports, downloadHistoricalReport }: { reports: ReportHistoryItem[]; downloadHistoricalReport: (report: ReportHistoryItem) => void }) {
+  return (
+    <PageLayout>
+      <PageHeader title="Report History" eyebrow="Reports" copy="Download generated reports and review saved analysis output." />
+      <article className="panel">
+        <div className="history-list">
+          {reports.length ? reports.map((report) => (
+            <div className="history-item" key={report.id}>
+              <div>
+                <strong>{report.title}</strong>
+                <span>{report.datasetName} - {new Date(report.createdAt).toLocaleString()}</span>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>Download</button>
+            </div>
+          )) : <EmptyState title="No reports yet" copy="Generated PDF and analysis reports will appear here." />}
+        </div>
+      </article>
+    </PageLayout>
+  );
+}
+
+function AdminUsersWorkspace({ users, updateAdminUser, deleteAdminUser }: { users: AdminUser[]; updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void; deleteAdminUser: (user: AdminUser) => void }) {
+  const [search, setSearch] = useState('');
+  const filteredUsers = users.filter((user) => [user.name, user.email, user.role].some((value) => value.toLowerCase().includes(search.toLowerCase())));
+  return (
+    <PageLayout>
+      <PageHeader title="User Management" eyebrow="Admin" copy="Manage workspace roles, active status, and company access." />
+      <AdminSubnav />
+      <article className="panel routed-workspace">
+        <div className="record-toolbar"><input placeholder="Search users" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
+        <div className="table-wrap routed-table">
+          <table>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+            <tbody>
+              {filteredUsers.map((adminUser) => (
+                <tr key={adminUser.id}>
+                  <td>{adminUser.name}</td>
+                  <td>{adminUser.email}</td>
+                  <td>
+                    <select className="role-select" value={adminUser.role} onChange={(event) => updateAdminUser(adminUser.id, { role: event.target.value as UserRole })}>
+                      {roleOptions.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
+                    </select>
+                  </td>
+                  <td>{adminUser.active ? 'Active' : 'Disabled'}</td>
+                  <td><button className="ghost-button compact danger" type="button" onClick={() => deleteAdminUser(adminUser)}>Delete</button></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!filteredUsers.length && <EmptyState title="No users found" copy="Invite users or adjust the search filter." />}
+      </article>
+    </PageLayout>
+  );
+}
+
+function AuditLogsWorkspace({ auditLogs }: { auditLogs: AuditLog[] }) {
+  return (
+    <PageLayout>
+      <PageHeader title="Audit Logs" eyebrow="Admin" copy="Review role, security, support, and workspace activity." />
+      <AdminSubnav />
+      <article className="panel">
+        <div className="audit-list">
+          {auditLogs.length ? auditLogs.map((log) => (
+            <div key={log.id}><strong>{log.action}</strong><span>{log.actorEmail ?? 'System'} - {new Date(log.createdAt).toLocaleString()}</span></div>
+          )) : <EmptyState title="No audit events" copy="Security and workspace activity will appear here." />}
+        </div>
+      </article>
+    </PageLayout>
+  );
+}
+
+function SystemMonitoringWorkspace({ status }: { status: SystemStatus | null }) {
+  return (
+    <PageLayout>
+      <PageHeader title="System Monitoring" eyebrow="Admin" copy="Operational health, protected storage readiness, and upload capacity." />
+      <AdminSubnav />
+      <article className="panel">
+        {status ? (
+          <dl className="settings-list">
+            <div><dt>Status</dt><dd>{status.status}</dd></div>
+            <div><dt>Storage</dt><dd>Protected workspace infrastructure</dd></div>
+            <div><dt>Sessions</dt><dd>Secure workspace sessions</dd></div>
+            <div><dt>Upload limit</dt><dd>{status.uploadLimitMb} MB</dd></div>
+          </dl>
+        ) : <LoadingCard label="Loading system status..." />}
+      </article>
+    </PageLayout>
+  );
+}
+
+function AdminSubnav() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const links = [
+    { label: 'Users', path: '/admin/users' },
+    { label: 'Audit logs', path: '/admin/audit-logs' },
+    { label: 'System monitoring', path: '/admin/system-monitoring' }
+  ];
+  return (
+    <nav className="workspace-subnav" aria-label="Admin workspace navigation">
+      {links.map((link) => (
+        <button className={location.pathname === link.path ? 'active' : ''} key={link.path} type="button" onClick={() => navigate(link.path)}>
+          {link.label}
+        </button>
+      ))}
+    </nav>
+  );
+}
+
 function renderModulePage(
   view: AppView,
   setCurrentView: (view: AppView) => void,
@@ -2029,7 +2486,8 @@ function renderModulePage(
   recordStatusFilter: string,
   setRecordStatusFilter: (value: string) => void,
   selectedRecord: ModuleRecord | null,
-  setSelectedRecord: (record: ModuleRecord | null) => void
+  setSelectedRecord: (record: ModuleRecord | null) => void,
+  navigate: (path: string) => void
 ) {
   const titles: Record<string, string> = {
     accounting: 'Accounting command center',
@@ -2080,8 +2538,8 @@ function renderModulePage(
             <span>{records.filter((record) => record.recordType === card.type).length} records</span>
             <strong>{card.title}</strong>
             <p>{card.copy}</p>
-            <button type="button" onClick={() => setModuleForm({ ...moduleForm, recordType: card.type })}>
-              Create {card.title}
+            <button type="button" onClick={() => navigate(card.path)}>
+              Open {card.title}
             </button>
           </article>
         ))}
@@ -2093,16 +2551,21 @@ function renderModulePage(
               <p className="eyebrow">Processing pipeline</p>
               <h2>Enterprise cleanup workflow</h2>
             </div>
-            <button type="button" className="ghost-button compact" onClick={() => setModuleForm({ ...moduleForm, recordType: 'pipeline_job', title: 'New data cleanup pipeline' })}>
+            <button type="button" className="ghost-button compact" onClick={() => navigate('/data-processing/import-export')}>
               Start pipeline
             </button>
           </div>
           <div className="pipeline-stages">
             {pipelineStages.map((stage, index) => (
-              <div className={index < Math.min(pipelineRecords.length + 1, pipelineStages.length) ? 'active' : ''} key={stage}>
+              <button
+                className={index < Math.min(pipelineRecords.length + 1, pipelineStages.length) ? 'active' : ''}
+                key={stage}
+                onClick={() => navigate(pipelineStepPath(stage))}
+                type="button"
+              >
                 <strong>{index + 1}</strong>
                 <span>{stage}</span>
-              </div>
+              </button>
             ))}
           </div>
           <div className="workflow-list">
