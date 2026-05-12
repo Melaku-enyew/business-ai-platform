@@ -3,27 +3,23 @@ import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import sql from 'mssql';
+import pg from 'pg';
 
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
+const { Pool } = pg;
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
-const sqlServerHost = process.env.SQLSERVER_HOST || process.env.DB_SERVER;
-const sqlServerDatabase = process.env.SQLSERVER_DATABASE || process.env.DB_DATABASE || 'business_ai_platform';
-const sqlServerUser = process.env.SQLSERVER_USER || process.env.DB_USER;
-const sqlServerPassword = process.env.SQLSERVER_PASSWORD || process.env.DB_PASSWORD;
-const sqlServerPort = Number(process.env.SQLSERVER_PORT || process.env.DB_PORT || 1433);
-const sqlServerEncrypt = stringToBoolean(process.env.SQLSERVER_ENCRYPT ?? process.env.DB_ENCRYPT, process.env.VERCEL === '1');
-const sqlServerTrustServerCertificate = stringToBoolean(
-  process.env.SQLSERVER_TRUST_SERVER_CERTIFICATE ?? process.env.DB_TRUST_SERVER_CERTIFICATE,
-  process.env.VERCEL !== '1'
-);
-const sqlServerConnectRetries = Number(process.env.SQLSERVER_CONNECT_RETRIES || process.env.DB_CONNECT_RETRIES || 3);
-const sqlServerRetryDelayMs = Number(process.env.SQLSERVER_RETRY_DELAY_MS || process.env.DB_RETRY_DELAY_MS || 1500);
-export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
-export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
 const defaultCompanyId = 'metenova-default-company';
 const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
+const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || process.env.PG_CONNECT_RETRIES || 3);
+const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || process.env.PG_RETRY_DELAY_MS || 1500);
+
+export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
+export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+export const usingPostgres = Boolean(process.env.DATABASE_URL || process.env.PGHOST);
+export let pool = null;
+
+let connected = false;
 
 const devUser = {
   id: 'local-dev-user',
@@ -40,462 +36,347 @@ const devUser = {
   createdAt: new Date().toISOString()
 };
 
-export const usingSqlServer = Boolean(sqlServerHost || process.env.SQLSERVER_CONNECTION_STRING);
-export let pool = null;
-
-let connectedPool;
-
-async function getPool() {
-  if (!connectedPool) {
-    connectedPool = await connectWithRetry(async () => {
-      pool = new sql.ConnectionPool(await buildSqlServerConfig());
-      return pool.connect();
-    }, 'SQL Server');
-  }
-  return connectedPool;
-}
-
-async function buildSqlServerConfig() {
-  if (process.env.SQLSERVER_CONNECTION_STRING) {
-    return process.env.SQLSERVER_CONNECTION_STRING;
-  }
-
-  const baseConfig = {
-    server: sqlServerHost,
-    port: sqlServerPort,
-    user: sqlServerUser,
-    password: sqlServerPassword,
-    pool: {
-      max: Number(process.env.SQLSERVER_POOL_MAX || 10),
-      min: 0,
-      idleTimeoutMillis: 30000
-    },
-    options: {
-      encrypt: sqlServerEncrypt,
-      trustServerCertificate: sqlServerTrustServerCertificate
-    }
-  };
-
-  if (process.env.SQLSERVER_AUTO_CREATE_DATABASE === 'true') {
-    const masterPool = await connectWithRetry(
-      () => new sql.ConnectionPool({ ...baseConfig, database: 'master' }).connect(),
-      'SQL Server master'
-    );
-    try {
-      await masterPool.request().query(`
-        IF DB_ID(N'${escapeSqlString(sqlServerDatabase)}') IS NULL
-        BEGIN
-          CREATE DATABASE ${quoteSqlIdentifier(sqlServerDatabase)};
-        END;
-      `);
-    } finally {
-      await masterPool.close();
-    }
+function getPostgresConfig() {
+  if (process.env.DATABASE_URL) {
+    return {
+      connectionString: process.env.DATABASE_URL,
+      ssl: postgresSslConfig()
+    };
   }
 
   return {
-    ...baseConfig,
-    database: sqlServerDatabase
+    host: process.env.PGHOST,
+    database: process.env.PGDATABASE,
+    user: process.env.PGUSER,
+    password: process.env.PGPASSWORD,
+    port: Number(process.env.PGPORT || 5432),
+    ssl: postgresSslConfig()
   };
 }
 
+function postgresSslConfig() {
+  if (process.env.PGSSL === 'false') {
+    return false;
+  }
+  if (process.env.PGSSLMODE === 'disable') {
+    return false;
+  }
+  if (process.env.PGSSL === 'true' || process.env.VERCEL === '1' || process.env.RAILWAY_ENVIRONMENT) {
+    return { rejectUnauthorized: process.env.PGSSL_REJECT_UNAUTHORIZED === 'true' };
+  }
+  return false;
+}
+
+async function getPool() {
+  if (!pool) {
+    pool = new Pool({
+      ...getPostgresConfig(),
+      max: Number(process.env.PGPOOL_MAX || 10),
+      idleTimeoutMillis: 30000
+    });
+  }
+
+  if (!connected) {
+    await connectWithRetry(async () => {
+      const client = await pool.connect();
+      try {
+        await client.query('SELECT 1;');
+      } finally {
+        client.release();
+      }
+    }, 'PostgreSQL');
+    connected = true;
+  }
+
+  return pool;
+}
+
+async function pgQuery(text, params = []) {
+  const db = await getPool();
+  return db.query(text, params);
+}
+
 export async function initDatabase() {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     await saveDevStore(await loadDevStore());
     return;
   }
 
-  const db = await getPool();
-  await db.request().batch(`
-    IF OBJECT_ID('dbo.companies', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.companies (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        name NVARCHAR(220) NOT NULL,
-        owner_user_id NVARCHAR(64) NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_companies_created_at DEFAULT SYSUTCDATETIME()
-      );
-    END;
+  await pgQuery(`
+    CREATE TABLE IF NOT EXISTS companies (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      owner_user_id TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF NOT EXISTS (SELECT 1 FROM dbo.companies WHERE id = '${defaultCompanyId}')
-      INSERT INTO dbo.companies (id, name) VALUES ('${defaultCompanyId}', N'${escapeSqlString(defaultCompanyName)}');
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}' REFERENCES companies(id),
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      role TEXT NOT NULL DEFAULT 'employee',
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      email_verified BOOLEAN NOT NULL DEFAULT FALSE,
+      profile_photo_url TEXT,
+      notification_settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+      preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+      two_factor_enabled BOOLEAN NOT NULL DEFAULT FALSE,
+      last_login_at TIMESTAMPTZ,
+      failed_login_count INTEGER NOT NULL DEFAULT 0,
+      locked_until TIMESTAMPTZ,
+      password_hash TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF OBJECT_ID('dbo.users', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.users (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_users_company_id DEFAULT '${defaultCompanyId}',
-        name NVARCHAR(200) NOT NULL,
-        email NVARCHAR(320) NOT NULL UNIQUE,
-        role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user',
-        active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1,
-        email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT 0,
-        profile_photo_url NVARCHAR(1000) NULL,
-        notification_settings NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_notification_settings DEFAULT '{}',
-        preferences NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_preferences DEFAULT '{}',
-        two_factor_enabled BIT NOT NULL CONSTRAINT DF_users_two_factor_enabled DEFAULT 0,
-        last_login_at DATETIME2 NULL,
-        failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT 0,
-        locked_until DATETIME2 NULL,
-        password_hash NVARCHAR(500) NOT NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_users_created_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_users_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id)
-      );
-    END;
+    CREATE TABLE IF NOT EXISTS sessions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      revoked_at TIMESTAMPTZ
+    );
 
-    IF COL_LENGTH('dbo.users', 'company_id') IS NULL
-      ALTER TABLE dbo.users ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_users_company_id DEFAULT '${defaultCompanyId}';
+    CREATE TABLE IF NOT EXISTS datasets (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      file_name TEXT NOT NULL,
+      file_type TEXT NOT NULL DEFAULT 'csv',
+      worksheet_name TEXT,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      row_count INTEGER NOT NULL,
+      column_count INTEGER NOT NULL,
+      headers JSONB NOT NULL,
+      preview JSONB NOT NULL,
+      records JSONB NOT NULL,
+      analysis JSONB NOT NULL
+    );
 
-    IF COL_LENGTH('dbo.users', 'role') IS NULL
-      ALTER TABLE dbo.users ADD role NVARCHAR(40) NOT NULL CONSTRAINT DF_users_role DEFAULT 'user';
+    CREATE TABLE IF NOT EXISTS dashboards (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      name TEXT NOT NULL,
+      dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+      chart_type TEXT NOT NULL DEFAULT 'bar',
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      snapshot JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'active') IS NULL
-      ALTER TABLE dbo.users ADD active BIT NOT NULL CONSTRAINT DF_users_active DEFAULT 1;
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+      title TEXT NOT NULL,
+      report_type TEXT NOT NULL DEFAULT 'pdf',
+      content JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'email_verified') IS NULL
-      ALTER TABLE dbo.users ADD email_verified BIT NOT NULL CONSTRAINT DF_users_email_verified DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS module_records (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id),
+      user_id TEXT NOT NULL REFERENCES users(id),
+      module TEXT NOT NULL,
+      record_type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      amount NUMERIC(18, 2),
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'profile_photo_url') IS NULL
-      ALTER TABLE dbo.users ADD profile_photo_url NVARCHAR(1000) NULL;
+    CREATE TABLE IF NOT EXISTS account_tokens (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      token_hash TEXT NOT NULL,
+      purpose TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ
+    );
 
-    IF COL_LENGTH('dbo.users', 'notification_settings') IS NULL
-      ALTER TABLE dbo.users ADD notification_settings NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_notification_settings DEFAULT '{}';
+    CREATE TABLE IF NOT EXISTS audit_logs (
+      id TEXT PRIMARY KEY,
+      actor_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      actor_email TEXT,
+      action TEXT NOT NULL,
+      target_type TEXT,
+      target_id TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'preferences') IS NULL
-      ALTER TABLE dbo.users ADD preferences NVARCHAR(MAX) NOT NULL CONSTRAINT DF_users_preferences DEFAULT '{}';
+    CREATE TABLE IF NOT EXISTS email_logs (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT,
+      email_type TEXT NOT NULL,
+      recipient TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      body TEXT NOT NULL DEFAULT '',
+      provider TEXT,
+      status TEXT NOT NULL,
+      error TEXT,
+      attempts INTEGER NOT NULL DEFAULT 1,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'two_factor_enabled') IS NULL
-      ALTER TABLE dbo.users ADD two_factor_enabled BIT NOT NULL CONSTRAINT DF_users_two_factor_enabled DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS invitations (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL REFERENCES companies(id),
+      email TEXT NOT NULL,
+      role TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      invited_by TEXT NOT NULL REFERENCES users(id),
+      status TEXT NOT NULL DEFAULT 'pending',
+      expires_at TIMESTAMPTZ NOT NULL,
+      accepted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
 
-    IF COL_LENGTH('dbo.users', 'last_login_at') IS NULL
-      ALTER TABLE dbo.users ADD last_login_at DATETIME2 NULL;
-
-    IF COL_LENGTH('dbo.users', 'failed_login_count') IS NULL
-      ALTER TABLE dbo.users ADD failed_login_count INT NOT NULL CONSTRAINT DF_users_failed_login_count DEFAULT 0;
-
-    IF COL_LENGTH('dbo.users', 'locked_until') IS NULL
-      ALTER TABLE dbo.users ADD locked_until DATETIME2 NULL;
-
-    IF OBJECT_ID('dbo.sessions', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.sessions (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(64) NOT NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_sessions_created_at DEFAULT SYSUTCDATETIME(),
-        expires_at DATETIME2 NOT NULL,
-        revoked_at DATETIME2 NULL,
-        CONSTRAINT FK_sessions_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_sessions_user_expires_at' AND object_id = OBJECT_ID('dbo.sessions'))
-      CREATE INDEX IX_sessions_user_expires_at ON dbo.sessions (user_id, expires_at DESC);
-
-    IF OBJECT_ID('dbo.datasets', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.datasets (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(64) NOT NULL,
-        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_datasets_company_id DEFAULT '${defaultCompanyId}',
-        file_name NVARCHAR(260) NOT NULL,
-        file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv',
-        worksheet_name NVARCHAR(260) NULL,
-        uploaded_at DATETIME2 NOT NULL CONSTRAINT DF_datasets_uploaded_at DEFAULT SYSUTCDATETIME(),
-        row_count INT NOT NULL,
-        column_count INT NOT NULL,
-        headers NVARCHAR(MAX) NOT NULL,
-        preview NVARCHAR(MAX) NOT NULL,
-        records NVARCHAR(MAX) NOT NULL,
-        analysis NVARCHAR(MAX) NOT NULL,
-        CONSTRAINT FK_datasets_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
-      );
-    END;
-
-    IF COL_LENGTH('dbo.datasets', 'company_id') IS NULL
-      ALTER TABLE dbo.datasets ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_datasets_company_id DEFAULT '${defaultCompanyId}';
-
-    IF COL_LENGTH('dbo.datasets', 'file_type') IS NULL
-      ALTER TABLE dbo.datasets ADD file_type NVARCHAR(20) NOT NULL CONSTRAINT DF_datasets_file_type DEFAULT 'csv';
-
-    IF COL_LENGTH('dbo.datasets', 'worksheet_name') IS NULL
-      ALTER TABLE dbo.datasets ADD worksheet_name NVARCHAR(260) NULL;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_datasets_user_uploaded_at' AND object_id = OBJECT_ID('dbo.datasets'))
-      CREATE INDEX IX_datasets_user_uploaded_at ON dbo.datasets (user_id, uploaded_at DESC);
-
-    IF OBJECT_ID('dbo.dashboards', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.dashboards (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(64) NOT NULL,
-        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_dashboards_company_id DEFAULT '${defaultCompanyId}',
-        name NVARCHAR(260) NOT NULL,
-        dataset_id NVARCHAR(64) NOT NULL,
-        chart_type NVARCHAR(40) NOT NULL CONSTRAINT DF_dashboards_chart_type DEFAULT 'bar',
-        config NVARCHAR(MAX) NOT NULL CONSTRAINT DF_dashboards_config DEFAULT '{}',
-        snapshot NVARCHAR(MAX) NOT NULL CONSTRAINT DF_dashboards_snapshot DEFAULT '{}',
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_dashboards_created_at DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 NOT NULL CONSTRAINT DF_dashboards_updated_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_dashboards_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE,
-        CONSTRAINT FK_dashboards_datasets FOREIGN KEY (dataset_id) REFERENCES dbo.datasets(id) ON DELETE CASCADE
-      );
-    END;
-
-    IF COL_LENGTH('dbo.dashboards', 'snapshot') IS NULL
-      ALTER TABLE dbo.dashboards ADD snapshot NVARCHAR(MAX) NOT NULL CONSTRAINT DF_dashboards_snapshot DEFAULT '{}';
-
-    IF COL_LENGTH('dbo.dashboards', 'company_id') IS NULL
-      ALTER TABLE dbo.dashboards ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_dashboards_company_id DEFAULT '${defaultCompanyId}';
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_dashboards_user_updated_at' AND object_id = OBJECT_ID('dbo.dashboards'))
-      CREATE INDEX IX_dashboards_user_updated_at ON dbo.dashboards (user_id, updated_at DESC);
-
-    IF OBJECT_ID('dbo.reports', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.reports (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(64) NOT NULL,
-        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_reports_company_id DEFAULT '${defaultCompanyId}',
-        dataset_id NVARCHAR(64) NOT NULL,
-        title NVARCHAR(260) NOT NULL,
-        report_type NVARCHAR(40) NOT NULL CONSTRAINT DF_reports_report_type DEFAULT 'pdf',
-        content NVARCHAR(MAX) NOT NULL CONSTRAINT DF_reports_content DEFAULT '{}',
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_reports_created_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_reports_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE,
-        CONSTRAINT FK_reports_datasets FOREIGN KEY (dataset_id) REFERENCES dbo.datasets(id) ON DELETE CASCADE
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_reports_user_created_at' AND object_id = OBJECT_ID('dbo.reports'))
-      CREATE INDEX IX_reports_user_created_at ON dbo.reports (user_id, created_at DESC);
-
-    IF COL_LENGTH('dbo.reports', 'company_id') IS NULL
-      ALTER TABLE dbo.reports ADD company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_reports_company_id DEFAULT '${defaultCompanyId}';
-
-    IF OBJECT_ID('dbo.module_records', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.module_records (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        company_id NVARCHAR(64) NOT NULL,
-        user_id NVARCHAR(64) NOT NULL,
-        module NVARCHAR(80) NOT NULL,
-        record_type NVARCHAR(80) NOT NULL,
-        title NVARCHAR(260) NOT NULL,
-        status NVARCHAR(80) NOT NULL CONSTRAINT DF_module_records_status DEFAULT 'open',
-        amount DECIMAL(18,2) NULL,
-        metadata NVARCHAR(MAX) NOT NULL CONSTRAINT DF_module_records_metadata DEFAULT '{}',
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_module_records_created_at DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 NOT NULL CONSTRAINT DF_module_records_updated_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_module_records_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id),
-        CONSTRAINT FK_module_records_users FOREIGN KEY (user_id) REFERENCES dbo.users(id)
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_module_records_company_module' AND object_id = OBJECT_ID('dbo.module_records'))
-      CREATE INDEX IX_module_records_company_module ON dbo.module_records (company_id, module, updated_at DESC);
-
-    IF OBJECT_ID('dbo.account_tokens', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.account_tokens (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        user_id NVARCHAR(64) NOT NULL,
-        token_hash NVARCHAR(500) NOT NULL,
-        purpose NVARCHAR(60) NOT NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_account_tokens_created_at DEFAULT SYSUTCDATETIME(),
-        expires_at DATETIME2 NOT NULL,
-        used_at DATETIME2 NULL,
-        CONSTRAINT FK_account_tokens_users FOREIGN KEY (user_id) REFERENCES dbo.users(id) ON DELETE CASCADE
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_account_tokens_user_purpose' AND object_id = OBJECT_ID('dbo.account_tokens'))
-      CREATE INDEX IX_account_tokens_user_purpose ON dbo.account_tokens (user_id, purpose, expires_at DESC);
-
-    IF OBJECT_ID('dbo.audit_logs', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.audit_logs (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        actor_user_id NVARCHAR(64) NULL,
-        actor_email NVARCHAR(320) NULL,
-        action NVARCHAR(140) NOT NULL,
-        target_type NVARCHAR(80) NULL,
-        target_id NVARCHAR(64) NULL,
-        metadata NVARCHAR(MAX) NOT NULL CONSTRAINT DF_audit_logs_metadata DEFAULT '{}',
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_audit_logs_created_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_audit_logs_users FOREIGN KEY (actor_user_id) REFERENCES dbo.users(id) ON DELETE SET NULL
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_audit_logs_created_at' AND object_id = OBJECT_ID('dbo.audit_logs'))
-      CREATE INDEX IX_audit_logs_created_at ON dbo.audit_logs (created_at DESC);
-
-    IF OBJECT_ID('dbo.email_logs', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.email_logs (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        company_id NVARCHAR(64) NOT NULL CONSTRAINT DF_email_logs_company_id DEFAULT '${defaultCompanyId}',
-        user_id NVARCHAR(64) NULL,
-        email_type NVARCHAR(80) NOT NULL,
-        recipient NVARCHAR(320) NOT NULL,
-        subject NVARCHAR(500) NOT NULL,
-        body NVARCHAR(MAX) NOT NULL CONSTRAINT DF_email_logs_body DEFAULT '',
-        provider NVARCHAR(80) NULL,
-        status NVARCHAR(40) NOT NULL,
-        error NVARCHAR(1000) NULL,
-        attempts INT NOT NULL CONSTRAINT DF_email_logs_attempts DEFAULT 1,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_email_logs_created_at DEFAULT SYSUTCDATETIME(),
-        updated_at DATETIME2 NOT NULL CONSTRAINT DF_email_logs_updated_at DEFAULT SYSUTCDATETIME()
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_email_logs_company_created_at' AND object_id = OBJECT_ID('dbo.email_logs'))
-      CREATE INDEX IX_email_logs_company_created_at ON dbo.email_logs (company_id, created_at DESC);
-
-    IF OBJECT_ID('dbo.invitations', 'U') IS NULL
-    BEGIN
-      CREATE TABLE dbo.invitations (
-        id NVARCHAR(64) NOT NULL PRIMARY KEY,
-        company_id NVARCHAR(64) NOT NULL,
-        email NVARCHAR(320) NOT NULL,
-        role NVARCHAR(40) NOT NULL,
-        token_hash NVARCHAR(500) NOT NULL,
-        invited_by NVARCHAR(64) NOT NULL,
-        status NVARCHAR(40) NOT NULL CONSTRAINT DF_invitations_status DEFAULT 'pending',
-        expires_at DATETIME2 NOT NULL,
-        accepted_at DATETIME2 NULL,
-        created_at DATETIME2 NOT NULL CONSTRAINT DF_invitations_created_at DEFAULT SYSUTCDATETIME(),
-        CONSTRAINT FK_invitations_companies FOREIGN KEY (company_id) REFERENCES dbo.companies(id),
-        CONSTRAINT FK_invitations_users FOREIGN KEY (invited_by) REFERENCES dbo.users(id)
-      );
-    END;
-
-    IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_invitations_company_created_at' AND object_id = OBJECT_ID('dbo.invitations'))
-      CREATE INDEX IX_invitations_company_created_at ON dbo.invitations (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sessions_user_expires_at ON sessions (user_id, expires_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_dashboards_user_updated_at ON dashboards (user_id, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_reports_user_created_at ON reports (user_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_module_records_company_module ON module_records (company_id, module, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_account_tokens_user_purpose ON account_tokens (user_id, purpose, expires_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_email_logs_company_created_at ON email_logs (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_invitations_company_created_at ON invitations (company_id, created_at DESC);
   `);
+
+  await pgQuery(
+    `INSERT INTO companies (id, name)
+     VALUES ($1, $2)
+     ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name;`,
+    [defaultCompanyId, defaultCompanyName]
+  );
 }
 
 export function getDatabaseRuntimeStatus() {
   return {
-    usingSqlServer,
-    hostConfigured: Boolean(sqlServerHost || process.env.SQLSERVER_CONNECTION_STRING),
-    database: usingSqlServer ? sqlServerDatabase : null,
-    connected: Boolean(connectedPool?.connected),
-    retries: sqlServerConnectRetries
+    usingPostgres,
+    hostConfigured: Boolean(process.env.DATABASE_URL || process.env.PGHOST),
+    database: usingPostgres ? process.env.PGDATABASE || databaseFromUrl(process.env.DATABASE_URL) : null,
+    connected,
+    retries: postgresConnectRetries
   };
 }
 
 export async function createUser(user) {
-  if (!usingSqlServer) {
+  const savedUser = {
+    id: user.id,
+    companyId: user.companyId ?? defaultCompanyId,
+    name: user.name,
+    email: user.email.toLowerCase(),
+    role: roleForUser(user.email, user.role),
+    active: user.active ?? true,
+    emailVerified: user.emailVerified ?? user.email?.toLowerCase() === ownerEmail,
+    profilePhotoUrl: user.profilePhotoUrl ?? '',
+    notificationSettings: user.notificationSettings ?? {},
+    preferences: user.preferences ?? {},
+    twoFactorEnabled: user.twoFactorEnabled ?? false,
+    failedLoginCount: 0,
+    lockedUntil: null,
+    passwordHash: user.passwordHash,
+    createdAt: new Date().toISOString()
+  };
+
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const savedUser = {
-      id: user.id,
-      companyId: user.companyId ?? defaultCompanyId,
-      name: user.name,
-      email: user.email.toLowerCase(),
-      role: roleForUser(user.email, user.role),
-      active: user.active ?? true,
-      emailVerified: user.emailVerified ?? user.email?.toLowerCase() === ownerEmail,
-      profilePhotoUrl: user.profilePhotoUrl ?? '',
-      notificationSettings: user.notificationSettings ?? {},
-      preferences: user.preferences ?? {},
-      twoFactorEnabled: user.twoFactorEnabled ?? false,
-      failedLoginCount: 0,
-      lockedUntil: null,
-      passwordHash: user.passwordHash,
-      createdAt: new Date().toISOString()
-    };
     store.users = [savedUser, ...store.users.filter((entry) => entry.email !== savedUser.email)];
     await saveDevStore(store);
     return rowToUser(savedUser);
   }
 
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), user.id)
-    .input('companyId', sql.NVarChar(64), user.companyId ?? defaultCompanyId)
-    .input('name', sql.NVarChar(200), user.name)
-    .input('email', sql.NVarChar(320), user.email.toLowerCase())
-    .input('role', sql.NVarChar(40), roleForUser(user.email, user.role))
-    .input('active', sql.Bit, user.active ?? true)
-    .input('emailVerified', sql.Bit, user.emailVerified ?? user.email?.toLowerCase() === ownerEmail)
-    .input('profilePhotoUrl', sql.NVarChar(1000), user.profilePhotoUrl ?? null)
-    .input('notificationSettings', sql.NVarChar(sql.MAX), JSON.stringify(user.notificationSettings ?? {}))
-    .input('preferences', sql.NVarChar(sql.MAX), JSON.stringify(user.preferences ?? {}))
-    .input('twoFactorEnabled', sql.Bit, user.twoFactorEnabled ?? false)
-    .input('passwordHash', sql.NVarChar(500), user.passwordHash)
-    .query(`
-      INSERT INTO dbo.users (
-        id, company_id, name, email, role, active, email_verified, profile_photo_url,
-        notification_settings, preferences, two_factor_enabled, password_hash
-      )
-      OUTPUT inserted.*
-      VALUES (
-        @id, @companyId, @name, @email, @role, @active, @emailVerified, @profilePhotoUrl,
-        @notificationSettings, @preferences, @twoFactorEnabled, @passwordHash
-      );
-    `);
-  return rowToUser(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO users (
+       id, company_id, name, email, role, active, email_verified, profile_photo_url,
+       notification_settings, preferences, two_factor_enabled, password_hash
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (email) DO UPDATE SET
+       name = EXCLUDED.name,
+       role = EXCLUDED.role,
+       active = EXCLUDED.active,
+       email_verified = EXCLUDED.email_verified,
+       profile_photo_url = EXCLUDED.profile_photo_url,
+       notification_settings = EXCLUDED.notification_settings,
+       preferences = EXCLUDED.preferences,
+       two_factor_enabled = EXCLUDED.two_factor_enabled,
+       password_hash = EXCLUDED.password_hash
+     RETURNING *;`,
+    [
+      savedUser.id,
+      savedUser.companyId,
+      savedUser.name,
+      savedUser.email,
+      savedUser.role,
+      savedUser.active,
+      savedUser.emailVerified,
+      savedUser.profilePhotoUrl,
+      JSON.stringify(savedUser.notificationSettings),
+      JSON.stringify(savedUser.preferences),
+      savedUser.twoFactorEnabled,
+      savedUser.passwordHash
+    ]
+  );
+  return rowToUser(result.rows[0]);
 }
 
 export async function findUserByEmail(email) {
-  if (!usingSqlServer) {
+  const normalizedEmail = String(email || '').toLowerCase();
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const user = store.users.find((entry) => entry.email === email.toLowerCase());
+    const user = store.users.find((entry) => entry.email === normalizedEmail);
     return user ? rowToUser(user, true) : undefined;
   }
 
-  const db = await getPool();
-  const result = await db.request()
-    .input('email', sql.NVarChar(320), email.toLowerCase())
-    .query('SELECT TOP (1) * FROM dbo.users WHERE email = @email;');
-  return result.recordset[0] ? rowToUser(result.recordset[0], true) : undefined;
+  const result = await pgQuery('SELECT * FROM users WHERE email = $1 LIMIT 1;', [normalizedEmail]);
+  return result.rows[0] ? rowToUser(result.rows[0], true) : undefined;
 }
 
 export async function findUserById(id) {
-  if (!usingSqlServer && id === devUser.id) {
-    return devUser;
+  if (!usingPostgres && id === devUser.id) {
+    return rowToUser(devUser);
   }
-
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     const user = store.users.find((entry) => entry.id === id);
-    return user ? rowToUser(user) : undefined;
+    return user ? rowToUser(user, true) : undefined;
   }
 
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .query('SELECT TOP (1) * FROM dbo.users WHERE id = @id;');
-  return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
+  const result = await pgQuery('SELECT * FROM users WHERE id = $1 LIMIT 1;', [id]);
+  return result.rows[0] ? rowToUser(result.rows[0], true) : undefined;
 }
 
 export async function listUsers(requestingUser) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return store.users
-      .filter((user) => !requestingUser || isOwner(requestingUser) || user.companyId === getCompanyId(requestingUser))
-      .map((user) => rowToUser(user))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+      .filter((user) => isOwner(requestingUser) || user.companyId === getCompanyId(requestingUser))
+      .map((user) => rowToUser(user));
   }
 
-  const db = await getPool();
-  const request = db.request();
-  const companyFilter = requestingUser && !isOwner(requestingUser) ? 'WHERE company_id = @companyId' : '';
-  if (companyFilter) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(requestingUser));
-  }
-  const result = await request.query(`
-    SELECT id, company_id, name, email, role, active, email_verified, profile_photo_url, notification_settings,
-      preferences, two_factor_enabled, last_login_at, failed_login_count, locked_until, created_at
-    FROM dbo.users
-    ${companyFilter}
-    ORDER BY created_at DESC;
-  `);
-  return result.recordset.map(rowToUser);
+  const params = [];
+  const where = isOwner(requestingUser) ? '' : 'WHERE company_id = $1';
+  if (!isOwner(requestingUser)) params.push(getCompanyId(requestingUser));
+  const result = await pgQuery(`SELECT * FROM users ${where} ORDER BY created_at DESC;`, params);
+  return result.rows.map((row) => rowToUser(row));
 }
 
 export async function updateUser(id, updates) {
-  const normalizedUpdates = {
+  const existing = await findUserById(id);
+  if (!existing) return undefined;
+
+  const normalizedUpdates = protectOwnerUpdates(existing, {
     ...(updates.name != null ? { name: String(updates.name).trim() } : {}),
     ...(updates.role != null ? { role: normalizeRole(updates.role) } : {}),
     ...(updates.active != null ? { active: Boolean(updates.active) } : {}),
@@ -504,367 +385,245 @@ export async function updateUser(id, updates) {
     ...(updates.notificationSettings != null ? { notificationSettings: updates.notificationSettings } : {}),
     ...(updates.preferences != null ? { preferences: updates.preferences } : {}),
     ...(updates.twoFactorEnabled != null ? { twoFactorEnabled: Boolean(updates.twoFactorEnabled) } : {})
-  };
+  });
 
-  if (!usingSqlServer) {
+  const next = { ...existing, ...normalizedUpdates };
+  if (!usingPostgres) {
     const store = await loadDevStore();
     let updated;
     store.users = store.users.map((user) => {
-      if (user.id !== id) {
-        return user;
-      }
-      updated = { ...user, ...protectOwnerUpdates(user, normalizedUpdates) };
+      if (user.id !== id) return user;
+      updated = { ...user, ...next };
       return updated;
     });
     await saveDevStore(store);
     return updated ? rowToUser(updated) : undefined;
   }
 
-  const existing = await findUserById(id);
-  if (!existing) {
-    return undefined;
-  }
-
-  const next = {
-    ...existing,
-    ...protectOwnerUpdates(existing, normalizedUpdates)
-  };
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('name', sql.NVarChar(200), next.name)
-    .input('companyId', sql.NVarChar(64), next.companyId ?? defaultCompanyId)
-    .input('role', sql.NVarChar(40), next.role)
-    .input('active', sql.Bit, next.active)
-    .input('emailVerified', sql.Bit, next.emailVerified)
-    .input('profilePhotoUrl', sql.NVarChar(1000), next.profilePhotoUrl || null)
-    .input('notificationSettings', sql.NVarChar(sql.MAX), JSON.stringify(next.notificationSettings ?? {}))
-    .input('preferences', sql.NVarChar(sql.MAX), JSON.stringify(next.preferences ?? {}))
-    .input('twoFactorEnabled', sql.Bit, next.twoFactorEnabled)
-    .query(`
-      UPDATE dbo.users
-      SET name = @name,
-          company_id = @companyId,
-          role = @role,
-          active = @active,
-          email_verified = @emailVerified,
-          profile_photo_url = @profilePhotoUrl,
-          notification_settings = @notificationSettings,
-          preferences = @preferences,
-          two_factor_enabled = @twoFactorEnabled
-      OUTPUT inserted.*
-      WHERE id = @id;
-    `);
-  return result.recordset[0] ? rowToUser(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `UPDATE users SET
+       name = $2,
+       company_id = $3,
+       role = $4,
+       active = $5,
+       email_verified = $6,
+       profile_photo_url = $7,
+       notification_settings = $8,
+       preferences = $9,
+       two_factor_enabled = $10
+     WHERE id = $1
+     RETURNING *;`,
+    [
+      id,
+      next.name,
+      next.companyId ?? defaultCompanyId,
+      next.role,
+      next.active,
+      next.emailVerified,
+      next.profilePhotoUrl || null,
+      JSON.stringify(next.notificationSettings ?? {}),
+      JSON.stringify(next.preferences ?? {}),
+      next.twoFactorEnabled
+    ]
+  );
+  return result.rows[0] ? rowToUser(result.rows[0]) : undefined;
 }
 
 export async function deleteUser(id) {
   const user = await findUserById(id);
-  if (isOwner(user)) {
-    throw new Error('The permanent owner account cannot be deleted.');
-  }
+  if (isOwner(user)) throw new Error('The permanent owner account cannot be deleted.');
 
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.users = store.users.filter((user) => user.id !== id);
+    store.users = store.users.filter((entry) => entry.id !== id);
     store.sessions = store.sessions.filter((session) => session.userId !== id);
     store.datasets = store.datasets.filter((dataset) => dataset.userId !== id);
-    const datasetIds = new Set(store.datasets.map((dataset) => dataset.id));
-    store.dashboards = store.dashboards.filter((dashboard) => dashboard.userId !== id && datasetIds.has(dashboard.datasetId));
-    store.reports = store.reports.filter((report) => report.userId !== id && datasetIds.has(report.datasetId));
+    store.dashboards = store.dashboards.filter((dashboard) => dashboard.userId !== id);
+    store.reports = store.reports.filter((report) => report.userId !== id);
+    store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.userId !== id);
     await saveDevStore(store);
     return;
   }
 
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .query('DELETE FROM dbo.users WHERE id = @id;');
+  await pgQuery('DELETE FROM users WHERE id = $1;', [id]);
 }
 
 export async function setUserRoleByEmail(email, role) {
-  const normalizedEmail = email.toLowerCase();
+  const normalizedEmail = String(email || '').toLowerCase();
   const normalizedRole = roleForUser(normalizedEmail, role);
-
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.users = store.users.map((user) =>
-      user.email === normalizedEmail ? { ...user, role: normalizedRole } : user
-    );
+    store.users = store.users.map((user) => user.email === normalizedEmail ? { ...user, role: normalizedRole } : user);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('email', sql.NVarChar(320), normalizedEmail)
-    .input('role', sql.NVarChar(40), normalizedRole)
-    .query('UPDATE dbo.users SET role = @role WHERE email = @email;');
+  await pgQuery('UPDATE users SET role = $1 WHERE email = $2;', [normalizedRole, normalizedEmail]);
 }
 
 export async function promoteAdminEmails(emails) {
-  await Promise.all(emails.map((email) => setUserRoleByEmail(email, 'admin')));
+  await Promise.all(emails.map((email) => setUserRoleByEmail(email, email === ownerEmail ? 'owner' : 'admin')));
 }
 
 export async function ensureOwnerAccount() {
   const existing = await findUserByEmail(ownerEmail);
-  if (!existing) {
-    return;
+  if (existing) {
+    await updateUser(existing.id, { role: 'owner', active: true, emailVerified: true });
   }
-
-  await updateUser(existing.id, { role: 'owner', active: true, emailVerified: true });
 }
 
 export async function removeDemoAccounts() {
-  const demoEmails = ['admin@businessai.com'];
-
-  if (!usingSqlServer) {
+  const demoEmails = ['admin@businessai.com', 'demo@businessai.com', 'local@example.com'];
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const demoIds = new Set(store.users
-      .filter((user) => demoEmails.includes(user.email) || String(user.email).includes('analyst+'))
-      .map((user) => user.id));
-    store.users = store.users.filter((user) => !demoIds.has(user.id));
-    store.sessions = store.sessions.filter((session) => !demoIds.has(session.userId));
+    store.users = store.users.filter((user) => !demoEmails.includes(user.email) && !user.email.startsWith('analyst+'));
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await Promise.all(demoEmails.map((email) =>
-    db.request()
-      .input('email', sql.NVarChar(320), email)
-      .query('DELETE FROM dbo.users WHERE email = @email;')
-  ));
-  await db.request().query("DELETE FROM dbo.users WHERE email LIKE 'analyst+%@businessai.com';");
+  await pgQuery("DELETE FROM users WHERE email = ANY($1::text[]) OR email LIKE 'analyst+%@businessai.com';", [demoEmails]);
 }
 
 export async function createSession(session) {
-  if (!usingSqlServer) {
+  const saved = {
+    id: session.id,
+    userId: session.userId,
+    expiresAt: session.expiresAt,
+    createdAt: new Date().toISOString(),
+    revokedAt: null
+  };
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.sessions = [
-      {
-        id: session.id,
-        userId: session.userId,
-        createdAt: new Date().toISOString(),
-        expiresAt: session.expiresAt,
-        revokedAt: null
-      },
-      ...store.sessions.filter((entry) => entry.id !== session.id)
-    ].slice(0, 100);
+    store.sessions = [saved, ...store.sessions.filter((entry) => entry.id !== saved.id)];
     await saveDevStore(store);
-    return store.sessions[0];
+    return saved;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), session.id)
-    .input('userId', sql.NVarChar(64), session.userId)
-    .input('expiresAt', sql.DateTime2, new Date(session.expiresAt))
-    .query(`
-      INSERT INTO dbo.sessions (id, user_id, expires_at)
-      OUTPUT inserted.id, inserted.user_id, inserted.created_at, inserted.expires_at, inserted.revoked_at
-      VALUES (@id, @userId, @expiresAt);
-    `);
-  return rowToSession(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO sessions (id, user_id, expires_at)
+     VALUES ($1, $2, $3)
+     RETURNING *;`,
+    [saved.id, saved.userId, saved.expiresAt]
+  );
+  return rowToSession(result.rows[0]);
 }
 
 export async function findSessionById(id, userId) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const session = store.sessions.find((entry) => entry.id === id && entry.userId === userId);
-    if (!session || session.revokedAt || new Date(session.expiresAt).getTime() <= Date.now()) {
-      return undefined;
-    }
-    return session;
+    const session = store.sessions.find((entry) =>
+      entry.id === id &&
+      entry.userId === userId &&
+      !entry.revokedAt &&
+      new Date(entry.expiresAt).getTime() > Date.now()
+    );
+    return session ? rowToSession(session) : undefined;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('userId', sql.NVarChar(64), userId)
-    .query(`
-      SELECT TOP (1) id, user_id, created_at, expires_at, revoked_at
-      FROM dbo.sessions
-      WHERE id = @id
-        AND user_id = @userId
-        AND revoked_at IS NULL
-        AND expires_at > SYSUTCDATETIME();
-    `);
-  return result.recordset[0] ? rowToSession(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `SELECT * FROM sessions
+     WHERE id = $1 AND user_id = $2 AND revoked_at IS NULL AND expires_at > NOW()
+     LIMIT 1;`,
+    [id, userId]
+  );
+  return result.rows[0] ? rowToSession(result.rows[0]) : undefined;
 }
 
 export async function listSessions(userId) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    return store.sessions
-      .filter((entry) => entry.userId === userId)
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 20);
+    return store.sessions.filter((session) => session.userId === userId).slice(0, 20).map(rowToSession);
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('userId', sql.NVarChar(64), userId)
-    .query(`
-      SELECT TOP (20) id, user_id, created_at, expires_at, revoked_at
-      FROM dbo.sessions
-      WHERE user_id = @userId
-      ORDER BY created_at DESC;
-    `);
-  return result.recordset.map(rowToSession);
+  const result = await pgQuery(
+    'SELECT * FROM sessions WHERE user_id = $1 ORDER BY expires_at DESC LIMIT 20;',
+    [userId]
+  );
+  return result.rows.map(rowToSession);
 }
 
 export async function revokeSession(id, userId) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.sessions = store.sessions.map((entry) =>
-      entry.id === id && entry.userId === userId
-        ? { ...entry, revokedAt: new Date().toISOString() }
-        : entry
-    );
+    store.sessions = store.sessions.map((session) => session.id === id && session.userId === userId ? { ...session, revokedAt: new Date().toISOString() } : session);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('userId', sql.NVarChar(64), userId)
-    .query('UPDATE dbo.sessions SET revoked_at = SYSUTCDATETIME() WHERE id = @id AND user_id = @userId;');
+  await pgQuery('UPDATE sessions SET revoked_at = NOW() WHERE id = $1 AND user_id = $2;', [id, userId]);
 }
 
 export async function revokeUserSessions(userId) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const revokedAt = new Date().toISOString();
-    store.sessions = store.sessions.map((entry) =>
-      entry.userId === userId && !entry.revokedAt ? { ...entry, revokedAt } : entry
-    );
+    store.sessions = store.sessions.map((session) => session.userId === userId ? { ...session, revokedAt: new Date().toISOString() } : session);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('userId', sql.NVarChar(64), userId)
-    .query('UPDATE dbo.sessions SET revoked_at = SYSUTCDATETIME() WHERE user_id = @userId AND revoked_at IS NULL;');
+  await pgQuery('UPDATE sessions SET revoked_at = NOW() WHERE user_id = $1 AND revoked_at IS NULL;', [userId]);
 }
 
 export async function updateUserPassword(userId, passwordHash) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.users = store.users.map((user) =>
-      user.id === userId ? { ...user, passwordHash, failedLoginCount: 0, lockedUntil: null } : user
-    );
+    store.users = store.users.map((user) => user.id === userId ? { ...user, passwordHash } : user);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('userId', sql.NVarChar(64), userId)
-    .input('passwordHash', sql.NVarChar(500), passwordHash)
-    .query(`
-      UPDATE dbo.users
-      SET password_hash = @passwordHash,
-          failed_login_count = 0,
-          locked_until = NULL
-      WHERE id = @userId;
-    `);
+  await pgQuery('UPDATE users SET password_hash = $2 WHERE id = $1;', [userId, passwordHash]);
 }
 
 export async function recordLoginSuccess(userId) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.users = store.users.map((user) =>
-      user.id === userId
-        ? { ...user, failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date().toISOString() }
-        : user
-    );
+    store.users = store.users.map((user) => user.id === userId ? { ...user, failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date().toISOString() } : user);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('userId', sql.NVarChar(64), userId)
-    .query(`
-      UPDATE dbo.users
-      SET failed_login_count = 0,
-          locked_until = NULL,
-          last_login_at = SYSUTCDATETIME()
-      WHERE id = @userId;
-    `);
+  await pgQuery(
+    'UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1;',
+    [userId]
+  );
 }
 
 export async function recordLoginFailure(email) {
-  const normalizedEmail = email.toLowerCase();
-  if (!usingSqlServer) {
+  const normalizedEmail = String(email || '').toLowerCase();
+  if (!usingPostgres) {
     const store = await loadDevStore();
     store.users = store.users.map((user) => {
-      if (user.email !== normalizedEmail) {
-        return user;
-      }
-      const failedLoginCount = Number(user.failedLoginCount ?? 0) + 1;
+      if (user.email !== normalizedEmail) return user;
+      const count = (user.failedLoginCount ?? 0) + 1;
       return {
         ...user,
-        failedLoginCount,
-        lockedUntil: failedLoginCount >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : user.lockedUntil
+        failedLoginCount: count,
+        lockedUntil: count >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : user.lockedUntil
       };
     });
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('email', sql.NVarChar(320), normalizedEmail)
-    .query(`
-      UPDATE dbo.users
-      SET failed_login_count = failed_login_count + 1,
-          locked_until = CASE
-            WHEN failed_login_count + 1 >= 5 THEN DATEADD(minute, 15, SYSUTCDATETIME())
-            ELSE locked_until
-          END
-      WHERE email = @email;
-    `);
+  await pgQuery(
+    `UPDATE users
+     SET failed_login_count = failed_login_count + 1,
+         locked_until = CASE WHEN failed_login_count + 1 >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
+     WHERE email = $1;`,
+    [normalizedEmail]
+  );
 }
 
 export async function createAccountToken(token) {
-  if (!usingSqlServer) {
+  const saved = { ...token, createdAt: new Date().toISOString(), usedAt: null };
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.accountTokens = [
-      {
-        id: token.id,
-        userId: token.userId,
-        tokenHash: token.tokenHash,
-        purpose: token.purpose,
-        createdAt: new Date().toISOString(),
-        expiresAt: token.expiresAt,
-        usedAt: null
-      },
-      ...(store.accountTokens ?? []).filter((entry) => entry.id !== token.id)
-    ].slice(0, 200);
+    store.accountTokens = [saved, ...(store.accountTokens ?? [])].slice(0, 500);
     await saveDevStore(store);
-    return token;
+    return saved;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), token.id)
-    .input('userId', sql.NVarChar(64), token.userId)
-    .input('tokenHash', sql.NVarChar(500), token.tokenHash)
-    .input('purpose', sql.NVarChar(60), token.purpose)
-    .input('expiresAt', sql.DateTime2, new Date(token.expiresAt))
-    .query(`
-      INSERT INTO dbo.account_tokens (id, user_id, token_hash, purpose, expires_at)
-      VALUES (@id, @userId, @tokenHash, @purpose, @expiresAt);
-    `);
-  return token;
+  const result = await pgQuery(
+    `INSERT INTO account_tokens (id, user_id, token_hash, purpose, expires_at)
+     VALUES ($1,$2,$3,$4,$5)
+     RETURNING *;`,
+    [token.id, token.userId, token.tokenHash, token.purpose, token.expiresAt]
+  );
+  return rowToAccountToken(result.rows[0]);
 }
 
 export async function findAccountToken(tokenHash, purpose) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     const token = (store.accountTokens ?? []).find((entry) =>
       entry.tokenHash === tokenHash &&
@@ -874,531 +633,424 @@ export async function findAccountToken(tokenHash, purpose) {
     );
     return token ? rowToAccountToken(token) : undefined;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('tokenHash', sql.NVarChar(500), tokenHash)
-    .input('purpose', sql.NVarChar(60), purpose)
-    .query(`
-      SELECT TOP (1) *
-      FROM dbo.account_tokens
-      WHERE token_hash = @tokenHash
-        AND purpose = @purpose
-        AND used_at IS NULL
-        AND expires_at > SYSUTCDATETIME();
-    `);
-  return result.recordset[0] ? rowToAccountToken(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `SELECT * FROM account_tokens
+     WHERE token_hash = $1 AND purpose = $2 AND used_at IS NULL AND expires_at > NOW()
+     LIMIT 1;`,
+    [tokenHash, purpose]
+  );
+  return result.rows[0] ? rowToAccountToken(result.rows[0]) : undefined;
 }
 
 export async function markAccountTokenUsed(id) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.accountTokens = (store.accountTokens ?? []).map((token) =>
-      token.id === id ? { ...token, usedAt: new Date().toISOString() } : token
-    );
+    store.accountTokens = (store.accountTokens ?? []).map((token) => token.id === id ? { ...token, usedAt: new Date().toISOString() } : token);
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .query('UPDATE dbo.account_tokens SET used_at = SYSUTCDATETIME() WHERE id = @id;');
+  await pgQuery('UPDATE account_tokens SET used_at = NOW() WHERE id = $1;', [id]);
 }
 
 export async function saveAuditLog(entry) {
-  if (!usingSqlServer) {
+  const saved = {
+    id: entry.id,
+    actorUserId: entry.actorUserId ?? null,
+    actorEmail: entry.actorEmail ?? null,
+    action: entry.action,
+    targetType: entry.targetType ?? null,
+    targetId: entry.targetId ?? null,
+    metadata: entry.metadata ?? {},
+    createdAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    store.auditLogs = [
-      {
-        id: entry.id,
-        actorUserId: entry.actorUserId ?? null,
-        actorEmail: entry.actorEmail ?? null,
-        action: entry.action,
-        targetType: entry.targetType ?? null,
-        targetId: entry.targetId ?? null,
-        metadata: entry.metadata ?? {},
-        createdAt: new Date().toISOString()
-      },
-      ...(store.auditLogs ?? [])
-    ].slice(0, 300);
+    store.auditLogs = [saved, ...(store.auditLogs ?? [])].slice(0, 500);
     await saveDevStore(store);
-    return;
+    return saved;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), entry.id)
-    .input('actorUserId', sql.NVarChar(64), entry.actorUserId ?? null)
-    .input('actorEmail', sql.NVarChar(320), entry.actorEmail ?? null)
-    .input('action', sql.NVarChar(140), entry.action)
-    .input('targetType', sql.NVarChar(80), entry.targetType ?? null)
-    .input('targetId', sql.NVarChar(64), entry.targetId ?? null)
-    .input('metadata', sql.NVarChar(sql.MAX), JSON.stringify(entry.metadata ?? {}))
-    .query(`
-      INSERT INTO dbo.audit_logs (id, actor_user_id, actor_email, action, target_type, target_id, metadata)
-      VALUES (@id, @actorUserId, @actorEmail, @action, @targetType, @targetId, @metadata);
-    `);
+  await pgQuery(
+    `INSERT INTO audit_logs (id, actor_user_id, actor_email, action, target_type, target_id, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7);`,
+    [saved.id, saved.actorUserId, saved.actorEmail, saved.action, saved.targetType, saved.targetId, JSON.stringify(saved.metadata)]
+  );
+  return saved;
 }
 
 export async function listAuditLogs() {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    return (store.auditLogs ?? []).slice(0, 100);
+    return (store.auditLogs ?? []).slice(0, 100).map(rowToAuditLog);
   }
-
-  const db = await getPool();
-  const result = await db.request().query(`
-    SELECT TOP (100) *
-    FROM dbo.audit_logs
-    ORDER BY created_at DESC;
-  `);
-  return result.recordset.map(rowToAuditLog);
+  const result = await pgQuery('SELECT * FROM audit_logs ORDER BY created_at DESC LIMIT 100;');
+  return result.rows.map(rowToAuditLog);
 }
 
 export async function saveDataset(dataset) {
-  if (!usingSqlServer) {
-    const store = await loadDevStore();
-    store.datasets = [dataset, ...store.datasets.filter((entry) => entry.id !== dataset.id)].slice(0, 50);
-    await saveDevStore(store);
-    return;
-  }
-
   const analysis = {
     chartColumn: dataset.chartColumn,
     labelColumn: dataset.labelColumn,
     chart: dataset.chart,
     numericSummary: dataset.numericSummary,
     insights: dataset.insights,
-    fileType: dataset.fileType ?? 'csv',
-    worksheetName: dataset.worksheetName ?? null,
-    worksheets: dataset.worksheets ?? []
+    fileType: dataset.fileType,
+    worksheetName: dataset.worksheetName,
+    worksheets: dataset.worksheets
   };
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), dataset.id)
-    .input('userId', sql.NVarChar(64), dataset.userId)
-    .input('companyId', sql.NVarChar(64), dataset.companyId ?? defaultCompanyId)
-    .input('fileName', sql.NVarChar(260), dataset.fileName)
-    .input('fileType', sql.NVarChar(20), dataset.fileType ?? 'csv')
-    .input('worksheetName', sql.NVarChar(260), dataset.worksheetName ?? null)
-    .input('uploadedAt', sql.DateTime2, new Date(dataset.uploadedAt))
-    .input('rows', sql.Int, dataset.rows)
-    .input('columns', sql.Int, dataset.columns)
-    .input('headers', sql.NVarChar(sql.MAX), JSON.stringify(dataset.headers))
-    .input('preview', sql.NVarChar(sql.MAX), JSON.stringify(dataset.preview))
-    .input('records', sql.NVarChar(sql.MAX), JSON.stringify(dataset.records))
-    .input('analysis', sql.NVarChar(sql.MAX), JSON.stringify(analysis))
-    .query(`
-      IF EXISTS (SELECT 1 FROM dbo.datasets WHERE id = @id)
-      BEGIN
-        UPDATE dbo.datasets
-        SET user_id = @userId,
-            company_id = @companyId,
-            file_name = @fileName,
-            file_type = @fileType,
-            worksheet_name = @worksheetName,
-            uploaded_at = @uploadedAt,
-            row_count = @rows,
-            column_count = @columns,
-            headers = @headers,
-            preview = @preview,
-            records = @records,
-            analysis = @analysis
-        WHERE id = @id;
-      END
-      ELSE
-      BEGIN
-        INSERT INTO dbo.datasets (
-          id, user_id, company_id, file_name, file_type, worksheet_name, uploaded_at, row_count, column_count,
-          headers, preview, records, analysis
-        )
-        VALUES (
-          @id, @userId, @companyId, @fileName, @fileType, @worksheetName, @uploadedAt, @rows, @columns,
-          @headers, @preview, @records, @analysis
-        );
-      END;
-    `);
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.datasets = [dataset, ...store.datasets.filter((entry) => entry.id !== dataset.id)].slice(0, 50);
+    await saveDevStore(store);
+    return dataset;
+  }
+
+  await pgQuery(
+    `INSERT INTO datasets (
+       id, user_id, company_id, file_name, file_type, worksheet_name, uploaded_at,
+       row_count, column_count, headers, preview, records, analysis
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (id) DO UPDATE SET
+       file_name = EXCLUDED.file_name,
+       file_type = EXCLUDED.file_type,
+       worksheet_name = EXCLUDED.worksheet_name,
+       uploaded_at = EXCLUDED.uploaded_at,
+       row_count = EXCLUDED.row_count,
+       column_count = EXCLUDED.column_count,
+       headers = EXCLUDED.headers,
+       preview = EXCLUDED.preview,
+       records = EXCLUDED.records,
+       analysis = EXCLUDED.analysis;`,
+    [
+      dataset.id,
+      dataset.userId,
+      dataset.companyId ?? defaultCompanyId,
+      dataset.fileName,
+      dataset.fileType ?? 'csv',
+      dataset.worksheetName ?? null,
+      dataset.uploadedAt,
+      dataset.rows,
+      dataset.columns,
+      JSON.stringify(dataset.headers),
+      JSON.stringify(dataset.preview),
+      JSON.stringify(dataset.records),
+      JSON.stringify(analysis)
+    ]
+  );
+  return dataset;
 }
 
 export async function listDatasets(user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return store.datasets
-      .filter((dataset) => canAccessCompanyRecord(user, dataset))
-      .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime())
-      .slice(0, 50);
+      .filter((dataset) => isOwner(user) || dataset.companyId === getCompanyId(user))
+      .slice(0, 50)
+      .map(rowToDataset);
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const filter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`SELECT TOP (50) * FROM dbo.datasets ${filter} ORDER BY uploaded_at DESC;`);
-  return result.recordset.map(rowToDataset);
+  const params = [];
+  const where = isOwner(user) ? '' : 'WHERE company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`SELECT * FROM datasets ${where} ORDER BY uploaded_at DESC LIMIT 50;`, params);
+  return result.rows.map(rowToDataset);
 }
 
 export async function getDataset(id, user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    return store.datasets.find((dataset) => dataset.id === id && canAccessCompanyRecord(user, dataset));
+    const dataset = store.datasets.find((entry) => entry.id === id && (isOwner(user) || entry.companyId === getCompanyId(user)));
+    return dataset ? rowToDataset(dataset) : undefined;
   }
-
-  const db = await getPool();
-  const request = db.request().input('id', sql.NVarChar(64), id);
-  const filter = isOwner(user) ? 'id = @id' : 'id = @id AND company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`SELECT TOP (1) * FROM dbo.datasets WHERE ${filter};`);
-  return result.recordset[0] ? rowToDataset(result.recordset[0]) : undefined;
+  const params = [id];
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = $2';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 ${companyFilter} LIMIT 1;`, params);
+  return result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
 }
 
 export async function saveDashboard(dashboard) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const now = new Date().toISOString();
-    const savedDashboard = {
-        createdAt: dashboard.createdAt ?? now,
-        updatedAt: now,
-        ...dashboard
-    };
-    store.dashboards = [
-      savedDashboard,
-      ...store.dashboards.filter((entry) => entry.id !== dashboard.id)
-    ].slice(0, 50);
+    const saved = { ...dashboard, createdAt: dashboard.createdAt ?? new Date().toISOString(), updatedAt: new Date().toISOString() };
+    store.dashboards = [saved, ...store.dashboards.filter((entry) => entry.id !== saved.id)].slice(0, 100);
     await saveDevStore(store);
-    const dataset = store.datasets.find((entry) => entry.id === savedDashboard.datasetId);
-    return {
-      ...savedDashboard,
-      datasetName: dataset?.fileName ?? 'Unknown dataset'
-    };
+    return rowToDashboard({ ...saved, dataset_name: saved.datasetName });
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), dashboard.id)
-    .input('userId', sql.NVarChar(64), dashboard.userId)
-    .input('companyId', sql.NVarChar(64), dashboard.companyId ?? defaultCompanyId)
-    .input('name', sql.NVarChar(260), dashboard.name)
-    .input('datasetId', sql.NVarChar(64), dashboard.datasetId)
-    .input('chartType', sql.NVarChar(40), dashboard.chartType)
-    .input('config', sql.NVarChar(sql.MAX), JSON.stringify(dashboard.config ?? {}))
-    .input('snapshot', sql.NVarChar(sql.MAX), JSON.stringify(dashboard.snapshot ?? {}))
-    .query(`
-      IF EXISTS (SELECT 1 FROM dbo.dashboards WHERE id = @id)
-      BEGIN
-        UPDATE dbo.dashboards
-        SET user_id = @userId,
-            company_id = @companyId,
-            name = @name,
-            dataset_id = @datasetId,
-            chart_type = @chartType,
-            config = @config,
-            snapshot = @snapshot,
-            updated_at = SYSUTCDATETIME()
-        WHERE id = @id;
-      END
-      ELSE
-      BEGIN
-        INSERT INTO dbo.dashboards (id, user_id, company_id, name, dataset_id, chart_type, config, snapshot)
-        VALUES (@id, @userId, @companyId, @name, @datasetId, @chartType, @config, @snapshot);
-      END;
-    `);
-
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), dashboard.id)
-    .input('userId', sql.NVarChar(64), dashboard.userId)
-    .input('companyId', sql.NVarChar(64), dashboard.companyId ?? defaultCompanyId)
-    .query(`
-      SELECT TOP (1)
-        dashboards.*,
-        datasets.file_name AS dataset_name
-      FROM dbo.dashboards AS dashboards
-      INNER JOIN dbo.datasets AS datasets ON datasets.id = dashboards.dataset_id
-      WHERE dashboards.id = @id
-        AND dashboards.user_id = @userId
-        AND dashboards.company_id = @companyId;
-    `);
-  return rowToDashboard(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO dashboards (id, user_id, company_id, name, dataset_id, chart_type, config, snapshot)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       chart_type = EXCLUDED.chart_type,
+       config = EXCLUDED.config,
+       snapshot = EXCLUDED.snapshot,
+       updated_at = NOW()
+     RETURNING *;`,
+    [
+      dashboard.id,
+      dashboard.userId,
+      dashboard.companyId ?? defaultCompanyId,
+      dashboard.name,
+      dashboard.datasetId,
+      dashboard.chartType,
+      JSON.stringify(dashboard.config ?? {}),
+      JSON.stringify(dashboard.snapshot ?? {})
+    ]
+  );
+  const dashboardId = result.rows[0].id;
+  const joined = await pgQuery(
+    `SELECT dashboards.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
+     FROM dashboards
+     INNER JOIN datasets ON datasets.id = dashboards.dataset_id
+     INNER JOIN users ON users.id = dashboards.user_id
+     WHERE dashboards.id = $1
+     LIMIT 1;`,
+    [dashboardId]
+  );
+  return rowToDashboard(joined.rows[0] ?? result.rows[0]);
 }
 
 export async function listDashboards(user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return store.dashboards
-      .filter((dashboard) => isOwner(user) || (dashboard.companyId ?? defaultCompanyId) === getCompanyId(user))
-      .map((dashboard) => ({
-        ...dashboard,
-        datasetName: store.datasets.find((dataset) => dataset.id === dashboard.datasetId)?.fileName ?? 'Unknown dataset',
-        ownerName: store.users.find((entry) => entry.id === dashboard.userId)?.name,
-        ownerEmail: store.users.find((entry) => entry.id === dashboard.userId)?.email
-      }))
-      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 50);
+      .filter((dashboard) => isOwner(user) || dashboard.companyId === getCompanyId(user))
+      .slice(0, 50)
+      .map((dashboard) => {
+        const dataset = store.datasets.find((entry) => entry.id === dashboard.datasetId);
+        return rowToDashboard({ ...dashboard, dataset_name: dataset?.fileName ?? dashboard.datasetName });
+      });
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const ownershipFilter = isOwner(user) ? '' : 'WHERE dashboards.company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-      SELECT TOP (50)
-        dashboards.*,
-        datasets.file_name AS dataset_name,
-        users.name AS owner_name,
-        users.email AS owner_email
-      FROM dbo.dashboards AS dashboards
-      INNER JOIN dbo.datasets AS datasets ON datasets.id = dashboards.dataset_id
-      INNER JOIN dbo.users AS users ON users.id = dashboards.user_id
-      ${ownershipFilter}
-      ORDER BY dashboards.updated_at DESC;
-    `);
-
-  return result.recordset.map(rowToDashboard);
+  const params = [];
+  const companyFilter = isOwner(user) ? '' : 'WHERE dashboards.company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(
+    `SELECT dashboards.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
+     FROM dashboards
+     INNER JOIN datasets ON datasets.id = dashboards.dataset_id
+     INNER JOIN users ON users.id = dashboards.user_id
+     ${companyFilter}
+     ORDER BY dashboards.updated_at DESC
+     LIMIT 50;`,
+    params
+  );
+  return result.rows.map(rowToDashboard);
 }
 
 export async function saveReport(report) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const savedReport = {
-        createdAt: new Date().toISOString(),
-        ...report
-    };
-    store.reports = [
-      savedReport,
-      ...store.reports
-    ].slice(0, 50);
+    const saved = { ...report, createdAt: new Date().toISOString() };
+    store.reports = [saved, ...store.reports].slice(0, 100);
     await saveDevStore(store);
-    const dataset = store.datasets.find((entry) => entry.id === savedReport.datasetId);
-    return {
-      ...savedReport,
-      datasetName: dataset?.fileName ?? 'Unknown dataset'
-    };
+    return saved;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), report.id)
-    .input('userId', sql.NVarChar(64), report.userId)
-    .input('companyId', sql.NVarChar(64), report.companyId ?? defaultCompanyId)
-    .input('datasetId', sql.NVarChar(64), report.datasetId)
-    .input('title', sql.NVarChar(260), report.title)
-    .input('reportType', sql.NVarChar(40), report.reportType ?? 'pdf')
-    .input('content', sql.NVarChar(sql.MAX), JSON.stringify(report.content ?? {}))
-    .query(`
-      INSERT INTO dbo.reports (id, user_id, company_id, dataset_id, title, report_type, content)
-      OUTPUT inserted.id, inserted.user_id, inserted.dataset_id, inserted.title, inserted.report_type, inserted.content, inserted.created_at
-      VALUES (@id, @userId, @companyId, @datasetId, @title, @reportType, @content);
-    `);
-
-  return {
-    ...rowToReport(result.recordset[0]),
-    datasetName: report.datasetName ?? 'Unknown dataset'
-  };
+  const result = await pgQuery(
+    `INSERT INTO reports (id, user_id, company_id, dataset_id, title, report_type, content)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *;`,
+    [
+      report.id,
+      report.userId,
+      report.companyId ?? defaultCompanyId,
+      report.datasetId,
+      report.title,
+      report.reportType ?? 'pdf',
+      JSON.stringify(report.content ?? {})
+    ]
+  );
+  const reportId = result.rows[0].id;
+  const joined = await pgQuery(
+    `SELECT reports.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
+     FROM reports
+     INNER JOIN datasets ON datasets.id = reports.dataset_id
+     INNER JOIN users ON users.id = reports.user_id
+     WHERE reports.id = $1
+     LIMIT 1;`,
+    [reportId]
+  );
+  return rowToReport(joined.rows[0] ?? result.rows[0]);
 }
 
 export async function listReports(user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return store.reports
-      .filter((report) => isOwner(user) || (report.companyId ?? defaultCompanyId) === getCompanyId(user))
-      .map((report) => ({
-        ...report,
-        datasetName: store.datasets.find((dataset) => dataset.id === report.datasetId)?.fileName ?? 'Unknown dataset',
-        ownerName: store.users.find((entry) => entry.id === report.userId)?.name,
-        ownerEmail: store.users.find((entry) => entry.id === report.userId)?.email
-      }))
-      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
-      .slice(0, 50);
+      .filter((report) => isOwner(user) || report.companyId === getCompanyId(user))
+      .slice(0, 50)
+      .map((report) => {
+        const dataset = store.datasets.find((entry) => entry.id === report.datasetId);
+        return rowToReport({ ...report, dataset_name: dataset?.fileName ?? report.datasetName });
+      });
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const ownershipFilter = isOwner(user) ? '' : 'WHERE reports.company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-      SELECT TOP (50)
-        reports.*,
-        datasets.file_name AS dataset_name,
-        users.name AS owner_name,
-        users.email AS owner_email
-      FROM dbo.reports AS reports
-      INNER JOIN dbo.datasets AS datasets ON datasets.id = reports.dataset_id
-      INNER JOIN dbo.users AS users ON users.id = reports.user_id
-      ${ownershipFilter}
-      ORDER BY reports.created_at DESC;
-    `);
-
-  return result.recordset.map(rowToReport);
+  const params = [];
+  const companyFilter = isOwner(user) ? '' : 'WHERE reports.company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(
+    `SELECT reports.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
+     FROM reports
+     INNER JOIN datasets ON datasets.id = reports.dataset_id
+     INNER JOIN users ON users.id = reports.user_id
+     ${companyFilter}
+     ORDER BY reports.created_at DESC
+     LIMIT 50;`,
+    params
+  );
+  return result.rows.map(rowToReport);
 }
 
 export async function createModuleRecord(record) {
-  if (!usingSqlServer) {
+  const saved = {
+    ...record,
+    companyId: record.companyId ?? defaultCompanyId,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    const saved = {
-      ...record,
-      companyId: record.companyId ?? defaultCompanyId,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
     store.moduleRecords = [saved, ...(store.moduleRecords ?? [])].slice(0, 500);
     await saveDevStore(store);
     return saved;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), record.id)
-    .input('companyId', sql.NVarChar(64), record.companyId ?? defaultCompanyId)
-    .input('userId', sql.NVarChar(64), record.userId)
-    .input('module', sql.NVarChar(80), record.module)
-    .input('recordType', sql.NVarChar(80), record.recordType)
-    .input('title', sql.NVarChar(260), record.title)
-    .input('status', sql.NVarChar(80), record.status ?? 'open')
-    .input('amount', sql.Decimal(18, 2), record.amount ?? null)
-    .input('metadata', sql.NVarChar(sql.MAX), JSON.stringify(record.metadata ?? {}))
-    .query(`
-      INSERT INTO dbo.module_records (id, company_id, user_id, module, record_type, title, status, amount, metadata)
-      OUTPUT inserted.*
-      VALUES (@id, @companyId, @userId, @module, @recordType, @title, @status, @amount, @metadata);
-    `);
-  return rowToModuleRecord(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO module_records (id, company_id, user_id, module, record_type, title, status, amount, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+     RETURNING *;`,
+    [
+      saved.id,
+      saved.companyId,
+      saved.userId,
+      saved.module,
+      saved.recordType,
+      saved.title,
+      saved.status ?? 'open',
+      saved.amount ?? null,
+      JSON.stringify(saved.metadata ?? {})
+    ]
+  );
+  return rowToModuleRecord(result.rows[0]);
 }
 
 export async function listModuleRecords(user, module) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return (store.moduleRecords ?? [])
-      .filter((record) => record.module === module && (isOwner(user) || record.companyId === getCompanyId(user)))
+      .filter((record) => record.module === module && canAccessCompanyRecord(user, record))
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 100);
+      .slice(0, 100)
+      .map(rowToModuleRecord);
   }
-
-  const db = await getPool();
-  const request = db.request().input('module', sql.NVarChar(80), module);
-  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-    SELECT TOP (100) *
-    FROM dbo.module_records
-    WHERE module = @module
-      ${companyFilter}
-    ORDER BY updated_at DESC;
-  `);
-  return result.recordset.map(rowToModuleRecord);
+  const params = [module];
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = $2';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(
+    `SELECT * FROM module_records
+     WHERE module = $1 ${companyFilter}
+     ORDER BY updated_at DESC
+     LIMIT 100;`,
+    params
+  );
+  return result.rows.map(rowToModuleRecord);
 }
 
 export async function updateModuleRecord(user, id, updates) {
   const amountProvided = updates.amount !== undefined;
   const normalized = {
-    ...(updates.title != null ? { title: String(updates.title).trim() } : {}),
-    ...(updates.status != null ? { status: String(updates.status).trim() || 'open' } : {}),
-    ...(updates.amount !== undefined ? { amount: updates.amount === '' || updates.amount == null ? null : Number(updates.amount) } : {}),
-    ...(updates.metadata != null ? { metadata: updates.metadata } : {})
+    title: updates.title != null ? String(updates.title).trim() : null,
+    status: updates.status != null ? String(updates.status).trim() || 'open' : null,
+    amount: amountProvided ? (updates.amount === '' || updates.amount == null ? null : Number(updates.amount)) : null,
+    metadata: updates.metadata != null ? updates.metadata : null
   };
 
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     let updated;
     store.moduleRecords = (store.moduleRecords ?? []).map((record) => {
-      if (record.id !== id || !canAccessCompanyRecord(user, record)) {
-        return record;
-      }
-      updated = { ...record, ...normalized, updatedAt: new Date().toISOString() };
+      if (record.id !== id || !canAccessCompanyRecord(user, record)) return record;
+      updated = {
+        ...record,
+        ...(normalized.title != null ? { title: normalized.title } : {}),
+        ...(normalized.status != null ? { status: normalized.status } : {}),
+        ...(amountProvided ? { amount: normalized.amount } : {}),
+        ...(normalized.metadata != null ? { metadata: normalized.metadata } : {}),
+        updatedAt: new Date().toISOString()
+      };
       return updated;
     });
     await saveDevStore(store);
-    return updated;
+    return updated ? rowToModuleRecord(updated) : undefined;
   }
 
-  const db = await getPool();
-  const request = db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('title', sql.NVarChar(260), normalized.title ?? null)
-    .input('status', sql.NVarChar(80), normalized.status ?? null)
-    .input('amount', sql.Decimal(18, 2), normalized.amount ?? null)
-    .input('metadata', sql.NVarChar(sql.MAX), normalized.metadata ? JSON.stringify(normalized.metadata) : null);
-  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  const params = [
+    id,
+    normalized.title,
+    normalized.status,
+    normalized.amount,
+    normalized.metadata == null ? null : JSON.stringify(normalized.metadata),
+    amountProvided
+  ];
+  let companyFilter = '';
   if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+    params.push(getCompanyId(user));
+    companyFilter = `AND company_id = $${params.length}`;
   }
-  const result = await request.query(`
-    UPDATE dbo.module_records
-    SET title = COALESCE(@title, title),
-        status = COALESCE(@status, status),
-        amount = CASE WHEN ${amountProvided ? '1' : '0'} = 1 THEN @amount ELSE amount END,
-        metadata = COALESCE(@metadata, metadata),
-        updated_at = SYSUTCDATETIME()
-    OUTPUT inserted.*
-    WHERE id = @id ${companyFilter};
-  `);
-  return result.recordset[0] ? rowToModuleRecord(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `UPDATE module_records SET
+       title = COALESCE($2, title),
+       status = COALESCE($3, status),
+       amount = CASE WHEN $6::boolean THEN $4 ELSE amount END,
+       metadata = COALESCE($5::jsonb, metadata),
+       updated_at = NOW()
+     WHERE id = $1 ${companyFilter}
+     RETURNING *;`,
+    params
+  );
+  return result.rows[0] ? rowToModuleRecord(result.rows[0]) : undefined;
 }
 
 export async function deleteModuleRecord(user, id) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     const before = store.moduleRecords?.length ?? 0;
     store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.id !== id || !canAccessCompanyRecord(user, record));
     await saveDevStore(store);
     return (store.moduleRecords?.length ?? 0) < before;
   }
-
-  const db = await getPool();
-  const request = db.request().input('id', sql.NVarChar(64), id);
-  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
+  const params = [id];
+  let companyFilter = '';
   if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
+    params.push(getCompanyId(user));
+    companyFilter = `AND company_id = $${params.length}`;
   }
-  const result = await request.query(`DELETE FROM dbo.module_records WHERE id = @id ${companyFilter}; SELECT @@ROWCOUNT AS deleted_count;`);
-  return Number(result.recordset?.[0]?.deleted_count ?? 0) > 0;
+  const result = await pgQuery(`DELETE FROM module_records WHERE id = $1 ${companyFilter};`, params);
+  return result.rowCount > 0;
 }
 
 export async function getModuleMetrics(user) {
   const modules = ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'];
-
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     return modules.reduce((metrics, module) => {
-      const records = (store.moduleRecords ?? []).filter((record) =>
-        record.module === module && (isOwner(user) || record.companyId === getCompanyId(user))
-      );
-      metrics[module] = {
-        total: records.length,
-        open: records.filter((record) => record.status !== 'closed').length
-      };
+      const records = (store.moduleRecords ?? []).filter((record) => record.module === module && canAccessCompanyRecord(user, record));
+      metrics[module] = { total: records.length, open: records.filter((record) => record.status !== 'closed').length };
       return metrics;
     }, {});
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-    SELECT module, COUNT(*) AS total_count,
-      SUM(CASE WHEN status <> 'closed' THEN 1 ELSE 0 END) AS open_count
-    FROM dbo.module_records
-    ${companyFilter}
-    GROUP BY module;
-  `);
+  const params = [];
+  const where = isOwner(user) ? '' : 'WHERE company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(
+    `SELECT module, COUNT(*)::int AS total_count,
+      SUM(CASE WHEN status <> 'closed' THEN 1 ELSE 0 END)::int AS open_count
+     FROM module_records
+     ${where}
+     GROUP BY module;`,
+    params
+  );
   const metrics = Object.fromEntries(modules.map((module) => [module, { total: 0, open: 0 }]));
-  result.recordset.forEach((row) => {
-    metrics[row.module] = {
-      total: Number(row.total_count ?? 0),
-      open: Number(row.open_count ?? 0)
-    };
+  result.rows.forEach((row) => {
+    metrics[row.module] = { total: Number(row.total_count ?? 0), open: Number(row.open_count ?? 0) };
   });
   return metrics;
 }
@@ -1419,107 +1071,70 @@ export async function saveEmailLog(log) {
     createdAt: log.createdAt ?? new Date().toISOString(),
     updatedAt: new Date().toISOString()
   };
-
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     store.emailLogs = [saved, ...(store.emailLogs ?? [])].slice(0, 500);
     await saveDevStore(store);
     return saved;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), saved.id)
-    .input('companyId', sql.NVarChar(64), saved.companyId)
-    .input('userId', sql.NVarChar(64), saved.userId)
-    .input('emailType', sql.NVarChar(80), saved.emailType)
-    .input('recipient', sql.NVarChar(320), saved.recipient)
-    .input('subject', sql.NVarChar(500), saved.subject)
-    .input('body', sql.NVarChar(sql.MAX), saved.body)
-    .input('provider', sql.NVarChar(80), saved.provider)
-    .input('status', sql.NVarChar(40), saved.status)
-    .input('error', sql.NVarChar(1000), saved.error)
-    .input('attempts', sql.Int, saved.attempts)
-    .query(`
-      INSERT INTO dbo.email_logs (id, company_id, user_id, email_type, recipient, subject, body, provider, status, error, attempts)
-      OUTPUT inserted.*
-      VALUES (@id, @companyId, @userId, @emailType, @recipient, @subject, @body, @provider, @status, @error, @attempts);
-    `);
-  return rowToEmailLog(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO email_logs (id, company_id, user_id, email_type, recipient, subject, body, provider, status, error, attempts)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.userId, saved.emailType, saved.recipient, saved.subject, saved.body, saved.provider, saved.status, saved.error, saved.attempts]
+  );
+  return rowToEmailLog(result.rows[0]);
 }
 
 export async function listEmailLogs(user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    return (store.emailLogs ?? [])
-      .filter((log) => isOwner(user) || log.companyId === getCompanyId(user))
-      .slice(0, 100);
+    return (store.emailLogs ?? []).filter((log) => canAccessCompanyRecord(user, log)).slice(0, 100).map(rowToEmailLog);
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-    SELECT TOP (100) *
-    FROM dbo.email_logs
-    ${companyFilter}
-    ORDER BY created_at DESC;
-  `);
-  return result.recordset.map(rowToEmailLog);
+  const params = [];
+  const where = isOwner(user) ? '' : 'WHERE company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`SELECT * FROM email_logs ${where} ORDER BY created_at DESC LIMIT 100;`, params);
+  return result.rows.map(rowToEmailLog);
 }
 
 export async function findEmailLog(user, id) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     const log = (store.emailLogs ?? []).find((entry) => entry.id === id);
-    return log && (isOwner(user) || log.companyId === getCompanyId(user)) ? rowToEmailLog(log) : undefined;
+    return log && canAccessCompanyRecord(user, log) ? rowToEmailLog(log) : undefined;
   }
-
-  const db = await getPool();
-  const request = db.request().input('id', sql.NVarChar(64), id);
-  const companyFilter = isOwner(user) ? '' : 'AND company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`SELECT TOP (1) * FROM dbo.email_logs WHERE id = @id ${companyFilter};`);
-  return result.recordset[0] ? rowToEmailLog(result.recordset[0]) : undefined;
+  const params = [id];
+  const companyFilter = isOwner(user) ? '' : 'AND company_id = $2';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`SELECT * FROM email_logs WHERE id = $1 ${companyFilter} LIMIT 1;`, params);
+  return result.rows[0] ? rowToEmailLog(result.rows[0]) : undefined;
 }
 
 export async function updateEmailLog(id, updates) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     let updated;
     store.emailLogs = (store.emailLogs ?? []).map((log) => {
-      if (log.id !== id) {
-        return log;
-      }
-      updated = { ...log, ...updates, updatedAt: new Date().toISOString() };
+      if (log.id !== id) return log;
+      updated = { ...log, ...updates, attempts: (log.attempts ?? 1) + 1, updatedAt: new Date().toISOString() };
       return updated;
     });
     await saveDevStore(store);
     return updated ? rowToEmailLog(updated) : undefined;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .input('status', sql.NVarChar(40), updates.status)
-    .input('provider', sql.NVarChar(80), updates.provider ?? null)
-    .input('error', sql.NVarChar(1000), updates.error ?? null)
-    .query(`
-      UPDATE dbo.email_logs
-      SET status = @status,
-          provider = @provider,
-          error = @error,
-          attempts = attempts + 1,
-          updated_at = SYSUTCDATETIME()
-      OUTPUT inserted.*
-      WHERE id = @id;
-    `);
-  return result.recordset[0] ? rowToEmailLog(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `UPDATE email_logs SET
+       status = $2,
+       provider = $3,
+       error = $4,
+       attempts = attempts + 1,
+       updated_at = NOW()
+     WHERE id = $1
+     RETURNING *;`,
+    [id, updates.status, updates.provider ?? null, updates.error ?? null]
+  );
+  return result.rows[0] ? rowToEmailLog(result.rows[0]) : undefined;
 }
 
 export async function createInvitation(invitation) {
@@ -1535,56 +1150,35 @@ export async function createInvitation(invitation) {
     acceptedAt: null,
     createdAt: new Date().toISOString()
   };
-
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     store.invitations = [saved, ...(store.invitations ?? [])].slice(0, 300);
     await saveDevStore(store);
     return saved;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('id', sql.NVarChar(64), saved.id)
-    .input('companyId', sql.NVarChar(64), saved.companyId)
-    .input('email', sql.NVarChar(320), saved.email)
-    .input('role', sql.NVarChar(40), saved.role)
-    .input('tokenHash', sql.NVarChar(500), saved.tokenHash)
-    .input('invitedBy', sql.NVarChar(64), saved.invitedBy)
-    .input('expiresAt', sql.DateTime2, new Date(saved.expiresAt))
-    .query(`
-      INSERT INTO dbo.invitations (id, company_id, email, role, token_hash, invited_by, expires_at)
-      OUTPUT inserted.*
-      VALUES (@id, @companyId, @email, @role, @tokenHash, @invitedBy, @expiresAt);
-    `);
-  return rowToInvitation(result.recordset[0]);
+  const result = await pgQuery(
+    `INSERT INTO invitations (id, company_id, email, role, token_hash, invited_by, expires_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.email, saved.role, saved.tokenHash, saved.invitedBy, saved.expiresAt]
+  );
+  return rowToInvitation(result.rows[0]);
 }
 
 export async function listInvitations(user) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
-    return (store.invitations ?? [])
-      .filter((invite) => isOwner(user) || invite.companyId === getCompanyId(user))
-      .slice(0, 100);
+    return (store.invitations ?? []).filter((invite) => canAccessCompanyRecord(user, invite)).slice(0, 100).map(rowToInvitation);
   }
-
-  const db = await getPool();
-  const request = db.request();
-  const companyFilter = isOwner(user) ? '' : 'WHERE company_id = @companyId';
-  if (!isOwner(user)) {
-    request.input('companyId', sql.NVarChar(64), getCompanyId(user));
-  }
-  const result = await request.query(`
-    SELECT TOP (100) *
-    FROM dbo.invitations
-    ${companyFilter}
-    ORDER BY created_at DESC;
-  `);
-  return result.recordset.map(rowToInvitation);
+  const params = [];
+  const where = isOwner(user) ? '' : 'WHERE company_id = $1';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`SELECT * FROM invitations ${where} ORDER BY created_at DESC LIMIT 100;`, params);
+  return result.rows.map(rowToInvitation);
 }
 
 export async function findInvitationByToken(tokenHash) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     const invitation = (store.invitations ?? []).find((entry) =>
       entry.tokenHash === tokenHash &&
@@ -1593,22 +1187,17 @@ export async function findInvitationByToken(tokenHash) {
     );
     return invitation ? rowToInvitation(invitation) : undefined;
   }
-
-  const db = await getPool();
-  const result = await db.request()
-    .input('tokenHash', sql.NVarChar(500), tokenHash)
-    .query(`
-      SELECT TOP (1) *
-      FROM dbo.invitations
-      WHERE token_hash = @tokenHash
-        AND status = 'pending'
-        AND expires_at > SYSUTCDATETIME();
-    `);
-  return result.recordset[0] ? rowToInvitation(result.recordset[0]) : undefined;
+  const result = await pgQuery(
+    `SELECT * FROM invitations
+     WHERE token_hash = $1 AND status = 'pending' AND expires_at > NOW()
+     LIMIT 1;`,
+    [tokenHash]
+  );
+  return result.rows[0] ? rowToInvitation(result.rows[0]) : undefined;
 }
 
 export async function markInvitationAccepted(id) {
-  if (!usingSqlServer) {
+  if (!usingPostgres) {
     const store = await loadDevStore();
     store.invitations = (store.invitations ?? []).map((invite) =>
       invite.id === id ? { ...invite, status: 'accepted', acceptedAt: new Date().toISOString() } : invite
@@ -1616,42 +1205,38 @@ export async function markInvitationAccepted(id) {
     await saveDevStore(store);
     return;
   }
-
-  const db = await getPool();
-  await db.request()
-    .input('id', sql.NVarChar(64), id)
-    .query("UPDATE dbo.invitations SET status = 'accepted', accepted_at = SYSUTCDATETIME() WHERE id = @id;");
+  await pgQuery("UPDATE invitations SET status = 'accepted', accepted_at = NOW() WHERE id = $1;", [id]);
 }
 
 function rowToDashboard(row) {
   return {
     id: row.id,
     name: row.name,
-    datasetId: row.dataset_id,
+    datasetId: row.dataset_id ?? row.datasetId,
     companyId: row.company_id ?? row.companyId,
-    datasetName: row.dataset_name,
+    datasetName: row.dataset_name ?? row.datasetName,
     ownerName: row.owner_name,
     ownerEmail: row.owner_email,
-    chartType: row.chart_type,
+    chartType: row.chart_type ?? row.chartType,
     config: parseJson(row.config, {}),
     snapshot: parseJson(row.snapshot, {}),
-    createdAt: row.created_at,
-    updatedAt: row.updated_at
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
   };
 }
 
 function rowToReport(row) {
   return {
     id: row.id,
-    datasetId: row.dataset_id,
+    datasetId: row.dataset_id ?? row.datasetId,
     companyId: row.company_id ?? row.companyId,
-    datasetName: row.dataset_name,
+    datasetName: row.dataset_name ?? row.datasetName,
     ownerName: row.owner_name,
     ownerEmail: row.owner_email,
     title: row.title,
-    reportType: row.report_type,
+    reportType: row.report_type ?? row.reportType,
     content: parseJson(row.content, {}),
-    createdAt: row.created_at
+    createdAt: toIso(row.created_at ?? row.createdAt)
   };
 }
 
@@ -1665,7 +1250,7 @@ function rowToDataset(row) {
     fileType: row.file_type ?? row.fileType ?? analysis.fileType ?? 'csv',
     worksheetName: row.worksheet_name ?? row.worksheetName ?? analysis.worksheetName ?? null,
     worksheets: analysis.worksheets ?? row.worksheets ?? [],
-    uploadedAt: row.uploaded_at ?? row.uploadedAt,
+    uploadedAt: toIso(row.uploaded_at ?? row.uploadedAt),
     rows: row.row_count ?? row.rows,
     columns: row.column_count ?? row.columns,
     headers: parseJson(row.headers, []),
@@ -1693,10 +1278,10 @@ function rowToUser(row, includePassword = false) {
     notificationSettings: parseJson(row.notification_settings ?? row.notificationSettings, {}),
     preferences: parseJson(row.preferences, {}),
     twoFactorEnabled: row.two_factor_enabled ?? row.twoFactorEnabled ?? false,
-    lastLoginAt: row.last_login_at ?? row.lastLoginAt,
+    lastLoginAt: toIso(row.last_login_at ?? row.lastLoginAt),
     failedLoginCount: row.failed_login_count ?? row.failedLoginCount ?? 0,
-    lockedUntil: row.locked_until ?? row.lockedUntil ?? null,
-    createdAt: row.created_at ?? row.createdAt,
+    lockedUntil: toIso(row.locked_until ?? row.lockedUntil),
+    createdAt: toIso(row.created_at ?? row.createdAt),
     ...(includePassword ? { passwordHash: row.password_hash ?? row.passwordHash } : {})
   };
 }
@@ -1712,8 +1297,8 @@ function rowToModuleRecord(row) {
     status: row.status,
     amount: row.amount == null ? null : Number(row.amount),
     metadata: parseJson(row.metadata, {}),
-    createdAt: row.created_at ?? row.createdAt,
-    updatedAt: row.updated_at ?? row.updatedAt
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
   };
 }
 
@@ -1723,9 +1308,9 @@ function rowToAccountToken(row) {
     userId: row.user_id ?? row.userId,
     tokenHash: row.token_hash ?? row.tokenHash,
     purpose: row.purpose,
-    createdAt: row.created_at ?? row.createdAt,
-    expiresAt: row.expires_at ?? row.expiresAt,
-    usedAt: row.used_at ?? row.usedAt
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    expiresAt: toIso(row.expires_at ?? row.expiresAt),
+    usedAt: toIso(row.used_at ?? row.usedAt)
   };
 }
 
@@ -1738,7 +1323,7 @@ function rowToAuditLog(row) {
     targetType: row.target_type ?? row.targetType,
     targetId: row.target_id ?? row.targetId,
     metadata: parseJson(row.metadata, {}),
-    createdAt: row.created_at ?? row.createdAt
+    createdAt: toIso(row.created_at ?? row.createdAt)
   };
 }
 
@@ -1755,8 +1340,8 @@ function rowToEmailLog(row) {
     status: row.status,
     error: row.error,
     attempts: row.attempts ?? 1,
-    createdAt: row.created_at ?? row.createdAt,
-    updatedAt: row.updated_at ?? row.updatedAt
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
   };
 }
 
@@ -1768,14 +1353,20 @@ function rowToInvitation(row) {
     role: normalizeRole(row.role),
     invitedBy: row.invited_by ?? row.invitedBy,
     status: row.status,
-    expiresAt: row.expires_at ?? row.expiresAt,
-    acceptedAt: row.accepted_at ?? row.acceptedAt,
-    createdAt: row.created_at ?? row.createdAt
+    expiresAt: toIso(row.expires_at ?? row.expiresAt),
+    acceptedAt: toIso(row.accepted_at ?? row.acceptedAt),
+    createdAt: toIso(row.created_at ?? row.createdAt)
   };
 }
 
-function getUserId(user) {
-  return typeof user === 'string' ? user : user.id;
+function rowToSession(row) {
+  return {
+    id: row.id,
+    userId: row.user_id ?? row.userId,
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    expiresAt: toIso(row.expires_at ?? row.expiresAt),
+    revokedAt: toIso(row.revoked_at ?? row.revokedAt)
+  };
 }
 
 function getCompanyId(user) {
@@ -1786,14 +1377,8 @@ function canAccessCompanyRecord(user, record) {
   return isOwner(user) || (record.companyId ?? defaultCompanyId) === getCompanyId(user);
 }
 
-function isAdmin(user) {
-  return typeof user === 'object' && hasRole(user, 'admin');
-}
-
 export function hasRole(user, requiredRole) {
-  if (!user || typeof user !== 'object') {
-    return false;
-  }
+  if (!user || typeof user !== 'object') return false;
   return roleRank(roleForUser(user.email, user.role)) >= roleRank(requiredRole);
 }
 
@@ -1803,18 +1388,11 @@ export function isOwner(user) {
 
 function protectOwnerUpdates(existingUser, updates) {
   if (isOwner(existingUser)) {
-    return {
-      ...updates,
-      role: 'owner',
-      active: true,
-      emailVerified: true
-    };
+    return { ...updates, role: 'owner', active: true, emailVerified: true };
   }
-
   if (normalizeRole(updates.role) === 'owner' && existingUser.email !== ownerEmail) {
     return { ...updates, role: 'admin' };
   }
-
   return updates;
 }
 
@@ -1827,20 +1405,34 @@ function roleRank(role) {
 }
 
 function normalizeRole(role) {
-  if (role === 'super_admin') {
-    return 'owner';
-  }
-  if (role === 'user') {
-    return 'employee';
-  }
+  if (role === 'super_admin') return 'owner';
+  if (role === 'user') return 'employee';
   return roles.includes(role) ? role : 'employee';
 }
 
-function stringToBoolean(value, fallback) {
-  if (value == null || value === '') {
+function parseJson(value, fallback) {
+  if (value == null) return fallback;
+  if (typeof value !== 'string') return value;
+  try {
+    return JSON.parse(value);
+  } catch {
     return fallback;
   }
-  return String(value).toLowerCase() === 'true';
+}
+
+function toIso(value) {
+  if (!value) return value ?? null;
+  if (value instanceof Date) return value.toISOString();
+  return value;
+}
+
+function databaseFromUrl(value) {
+  if (!value) return null;
+  try {
+    return new URL(value).pathname.replace(/^\//, '') || null;
+  } catch {
+    return null;
+  }
 }
 
 function sleep(ms) {
@@ -1851,16 +1443,14 @@ function sleep(ms) {
 
 async function connectWithRetry(connect, label) {
   let lastError;
-  const attempts = Math.max(sqlServerConnectRetries, 1);
+  const attempts = Math.max(postgresConnectRetries, 1);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
     try {
       return await connect();
     } catch (error) {
       lastError = error;
       console.error(`${label} connection attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      if (attempt < attempts) {
-        await sleep(sqlServerRetryDelayMs);
-      }
+      if (attempt < attempts) await sleep(postgresRetryDelayMs);
     }
   }
   throw lastError;
@@ -1906,40 +1496,6 @@ async function saveDevStore(store) {
   try {
     await writeFile(devStoreFile, JSON.stringify(store, null, 2));
   } catch {
-    // Some deployment environments expose a read-only filesystem; keep the API running if optional file persistence is unavailable.
+    // Some deployment environments expose a read-only filesystem; keep optional local persistence best-effort.
   }
-}
-
-function rowToSession(row) {
-  return {
-    id: row.id,
-    userId: row.user_id ?? row.userId,
-    createdAt: row.created_at ?? row.createdAt,
-    expiresAt: row.expires_at ?? row.expiresAt,
-    revokedAt: row.revoked_at ?? row.revokedAt
-  };
-}
-
-function parseJson(value, fallback) {
-  if (value == null) {
-    return fallback;
-  }
-
-  if (typeof value !== 'string') {
-    return value;
-  }
-
-  try {
-    return JSON.parse(value);
-  } catch {
-    return fallback;
-  }
-}
-
-function escapeSqlString(value) {
-  return String(value).replace(/'/g, "''");
-}
-
-function quoteSqlIdentifier(value) {
-  return `[${String(value).replace(/]/g, ']]')}]`;
 }

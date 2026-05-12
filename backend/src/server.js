@@ -58,7 +58,7 @@ import {
   updateEmailLog,
   updateModuleRecord,
   updateUser,
-  usingSqlServer
+  usingPostgres
 } from './db.js';
 
 const scryptAsync = promisify(scrypt);
@@ -72,12 +72,12 @@ const upload = multer({
 const port = Number(process.env.PORT || 4000);
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
-const jwtSecret = process.env.JWT_SECRET || (!usingSqlServer ? 'local-mvp-secret' : '');
-const requireStoredSessions = usingSqlServer || process.env.REQUIRE_STORED_SESSIONS === 'true';
+const jwtSecret = process.env.JWT_SECRET || (!usingPostgres ? 'local-mvp-secret' : '');
+const requireStoredSessions = usingPostgres || process.env.REQUIRE_STORED_SESSIONS === 'true';
 const sessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES || 15);
 const sessionTtlMs = Math.max(sessionTtlMinutes, 5) * 60 * 1000;
 const warningSeconds = Number(process.env.SESSION_WARNING_SECONDS || 60);
-const isEphemeralProductionStorage = !usingSqlServer && process.env.VERCEL === '1';
+const isEphemeralProductionStorage = !usingPostgres && process.env.VERCEL === '1';
 const adminEmails = (process.env.ADMIN_EMAILS || ownerEmail)
   .split(',')
   .map((email) => email.trim().toLowerCase())
@@ -455,7 +455,7 @@ async function requireAuth(req, res, next) {
     const payload = verifyJwt(token);
     const storedUser = await findUserById(payload.sub);
     const session = payload.sid ? await findSessionById(payload.sid, payload.sub) : undefined;
-    const user = storedUser ?? (!usingSqlServer ? userFromToken(payload) : undefined);
+    const user = storedUser ?? (!usingPostgres ? userFromToken(payload) : undefined);
 
     if (!user || user.active === false || (requireStoredSessions && !session)) {
       res.status(401).json({ error: 'Authentication required.' });
@@ -805,9 +805,9 @@ app.get('/health', (_req, res) => {
   res.json({
     status: 'ok',
     service: 'business-ai-platform-backend',
-    mode: authDisabled ? 'auth-disabled' : usingSqlServer ? 'secure-sql-server' : 'local-auth',
-    durableStorage: dbStatus.usingSqlServer && dbStatus.connected,
-    sqlConnected: dbStatus.usingSqlServer && dbStatus.connected,
+    mode: authDisabled ? 'auth-disabled' : usingPostgres ? 'secure-postgresql' : 'local-auth',
+    durableStorage: dbStatus.usingPostgres && dbStatus.connected,
+    postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
     emailConfigured
   });
 });
@@ -816,8 +816,8 @@ app.get('/api/config', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
   res.json({
     authDisabled,
-    storage: usingSqlServer ? 'sql-server' : 'local-json',
-    durableStorage: dbStatus.usingSqlServer && dbStatus.connected,
+    storage: usingPostgres ? 'postgresql' : 'local-development',
+    durableStorage: dbStatus.usingPostgres && dbStatus.connected,
     emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
     sessionWarningSeconds: warningSeconds
@@ -1402,9 +1402,9 @@ app.get('/api/admin/audit-logs', requireRole('admin'), async (_req, res, next) =
 app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
   res.json({
     status: 'operational',
-    storage: usingSqlServer ? 'protected-workspace-storage' : 'workspace-storage-pending',
+    storage: usingPostgres ? 'protected-workspace-storage' : 'workspace-storage-pending',
     auth: requireStoredSessions ? 'protected-workspace-sessions' : 'local-session-mode',
-    durableStorage: usingSqlServer,
+    durableStorage: usingPostgres,
     emailConfigured,
     uptimeSeconds: Math.round(process.uptime()),
     uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
@@ -1754,7 +1754,8 @@ initDatabase()
   .then(() => {
     const dbStatus = getDatabaseRuntimeStatus();
     console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
-    console.log(`SQL connected: ${dbStatus.usingSqlServer && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
+    console.log(`PostgreSQL connected: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
+    console.log(`PostgreSQL tables initialized: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'local-mode'}`);
     console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
     app.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);

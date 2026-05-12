@@ -5,7 +5,7 @@ Metenova AI is a modular AI-powered business operations platform for company wor
 ## Structure
 
 - `frontend`: React/Vite executive dashboard, workspace modules, CSV/Excel analysis, charts, reports, admin controls, support UI, and session timeout handling.
-- `backend`: Express API with JWT authentication, role-based access, company-scoped records, invitations, support delivery logs, SQL Server persistence, and CSV/Excel processing.
+- `backend`: Express API with JWT authentication, role-based access, company-scoped records, invitations, support delivery logs, Railway PostgreSQL persistence, and CSV/Excel processing.
 
 ## Local Development
 
@@ -20,7 +20,7 @@ For local development, the app can run without production storage credentials. P
 
 ## Required Production Environment
 
-Configure these variables in the backend Vercel project:
+Configure these variables in the backend Vercel project. Railway provides `DATABASE_URL` automatically when you connect the PostgreSQL service.
 
 ```env
 JWT_SECRET=replace-with-long-random-secret
@@ -30,13 +30,14 @@ APP_BASE_URL=https://your-frontend-domain
 SESSION_TTL_MINUTES=15
 SESSION_WARNING_SECONDS=60
 
-DB_SERVER=your-sql-host
-DB_PORT=1433
-DB_DATABASE=business_ai_platform
-DB_USER=your-sql-user
-DB_PASSWORD=your-sql-password
-DB_ENCRYPT=true
-DB_TRUST_SERVER_CERTIFICATE=false
+DATABASE_URL=postgresql://...
+
+# Or use individual Railway/PostgreSQL variables:
+PGHOST=...
+PGDATABASE=...
+PGUSER=...
+PGPASSWORD=...
+PGPORT=5432
 
 RESEND_API_KEY=your-resend-api-key
 EMAIL_FROM=support@metenovai.com
