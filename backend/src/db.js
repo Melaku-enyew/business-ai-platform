@@ -8,7 +8,18 @@ import sql from 'mssql';
 config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
-const sqlServerDatabase = process.env.SQLSERVER_DATABASE || 'business_ai_platform';
+const sqlServerHost = process.env.SQLSERVER_HOST || process.env.DB_SERVER;
+const sqlServerDatabase = process.env.SQLSERVER_DATABASE || process.env.DB_DATABASE || 'business_ai_platform';
+const sqlServerUser = process.env.SQLSERVER_USER || process.env.DB_USER;
+const sqlServerPassword = process.env.SQLSERVER_PASSWORD || process.env.DB_PASSWORD;
+const sqlServerPort = Number(process.env.SQLSERVER_PORT || process.env.DB_PORT || 1433);
+const sqlServerEncrypt = stringToBoolean(process.env.SQLSERVER_ENCRYPT ?? process.env.DB_ENCRYPT, process.env.VERCEL === '1');
+const sqlServerTrustServerCertificate = stringToBoolean(
+  process.env.SQLSERVER_TRUST_SERVER_CERTIFICATE ?? process.env.DB_TRUST_SERVER_CERTIFICATE,
+  process.env.VERCEL !== '1'
+);
+const sqlServerConnectRetries = Number(process.env.SQLSERVER_CONNECT_RETRIES || process.env.DB_CONNECT_RETRIES || 3);
+const sqlServerRetryDelayMs = Number(process.env.SQLSERVER_RETRY_DELAY_MS || process.env.DB_RETRY_DELAY_MS || 1500);
 export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
 export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
 const defaultCompanyId = 'metenova-default-company';
@@ -29,15 +40,17 @@ const devUser = {
   createdAt: new Date().toISOString()
 };
 
-export const usingSqlServer = Boolean(process.env.SQLSERVER_HOST || process.env.SQLSERVER_CONNECTION_STRING);
+export const usingSqlServer = Boolean(sqlServerHost || process.env.SQLSERVER_CONNECTION_STRING);
 export let pool = null;
 
 let connectedPool;
 
 async function getPool() {
   if (!connectedPool) {
-    pool = new sql.ConnectionPool(await buildSqlServerConfig());
-    connectedPool = await pool.connect();
+    connectedPool = await connectWithRetry(async () => {
+      pool = new sql.ConnectionPool(await buildSqlServerConfig());
+      return pool.connect();
+    }, 'SQL Server');
   }
   return connectedPool;
 }
@@ -48,31 +61,36 @@ async function buildSqlServerConfig() {
   }
 
   const baseConfig = {
-    server: process.env.SQLSERVER_HOST,
-    port: Number(process.env.SQLSERVER_PORT || 1433),
-    user: process.env.SQLSERVER_USER,
-    password: process.env.SQLSERVER_PASSWORD,
+    server: sqlServerHost,
+    port: sqlServerPort,
+    user: sqlServerUser,
+    password: sqlServerPassword,
     pool: {
       max: Number(process.env.SQLSERVER_POOL_MAX || 10),
       min: 0,
       idleTimeoutMillis: 30000
     },
     options: {
-      encrypt: process.env.SQLSERVER_ENCRYPT === 'true',
-      trustServerCertificate: process.env.SQLSERVER_TRUST_SERVER_CERTIFICATE !== 'false'
+      encrypt: sqlServerEncrypt,
+      trustServerCertificate: sqlServerTrustServerCertificate
     }
   };
 
-  const masterPool = await new sql.ConnectionPool({ ...baseConfig, database: 'master' }).connect();
-  try {
-    await masterPool.request().query(`
-      IF DB_ID(N'${escapeSqlString(sqlServerDatabase)}') IS NULL
-      BEGIN
-        CREATE DATABASE ${quoteSqlIdentifier(sqlServerDatabase)};
-      END;
-    `);
-  } finally {
-    await masterPool.close();
+  if (process.env.SQLSERVER_AUTO_CREATE_DATABASE === 'true') {
+    const masterPool = await connectWithRetry(
+      () => new sql.ConnectionPool({ ...baseConfig, database: 'master' }).connect(),
+      'SQL Server master'
+    );
+    try {
+      await masterPool.request().query(`
+        IF DB_ID(N'${escapeSqlString(sqlServerDatabase)}') IS NULL
+        BEGIN
+          CREATE DATABASE ${quoteSqlIdentifier(sqlServerDatabase)};
+        END;
+      `);
+    } finally {
+      await masterPool.close();
+    }
   }
 
   return {
@@ -354,6 +372,16 @@ export async function initDatabase() {
     IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_invitations_company_created_at' AND object_id = OBJECT_ID('dbo.invitations'))
       CREATE INDEX IX_invitations_company_created_at ON dbo.invitations (company_id, created_at DESC);
   `);
+}
+
+export function getDatabaseRuntimeStatus() {
+  return {
+    usingSqlServer,
+    hostConfigured: Boolean(sqlServerHost || process.env.SQLSERVER_CONNECTION_STRING),
+    database: usingSqlServer ? sqlServerDatabase : null,
+    connected: Boolean(connectedPool?.connected),
+    retries: sqlServerConnectRetries
+  };
 }
 
 export async function createUser(user) {
@@ -1806,6 +1834,36 @@ function normalizeRole(role) {
     return 'employee';
   }
   return roles.includes(role) ? role : 'employee';
+}
+
+function stringToBoolean(value, fallback) {
+  if (value == null || value === '') {
+    return fallback;
+  }
+  return String(value).toLowerCase() === 'true';
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
+async function connectWithRetry(connect, label) {
+  let lastError;
+  const attempts = Math.max(sqlServerConnectRetries, 1);
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await connect();
+    } catch (error) {
+      lastError = error;
+      console.error(`${label} connection attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      if (attempt < attempts) {
+        await sleep(sqlServerRetryDelayMs);
+      }
+    }
+  }
+  throw lastError;
 }
 
 export function getDevUser() {

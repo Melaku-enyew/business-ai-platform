@@ -23,6 +23,7 @@ import {
   findAccountToken,
   findInvitationByToken,
   findEmailLog,
+  getDatabaseRuntimeStatus,
   hasRole,
   findSessionById,
   getDevUser,
@@ -85,7 +86,8 @@ const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 const frontendDist = join(rootDir, 'frontend/dist');
 const legacyDatasetsFile = join(rootDir, 'backend/data/uploads/datasets.json');
 const authAttempts = new Map();
-const emailFrom = process.env.EMAIL_FROM || `Metenova AI <onboarding@resend.dev>`;
+const emailFrom = process.env.EMAIL_FROM || 'support@metenovai.com';
+const emailConfigured = Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
 const appBaseUrl = process.env.APP_BASE_URL || clientOrigin;
 
 const insights = {
@@ -515,7 +517,7 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
 }
 
 async function sendEmail({ to, subject, text, replyTo, attachments }) {
-  if (!process.env.RESEND_API_KEY) {
+  if (!emailConfigured) {
     return { delivered: false, provider: 'not-configured', error: 'Support email delivery is not fully configured.' };
   }
 
@@ -555,7 +557,7 @@ async function deliverEmail({ type, to, subject, text, userId, companyId, replyT
       error = result.error || 'Email delivery is not configured.';
     }
   } catch (deliveryError) {
-    result = { delivered: false, provider: process.env.RESEND_API_KEY ? 'resend' : 'not-configured' };
+    result = { delivered: false, provider: emailConfigured ? 'resend' : 'not-configured' };
     status = 'failed';
     error = deliveryError instanceof Error ? deliveryError.message : 'Email delivery failed.';
   }
@@ -799,21 +801,24 @@ function authRateLimit(req, res, next) {
 }
 
 app.get('/health', (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
   res.json({
     status: 'ok',
     service: 'business-ai-platform-backend',
     mode: authDisabled ? 'auth-disabled' : usingSqlServer ? 'secure-sql-server' : 'local-auth',
-    durableStorage: usingSqlServer,
-    emailConfigured: Boolean(process.env.RESEND_API_KEY)
+    durableStorage: dbStatus.usingSqlServer && dbStatus.connected,
+    sqlConnected: dbStatus.usingSqlServer && dbStatus.connected,
+    emailConfigured
   });
 });
 
 app.get('/api/config', (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
   res.json({
     authDisabled,
     storage: usingSqlServer ? 'sql-server' : 'local-json',
-    durableStorage: usingSqlServer,
-    emailConfigured: Boolean(process.env.RESEND_API_KEY),
+    durableStorage: dbStatus.usingSqlServer && dbStatus.connected,
+    emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
     sessionWarningSeconds: warningSeconds
   });
@@ -939,7 +944,7 @@ app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
 
     res.json({
       message: 'If the account exists, password reset instructions have been prepared.',
-      ...(resetUrl && !process.env.RESEND_API_KEY ? { resetUrl } : {})
+      ...(resetUrl && !emailConfigured ? { resetUrl } : {})
     });
   } catch (error) {
     next(error);
@@ -987,7 +992,7 @@ app.post('/api/auth/recover-username', async (req, res, next) => {
     }
     res.json({
       message: 'If the account exists, username recovery instructions have been prepared.',
-      ...(user && !process.env.RESEND_API_KEY ? { username: user.email, name: user.name } : {})
+      ...(user && !emailConfigured ? { username: user.email, name: user.name } : {})
     });
   } catch (error) {
     next(error);
@@ -1015,7 +1020,7 @@ app.post('/api/auth/request-verification', requireAuth, async (req, res, next) =
     });
     res.json({
       message: delivery.delivered ? 'Verification email sent.' : 'Verification request was saved, but delivery could not be completed.',
-      ...(!process.env.RESEND_API_KEY ? { verificationUrl } : {})
+      ...(!emailConfigured ? { verificationUrl } : {})
     });
   } catch (error) {
     next(error);
@@ -1270,7 +1275,7 @@ app.post('/api/admin/invitations', requireAuth, requireRole('admin'), requireDur
     res.status(201).json({
       invitation,
       message: delivery.delivered ? 'Invitation sent.' : 'Invitation created, but email delivery could not be completed.',
-      ...(!process.env.RESEND_API_KEY ? { acceptUrl } : {})
+      ...(!emailConfigured ? { acceptUrl } : {})
     });
   } catch (error) {
     next(error);
@@ -1305,7 +1310,7 @@ app.post('/api/admin/email-logs/:id/retry', requireAuth, requireRole('admin'), a
     } catch (error) {
       const emailLog = await updateEmailLog(log.id, {
         status: 'failed',
-        provider: delivery?.provider ?? (process.env.RESEND_API_KEY ? 'resend' : 'not-configured'),
+        provider: delivery?.provider ?? (emailConfigured ? 'resend' : 'not-configured'),
         error: error instanceof Error ? error.message : 'Email retry failed.'
       });
       res.status(502).json({ emailLog, error: 'Email retry failed.' });
@@ -1400,7 +1405,7 @@ app.get('/api/admin/system', requireRole('admin'), async (_req, res) => {
     storage: usingSqlServer ? 'protected-workspace-storage' : 'workspace-storage-pending',
     auth: requireStoredSessions ? 'protected-workspace-sessions' : 'local-session-mode',
     durableStorage: usingSqlServer,
-    emailConfigured: Boolean(process.env.RESEND_API_KEY),
+    emailConfigured,
     uptimeSeconds: Math.round(process.uptime()),
     uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
     maxSpreadsheetRows
@@ -1747,6 +1752,10 @@ initDatabase()
   .then(ensureOwnerAccount)
   .then(importLegacyDatasets)
   .then(() => {
+    const dbStatus = getDatabaseRuntimeStatus();
+    console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
+    console.log(`SQL connected: ${dbStatus.usingSqlServer && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
+    console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
     app.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
     });

@@ -30,16 +30,16 @@ APP_BASE_URL=https://your-frontend-domain
 SESSION_TTL_MINUTES=15
 SESSION_WARNING_SECONDS=60
 
-SQLSERVER_HOST=your-sql-host
-SQLSERVER_PORT=1433
-SQLSERVER_DATABASE=business_ai_platform
-SQLSERVER_USER=your-sql-user
-SQLSERVER_PASSWORD=your-sql-password
-SQLSERVER_ENCRYPT=true
-SQLSERVER_TRUST_SERVER_CERTIFICATE=false
+DB_SERVER=your-sql-host
+DB_PORT=1433
+DB_DATABASE=business_ai_platform
+DB_USER=your-sql-user
+DB_PASSWORD=your-sql-password
+DB_ENCRYPT=true
+DB_TRUST_SERVER_CERTIFICATE=false
 
 RESEND_API_KEY=your-resend-api-key
-EMAIL_FROM=Metenova AI <support@your-verified-domain>
+EMAIL_FROM=support@metenovai.com
 ```
 
 Production email delivery requires a verified sender/domain in the email provider. Support requests, invitations, verification messages, username recovery, and password reset emails are logged and can be retried from the admin area.
