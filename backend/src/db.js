@@ -11,12 +11,12 @@ const { Pool } = pg;
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
 const defaultCompanyId = 'metenova-default-company';
 const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
-const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || process.env.PG_CONNECT_RETRIES || 3);
-const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || process.env.PG_RETRY_DELAY_MS || 1500);
+const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || 3);
+const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || 1500);
 
 export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
 export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
-export const usingPostgres = Boolean(process.env.DATABASE_URL || process.env.PGHOST);
+export const usingPostgres = Boolean(process.env.DATABASE_URL);
 export let pool = null;
 
 let connected = false;
@@ -39,34 +39,28 @@ const devUser = {
 };
 
 function getPostgresConfig() {
-  if (process.env.DATABASE_URL) {
-    return {
-      connectionString: process.env.DATABASE_URL,
-      ssl: postgresSslConfig()
-    };
-  }
-
+  assertPublicDatabaseUrl();
   return {
-    host: process.env.PGHOST,
-    database: process.env.PGDATABASE,
-    user: process.env.PGUSER,
-    password: process.env.PGPASSWORD,
-    port: Number(process.env.PGPORT || 5432),
-    ssl: postgresSslConfig()
+    connectionString: process.env.DATABASE_URL,
+    ssl: { rejectUnauthorized: false }
   };
 }
 
-function postgresSslConfig() {
-  if (process.env.PGSSL === 'false') {
-    return false;
+function assertPublicDatabaseUrl() {
+  if (!process.env.DATABASE_URL) return;
+
+  try {
+    const host = new URL(process.env.DATABASE_URL).hostname;
+    if (process.env.VERCEL === '1' && host.endsWith('.internal')) {
+      throw new Error('DATABASE_URL points to a Railway private hostname. Configure the Railway public proxy URL for Vercel.');
+    }
+    if (process.env.VERCEL === '1' && !host.endsWith('.proxy.rlwy.net')) {
+      console.warn('DATABASE_URL does not use the Railway public proxy hostname expected for Vercel deployments.');
+    }
+  } catch (error) {
+    lastConnectionError = error instanceof Error ? error.message : 'Invalid DATABASE_URL.';
+    throw error;
   }
-  if (process.env.PGSSLMODE === 'disable') {
-    return false;
-  }
-  if (process.env.DATABASE_URL || process.env.PGSSL === 'true' || process.env.VERCEL === '1' || process.env.RAILWAY_ENVIRONMENT) {
-    return { rejectUnauthorized: false };
-  }
-  return false;
 }
 
 async function getPool() {
@@ -273,8 +267,8 @@ export async function initDatabase() {
 export function getDatabaseRuntimeStatus() {
   return {
     usingPostgres,
-    hostConfigured: Boolean(process.env.DATABASE_URL || process.env.PGHOST),
-    database: usingPostgres ? process.env.PGDATABASE || databaseFromUrl(process.env.DATABASE_URL) : null,
+    hostConfigured: Boolean(process.env.DATABASE_URL),
+    database: usingPostgres ? databaseFromUrl(process.env.DATABASE_URL) : null,
     connected,
     tablesInitialized,
     connectionError: lastConnectionError,
