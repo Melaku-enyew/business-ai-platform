@@ -86,9 +86,20 @@ const rootDir = fileURLToPath(new URL('../..', import.meta.url));
 const frontendDist = join(rootDir, 'frontend/dist');
 const legacyDatasetsFile = join(rootDir, 'backend/data/uploads/datasets.json');
 const authAttempts = new Map();
-const emailFrom = process.env.EMAIL_FROM || 'support@metenovai.com';
-const emailConfigured = Boolean(process.env.RESEND_API_KEY && process.env.EMAIL_FROM);
+const supportRecipientEmail = 'melakue@metenovaai.com';
+const supportSenderEmail = 'NewFuture Business Platform <support@metenovaai.com>';
+const emailFrom = process.env.EMAIL_FROM || supportSenderEmail;
+const resendConfigured = Boolean(process.env.RESEND_API_KEY);
+const emailConfigured = resendConfigured;
 const appBaseUrl = process.env.APP_BASE_URL || clientOrigin;
+const apiUrl = process.env.API_URL || (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : `http://localhost:${port}`);
+const corsOrigins = new Set([
+  clientOrigin,
+  appBaseUrl,
+  'https://www.metenovaai.com',
+  'https://metenovaai.com',
+  ...(process.env.CORS_ORIGINS || '').split(',').map((origin) => origin.trim()).filter(Boolean)
+]);
 
 const insights = {
   metrics: [
@@ -516,9 +527,15 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
   });
 }
 
-async function sendEmail({ to, subject, text, replyTo, attachments }) {
-  if (!emailConfigured) {
-    return { delivered: false, provider: 'not-configured', error: 'Support email delivery is not fully configured.' };
+function isValidEmail(email) {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+async function sendEmail({ to, subject, text, replyTo, attachments, from }) {
+  if (!process.env.RESEND_API_KEY) {
+    const error = 'RESEND_API_KEY is missing.';
+    console.error(`Email send failed: ${error}`);
+    return { delivered: false, provider: 'not-configured', error };
   }
 
   const response = await fetch('https://api.resend.com/emails', {
@@ -528,7 +545,7 @@ async function sendEmail({ to, subject, text, replyTo, attachments }) {
       'Content-Type': 'application/json'
     },
     body: JSON.stringify({
-      from: emailFrom,
+      from: from || emailFrom,
       to,
       subject,
       text,
@@ -539,25 +556,28 @@ async function sendEmail({ to, subject, text, replyTo, attachments }) {
 
   if (!response.ok) {
     const details = await response.text().catch(() => '');
+    console.error(`Email send failed through Resend: ${response.status} ${details}`);
     throw new Error(details || 'Email provider rejected the message.');
   }
 
-  return { delivered: true, provider: 'resend' };
+  const payload = await response.json().catch(() => ({}));
+  console.log(`Email sent through Resend to ${to}: ${payload.id ?? 'accepted'}`);
+  return { delivered: true, provider: 'resend', id: payload.id };
 }
 
-async function deliverEmail({ type, to, subject, text, userId, companyId, replyTo, attachments }) {
+async function deliverEmail({ type, to, subject, text, userId, companyId, replyTo, attachments, from }) {
   let result;
   let status = 'sent';
   let error = null;
 
   try {
-    result = await sendEmail({ to, subject, text, replyTo, attachments });
+    result = await sendEmail({ to, subject, text, replyTo, attachments, from });
     if (!result.delivered) {
       status = 'failed';
       error = result.error || 'Email delivery is not configured.';
     }
   } catch (deliveryError) {
-    result = { delivered: false, provider: emailConfigured ? 'resend' : 'not-configured' };
+    result = { delivered: false, provider: resendConfigured ? 'resend' : 'not-configured' };
     status = 'failed';
     error = deliveryError instanceof Error ? deliveryError.message : 'Email delivery failed.';
   }
@@ -781,7 +801,13 @@ async function importLegacyDatasets() {
 }
 
 app.use(cors({
-  origin: clientOrigin,
+  origin(origin, callback) {
+    if (!origin || corsOrigins.has(origin)) {
+      callback(null, true);
+      return;
+    }
+    callback(new Error(`CORS origin not allowed: ${origin}`));
+  },
   credentials: true
 }));
 app.use(express.json());
@@ -818,7 +844,10 @@ app.get('/health', (_req, res) => {
     postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
     tablesInitialized: dbStatus.tablesInitialized,
     databaseError: dbStatus.connectionError,
-    emailConfigured
+    emailConfigured,
+    resendConfigured,
+    environment: process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local',
+    apiUrl
   });
 });
 
@@ -1521,15 +1550,20 @@ app.post('/api/contact', upload.array('attachments', 3), async (req, res, next) 
       .join(', ');
 
     if (!name || !email || !message) {
-      res.status(400).json({ error: 'Name, email, and message are required.' });
+      res.status(400).json({ success: false, error: 'Name, email, and message are required.' });
+      return;
+    }
+
+    if (!isValidEmail(email)) {
+      res.status(400).json({ success: false, error: 'Enter a valid email address.' });
       return;
     }
 
     await audit(req, 'support.contact_submitted', 'support', req.user.id, { name, email, pageContext, attachments: attachmentSummary });
     const delivery = await deliverEmail({
       type: 'support_request',
-      to: ownerEmail,
-      subject: `Metenova AI support request from ${name}`,
+      to: supportRecipientEmail,
+      subject: `NewFuture Business Platform support request from ${name}`,
       text: [
         `From: ${name} <${email}>`,
         `User: ${req.user.name} <${req.user.email}>`,
@@ -1543,12 +1577,27 @@ app.post('/api/contact', upload.array('attachments', 3), async (req, res, next) 
       userId: req.user.id,
       companyId: req.user.companyId,
       replyTo: email,
-      attachments
+      attachments,
+      from: supportSenderEmail
     });
+    if (!delivery.delivered) {
+      const errorMessage = delivery.error || 'Email delivery failed.';
+      res.status(resendConfigured ? 502 : 503).json({
+        success: false,
+        error: errorMessage,
+        message: 'Support request was received, but email delivery failed.',
+        delivery: {
+          status: delivery.status,
+          provider: delivery.provider,
+          error: errorMessage
+        }
+      });
+      return;
+    }
+
     res.status(201).json({
-      message: delivery.delivered
-        ? 'Support request sent. Metenova AI will follow up by email.'
-        : 'Support request saved, but email delivery could not be completed. Please email support directly if urgent.',
+      success: true,
+      message: 'Message sent successfully.',
       delivery: {
         status: delivery.status,
         provider: delivery.provider,
@@ -1556,7 +1605,7 @@ app.post('/api/contact', upload.array('attachments', 3), async (req, res, next) 
       },
       contact: {
         owner: 'Melaku',
-        email: ownerEmail,
+        email: supportRecipientEmail,
         phone: '202-607-1255'
       }
     });
@@ -1757,7 +1806,7 @@ if (existsSync(frontendDist)) {
 }
 
 app.use((error, _req, res, _next) => {
-  res.status(500).json({ error: error.message || 'Unexpected server error.' });
+  res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Unexpected server error.' });
 });
 
 initDatabase()

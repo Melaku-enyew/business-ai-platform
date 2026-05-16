@@ -181,6 +181,14 @@ type AuthResponse = {
   user: User;
 };
 
+type ViteImportMeta = ImportMeta & {
+  env: {
+    VITE_API_URL?: string;
+    MODE?: string;
+    PROD?: boolean;
+  };
+};
+
 const fallbackInsights: InsightResponse = {
   metrics: [
     { label: 'Automations live', value: 0, trend: '0%' },
@@ -192,6 +200,15 @@ const fallbackInsights: InsightResponse = {
 
 const ownerEmail = 'melakue@metenovaai.com';
 const roleOptions: UserRole[] = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+const viteEnv = (import.meta as ViteImportMeta).env;
+const API_BASE = (viteEnv.VITE_API_URL || window.location.origin).replace(/\/$/, '');
+
+function apiUrl(path: string) {
+  if (/^https?:\/\//i.test(path)) {
+    return path;
+  }
+  return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
+}
 
 const moduleNav: Array<{ view: AppView; label: string; adminOnly?: boolean }> = [
   { view: 'dashboard', label: 'Dashboard' },
@@ -332,7 +349,16 @@ export function App() {
   }, [theme]);
 
   useEffect(() => {
-    fetch('/api/config', { credentials: 'include' })
+    console.info('[Metenova API]', {
+      apiBase: API_BASE,
+      origin: window.location.origin,
+      mode: viteEnv.MODE,
+      mobile: /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+    });
+  }, []);
+
+  useEffect(() => {
+    fetch(apiUrl('/api/config'), { credentials: 'include' })
       .then((response) => readJson<ConfigResponse>(response))
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
@@ -342,7 +368,8 @@ export function App() {
         setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
         setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
       })
-      .catch(() => {
+      .catch((error) => {
+        console.error('[Metenova API] Config request failed', error);
         setAuthDisabled(false);
         setPersistenceState('Protected workspace infrastructure ready.');
       })
@@ -474,7 +501,10 @@ export function App() {
       headers.set('Authorization', `Bearer ${token}`);
     }
 
-    return fetch(path, {
+    const requestUrl = apiUrl(path);
+    console.info('[Metenova API] request', { path, requestUrl });
+
+    return fetch(requestUrl, {
       ...options,
       headers,
       credentials: 'include'
@@ -485,6 +515,9 @@ export function App() {
       }
 
       return response;
+    }).catch((error) => {
+      console.error('[Metenova API] request failed', { path, requestUrl, error });
+      throw error;
     });
   }
 
@@ -583,7 +616,7 @@ export function App() {
 
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
-      const response = await fetch(`/api/auth/${credentials.mode}`, {
+      const response = await fetch(apiUrl(`/api/auth/${credentials.mode}`), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -618,7 +651,7 @@ export function App() {
     setAuthMessage('Activating your workspace invitation...');
 
     try {
-      const response = await fetch('/api/auth/accept-invite', {
+      const response = await fetch(apiUrl('/api/auth/accept-invite'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -655,7 +688,7 @@ export function App() {
     }
 
     try {
-      const response = await fetch('/api/auth/forgot-password', {
+      const response = await fetch(apiUrl('/api/auth/forgot-password'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -675,7 +708,7 @@ export function App() {
     }
 
     try {
-      const response = await fetch('/api/auth/recover-username', {
+      const response = await fetch(apiUrl('/api/auth/recover-username'), {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -1071,18 +1104,16 @@ export function App() {
         method: 'POST',
         body
       });
-      const payload = await readJson<{ message: string; error?: string; delivery?: { status?: string; error?: string } }>(response);
+      const payload = await readJson<{ success?: boolean; message?: string; error?: string; delivery?: { status?: string; error?: string } }>(response);
 
-      if (!response.ok) {
+      if (!response.ok || payload.success === false) {
         throw new Error(payload.error || 'Support request failed.');
       }
 
       setContactMessage('');
       setContactContext('');
       form.reset();
-      setSupportMessage(payload.delivery?.status === 'failed'
-        ? `${payload.message} Delivery detail: ${payload.delivery.error ?? 'Email delivery is not configured.'}`
-        : payload.message);
+      setSupportMessage(payload.message || 'Message sent successfully');
     } catch (error) {
       setSupportMessage(error instanceof Error ? error.message : 'Support request failed.');
     } finally {

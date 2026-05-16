@@ -33,7 +33,7 @@ SESSION_WARNING_SECONDS=60
 DATABASE_URL=postgresql://...
 
 RESEND_API_KEY=your-resend-api-key
-EMAIL_FROM=support@metenovai.com
+EMAIL_FROM=NewFuture Business Platform <support@metenovaai.com>
 ```
 
 Production email delivery requires a verified sender/domain in the email provider. Support requests, invitations, verification messages, username recovery, and password reset emails are logged and can be retried from the admin area.

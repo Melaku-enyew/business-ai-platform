@@ -3,7 +3,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  const apiTarget = env.VITE_API_URL || 'https://business-ai-platform-backend.vercel.app'
+  const apiTarget = env.VITE_API_URL || 'https://backend-six-pied-39.vercel.app'
 
   return {
     plugins: [react()],
