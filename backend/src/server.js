@@ -1584,7 +1584,7 @@ app.post('/api/contact', upload.array('attachments', 3), async (req, res, next) 
     const delivery = await deliverEmail({
       type: 'support_request',
       to: supportRecipientEmail,
-      subject: `NewFuture Business Platform support request from ${name}`,
+      subject: `Metenova  Business Platform support request from ${name}`,
       text: [
         `From: ${name} <${email}>`,
         `User: ${req.user.name} <${req.user.email}>`,
