@@ -1240,6 +1240,117 @@ th {
   gap: 16px;
 }
 
+.cleanup-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.9fr) minmax(0, 1.1fr);
+  gap: 18px;
+  margin-bottom: 22px;
+}
+
+.cleanup-history {
+  grid-column: 1 / -1;
+}
+
+.cleanup-summary,
+.cleanup-preview,
+.cleanup-history {
+  min-width: 0;
+}
+
+.cleanup-status {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--panel-strong);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.cleanup-status.processing,
+.cleanup-status.pending {
+  color: #8b6f22;
+  background: color-mix(in srgb, #f3d37a 28%, var(--panel));
+}
+
+.cleanup-status.completed {
+  color: #208b59;
+  background: color-mix(in srgb, #89d3af 28%, var(--panel));
+}
+
+.cleanup-status.failed {
+  color: #b54b4b;
+  background: color-mix(in srgb, #f1b8b8 34%, var(--panel));
+}
+
+.cleanup-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.cleanup-metrics div {
+  display: grid;
+  gap: 3px;
+  min-height: 74px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.cleanup-metrics strong {
+  font-size: 22px;
+}
+
+.cleanup-metrics span,
+.cleanup-logs {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.cleanup-logs {
+  margin-top: 10px;
+}
+
+.before-after-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.before-after-grid > div {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mini-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.mini-table-wrap table {
+  min-width: 420px;
+}
+
+.mini-table-wrap th,
+.mini-table-wrap td {
+  max-width: 170px;
+  overflow: hidden;
+  padding: 9px 10px;
+  text-overflow: ellipsis;
+}
+
+.compact-history {
+  margin-top: 0;
+}
+
 .pipeline-stages {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -1819,6 +1930,8 @@ th {
   }
 
   .csv-grid,
+  .cleanup-grid,
+  .before-after-grid,
   .assistant-grid,
   .history-grid,
   .settings-grid,
@@ -1831,6 +1944,10 @@ th {
   .admin-ops-grid,
   .pipeline-stages {
     grid-template-columns: 1fr;
+  }
+
+  .cleanup-history {
+    grid-column: auto;
   }
 }
 
@@ -1903,7 +2020,8 @@ th {
   .chat-form,
   .module-form,
   .routed-form,
-  .record-toolbar {
+  .record-toolbar,
+  .cleanup-metrics {
     grid-template-columns: 1fr;
   }
 

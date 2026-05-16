@@ -34,6 +34,7 @@ import {
   initDatabase,
   listAuditLogs,
   listCompanies,
+  listCleanupJobs,
   listDashboards,
   listDatasets,
   listEmailLogs,
@@ -50,6 +51,7 @@ import {
   recordLoginSuccess,
   removeDemoAccounts,
   saveDashboard,
+  saveCleanupJob,
   saveDataset,
   saveEmailLog,
   saveReport,
@@ -63,6 +65,7 @@ import {
   updateUser,
   usingPostgres
 } from './db.js';
+import { cleanDataset, recordsToCsv } from './dataCleanup.js';
 
 const scryptAsync = promisify(scrypt);
 const app = express();
@@ -1755,8 +1758,12 @@ async function handleDatasetUpload(req, res) {
     companyId,
     originalDatasetId: null,
     cleanedDatasetId: null,
-    cleanupStatus: 'original',
+    cleanupStatus: 'pending',
     cleanupLogs: [],
+    cleanupMetrics: {},
+    cleanupPreview: null,
+    cleanupOperations: [],
+    futureAiReady: false,
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
   };
@@ -1799,6 +1806,150 @@ app.get('/api/datasets/:id', async (req, res, next) => {
     }
 
     res.json(publicDataset(dataset));
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/datasets/:id/cleanup-jobs', async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+
+    res.json({ cleanupJobs: await listCleanupJobs(req.user, dataset.originalDatasetId ?? dataset.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, next) => {
+  const jobId = randomUUID();
+  let job;
+
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    if (dataset.originalDatasetId) {
+      res.status(400).json({ error: 'This is already a cleaned dataset. Select the original dataset to run cleanup again.' });
+      return;
+    }
+
+    job = await saveCleanupJob({
+      id: jobId,
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      originalDatasetId: dataset.id,
+      status: 'pending',
+      logs: ['Cleanup job queued.']
+    });
+
+    await saveDataset({
+      ...dataset,
+      cleanupStatus: 'processing',
+      cleanupLogs: ['Cleanup job queued.', 'Cleanup processing started.']
+    });
+    job = await saveCleanupJob({
+      ...job,
+      status: 'processing',
+      logs: [...job.logs, 'Cleanup processing started.']
+    });
+
+    const cleaned = cleanDataset(dataset);
+    const summary = summarizeCsv(cleaned.headers, cleaned.records);
+    const cleanedDataset = {
+      id: randomUUID(),
+      fileName: `${dataset.fileName.replace(/\.(csv|xlsx|xls)$/i, '')}-cleaned.csv`,
+      fileType: 'csv',
+      worksheetName: dataset.worksheetName,
+      worksheets: dataset.worksheets,
+      uploadedAt: new Date().toISOString(),
+      rows: cleaned.records.length,
+      columns: cleaned.headers.length,
+      headers: cleaned.headers,
+      preview: cleaned.records.slice(0, 10),
+      records: cleaned.records,
+      userId: req.user.id,
+      companyId: dataset.companyId,
+      originalDatasetId: dataset.id,
+      cleanedDatasetId: null,
+      cleanupStatus: 'completed',
+      cleanupLogs: cleaned.logs,
+      cleanupMetrics: cleaned.metrics,
+      cleanupPreview: cleaned.preview,
+      cleanupOperations: cleaned.operations,
+      futureAiReady: cleaned.futureAiReady,
+      warnings: [],
+      ...summary
+    };
+
+    await saveDataset(cleanedDataset);
+    const originalLogs = [
+      ...new Set([
+        ...(dataset.cleanupLogs ?? []),
+        'Cleanup completed.',
+        `Cleaned dataset created: ${cleanedDataset.fileName}`
+      ])
+    ];
+    const originalDataset = await saveDataset({
+      ...dataset,
+      cleanedDatasetId: cleanedDataset.id,
+      cleanupStatus: 'completed',
+      cleanupLogs: originalLogs,
+      cleanupMetrics: cleaned.metrics,
+      cleanupPreview: cleaned.preview,
+      cleanupOperations: cleaned.operations,
+      futureAiReady: true
+    });
+    const completedJob = await saveCleanupJob({
+      ...job,
+      cleanedDatasetId: cleanedDataset.id,
+      status: 'completed',
+      metrics: cleaned.metrics,
+      logs: [...cleaned.logs, 'Cleanup job completed.']
+    });
+    await audit(req, 'dataset.cleanup_completed', 'dataset', dataset.id, {
+      companyId: dataset.companyId,
+      cleanedDatasetId: cleanedDataset.id,
+      metrics: cleaned.metrics
+    });
+
+    res.status(201).json({
+      job: completedJob,
+      originalDataset: publicDataset(originalDataset),
+      cleanedDataset: publicDataset(cleanedDataset)
+    });
+  } catch (error) {
+    if (job) {
+      await saveCleanupJob({
+        ...job,
+        status: 'failed',
+        error: error instanceof Error ? error.message : 'Cleanup failed.',
+        logs: [...(job.logs ?? []), 'Cleanup failed.']
+      }).catch(() => {});
+    }
+    next(error);
+  }
+});
+
+app.get('/api/datasets/:id/export', async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+
+    const csv = recordsToCsv(dataset.headers, dataset.records);
+    const fileName = dataset.fileName.replace(/\.(csv|xlsx|xls)$/i, '') || 'dataset';
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="${fileName}.csv"`);
+    res.send(csv);
   } catch (error) {
     next(error);
   }

@@ -215,6 +215,20 @@ export async function initDatabase() {
     ALTER TABLE datasets ADD COLUMN IF NOT EXISTS cleanup_status TEXT NOT NULL DEFAULT 'original';
     ALTER TABLE datasets ADD COLUMN IF NOT EXISTS cleanup_logs JSONB NOT NULL DEFAULT '[]'::jsonb;
 
+    CREATE TABLE IF NOT EXISTS cleanup_jobs (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      original_dataset_id TEXT NOT NULL REFERENCES datasets(id) ON DELETE CASCADE,
+      cleaned_dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      logs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      error TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS dashboards (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -307,6 +321,8 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_companies_updated_at ON companies (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_company_uploaded_at ON datasets (company_id, uploaded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cleanup_jobs_company_created_at ON cleanup_jobs (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_cleanup_jobs_original_dataset ON cleanup_jobs (original_dataset_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_user_updated_at ON dashboards (user_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_company_updated_at ON dashboards (company_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_reports_user_created_at ON reports (user_id, created_at DESC);
@@ -344,6 +360,10 @@ export async function initDatabase() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_datasets_cleaned_dataset') THEN
         ALTER TABLE datasets
           ADD CONSTRAINT fk_datasets_cleaned_dataset FOREIGN KEY (cleaned_dataset_id) REFERENCES datasets(id) ON DELETE SET NULL;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cleanup_jobs_company') THEN
+        ALTER TABLE cleanup_jobs
+          ADD CONSTRAINT fk_cleanup_jobs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_dashboards_company') THEN
         ALTER TABLE dashboards
@@ -857,7 +877,11 @@ export async function saveDataset(dataset) {
     worksheetName: dataset.worksheetName,
     worksheets: dataset.worksheets,
     cleanupStatus: dataset.cleanupStatus ?? 'original',
-    cleanupLogs: dataset.cleanupLogs ?? []
+    cleanupLogs: dataset.cleanupLogs ?? [],
+    cleanupMetrics: dataset.cleanupMetrics ?? {},
+    cleanupPreview: dataset.cleanupPreview ?? null,
+    cleanupOperations: dataset.cleanupOperations ?? [],
+    futureAiReady: dataset.futureAiReady === true
   };
 
   if (!usingPostgres) {
@@ -954,6 +978,84 @@ export async function getDataset(id, user) {
   if (!isOwner(user)) params.push(getCompanyId(user), user.id);
   const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 ${accessFilter} LIMIT 1;`, params);
   return result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
+}
+
+export async function saveCleanupJob(job) {
+  const saved = {
+    id: job.id,
+    companyId: job.companyId ?? defaultCompanyId,
+    userId: job.userId,
+    originalDatasetId: job.originalDatasetId,
+    cleanedDatasetId: job.cleanedDatasetId ?? null,
+    status: job.status ?? 'pending',
+    metrics: job.metrics ?? {},
+    logs: job.logs ?? [],
+    error: job.error ?? null,
+    createdAt: job.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.cleanupJobs = [saved, ...(store.cleanupJobs ?? []).filter((entry) => entry.id !== saved.id)].slice(0, 200);
+    await saveDevStore(store);
+    return saved;
+  }
+
+  const result = await pgQuery(
+    `INSERT INTO cleanup_jobs (
+       id, company_id, user_id, original_dataset_id, cleaned_dataset_id, status, metrics, logs, error, created_at, updated_at
+     )
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+     ON CONFLICT (id) DO UPDATE SET
+       cleaned_dataset_id = EXCLUDED.cleaned_dataset_id,
+       status = EXCLUDED.status,
+       metrics = EXCLUDED.metrics,
+       logs = EXCLUDED.logs,
+       error = EXCLUDED.error,
+       updated_at = NOW()
+     RETURNING *;`,
+    [
+      saved.id,
+      saved.companyId,
+      saved.userId,
+      saved.originalDatasetId,
+      saved.cleanedDatasetId,
+      saved.status,
+      JSON.stringify(saved.metrics),
+      JSON.stringify(saved.logs),
+      saved.error,
+      saved.createdAt,
+      saved.updatedAt
+    ]
+  );
+  return rowToCleanupJob(result.rows[0]);
+}
+
+export async function listCleanupJobs(user, datasetId) {
+  const requestedDatasetId = String(datasetId || '').trim();
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.cleanupJobs ?? [])
+      .filter((job) => (!requestedDatasetId || job.originalDatasetId === requestedDatasetId || job.cleanedDatasetId === requestedDatasetId) && canAccessCompanyRecord(user, job))
+      .slice(0, 50)
+      .map(rowToCleanupJob);
+  }
+
+  const params = [];
+  const filters = [];
+  if (requestedDatasetId) {
+    params.push(requestedDatasetId);
+    filters.push(`(original_dataset_id = $${params.length} OR cleaned_dataset_id = $${params.length})`);
+  }
+  if (!isOwner(user)) {
+    params.push(getCompanyId(user));
+    filters.push(`company_id = $${params.length}`);
+  }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const result = await pgQuery(`SELECT * FROM cleanup_jobs ${where} ORDER BY created_at DESC LIMIT 50;`, params);
+  return result.rows.map(rowToCleanupJob);
 }
 
 export async function saveDashboard(dashboard) {
@@ -1495,7 +1597,27 @@ function rowToDataset(row) {
     originalDatasetId: row.original_dataset_id ?? row.originalDatasetId ?? null,
     cleanedDatasetId: row.cleaned_dataset_id ?? row.cleanedDatasetId ?? null,
     cleanupStatus: row.cleanup_status ?? row.cleanupStatus ?? analysis.cleanupStatus ?? 'original',
-    cleanupLogs: parseJson(row.cleanup_logs ?? row.cleanupLogs ?? analysis.cleanupLogs, [])
+    cleanupLogs: parseJson(row.cleanup_logs ?? row.cleanupLogs ?? analysis.cleanupLogs, []),
+    cleanupMetrics: analysis.cleanupMetrics ?? {},
+    cleanupPreview: analysis.cleanupPreview ?? null,
+    cleanupOperations: analysis.cleanupOperations ?? [],
+    futureAiReady: analysis.futureAiReady === true
+  };
+}
+
+function rowToCleanupJob(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    originalDatasetId: row.original_dataset_id ?? row.originalDatasetId,
+    cleanedDatasetId: row.cleaned_dataset_id ?? row.cleanedDatasetId ?? null,
+    status: row.status,
+    metrics: parseJson(row.metrics, {}),
+    logs: parseJson(row.logs, []),
+    error: row.error ?? null,
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
   };
 }
 
@@ -1709,7 +1831,8 @@ async function loadDevStore() {
       accountTokens: [],
       auditLogs: [],
       emailLogs: [],
-      invitations: []
+      invitations: [],
+      cleanupJobs: []
     };
   }
 
@@ -1725,7 +1848,8 @@ async function loadDevStore() {
     accountTokens: store.accountTokens ?? [],
     auditLogs: store.auditLogs ?? [],
     emailLogs: store.emailLogs ?? [],
-    invitations: store.invitations ?? []
+    invitations: store.invitations ?? [],
+    cleanupJobs: store.cleanupJobs ?? []
   };
 }
 

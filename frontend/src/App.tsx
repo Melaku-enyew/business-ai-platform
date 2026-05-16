@@ -35,6 +35,34 @@ type Dataset = {
   cleanedDatasetId?: string | null;
   cleanupStatus?: string;
   cleanupLogs?: string[];
+  cleanupMetrics?: CleanupMetrics;
+  cleanupPreview?: {
+    before: Record<string, string>[];
+    after: Record<string, string>[];
+  } | null;
+  cleanupOperations?: string[];
+  futureAiReady?: boolean;
+};
+
+type CleanupMetrics = {
+  duplicatesRemoved?: number;
+  rowsFixed?: number;
+  invalidValuesDetected?: number;
+  columnsStandardized?: number;
+  totalCleanedRows?: number;
+};
+
+type CleanupJob = {
+  id: string;
+  companyId?: string;
+  originalDatasetId: string;
+  cleanedDatasetId?: string | null;
+  status: 'pending' | 'processing' | 'completed' | 'failed';
+  metrics?: CleanupMetrics;
+  logs?: string[];
+  error?: string | null;
+  createdAt: string;
+  updatedAt: string;
 };
 
 type ChartType = 'bar' | 'line' | 'donut';
@@ -350,6 +378,9 @@ export function App() {
   const [workflows, setWorkflows] = useState<Workflow[]>([]);
   const [datasets, setDatasets] = useState<Dataset[]>([]);
   const [activeDataset, setActiveDataset] = useState<Dataset | null>(null);
+  const [cleanupJobs, setCleanupJobs] = useState<CleanupJob[]>([]);
+  const [cleanupMessage, setCleanupMessage] = useState('Cleanup pipeline ready.');
+  const [cleanupRunning, setCleanupRunning] = useState(false);
   const [status, setStatus] = useState('Connecting');
   const [uploadState, setUploadState] = useState('Drop a CSV or Excel file here to start analysis.');
   const [isDragging, setIsDragging] = useState(false);
@@ -516,6 +547,14 @@ export function App() {
   }, [selectedCompanyId, user?.id]);
 
   useEffect(() => {
+    if (activeDataset) {
+      void loadCleanupHistory(activeDataset);
+    } else {
+      setCleanupJobs([]);
+    }
+  }, [activeDataset?.id]);
+
+  useEffect(() => {
     const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname);
     if (workspaceRoute) {
       setCurrentView(workspaceRoute.module as AppView);
@@ -677,6 +716,7 @@ export function App() {
     setUser(null);
     setDatasets([]);
     setActiveDataset(null);
+    setCleanupJobs([]);
     setDashboards([]);
     setReports([]);
     setAdminUsers([]);
@@ -846,6 +886,11 @@ export function App() {
     () => selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets,
     [datasets, selectedCompanyId]
   );
+  const activeCleanedDataset = useMemo(() => {
+    if (!activeDataset) return null;
+    if (activeDataset.originalDatasetId) return activeDataset;
+    return datasets.find((dataset) => dataset.id === activeDataset.cleanedDatasetId) ?? null;
+  }, [activeDataset, datasets]);
   const companyDashboards = useMemo(
     () => selectedCompanyId ? dashboards.filter((dashboard) => dashboard.companyId === selectedCompanyId) : dashboards,
     [dashboards, selectedCompanyId]
@@ -903,6 +948,74 @@ export function App() {
     const file = event.target.files?.[0];
     if (file) {
       uploadDataset(file);
+    }
+  }
+
+  async function loadCleanupHistory(dataset: Dataset) {
+    try {
+      const sourceDatasetId = dataset.originalDatasetId ?? dataset.id;
+      const response = await apiFetch(`/api/datasets/${sourceDatasetId}/cleanup-jobs`);
+      const payload = await readJson<{ cleanupJobs?: CleanupJob[]; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Cleanup history could not be loaded.');
+      }
+      setCleanupJobs(payload.cleanupJobs ?? []);
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Cleanup history could not be loaded.');
+    }
+  }
+
+  async function cleanActiveDataset() {
+    if (!activeDataset || activeDataset.originalDatasetId) {
+      setCleanupMessage('Select an original uploaded dataset before running cleanup.');
+      return;
+    }
+
+    setCleanupRunning(true);
+    setCleanupMessage('Cleanup queued and processing...');
+    try {
+      const response = await apiFetch(`/api/datasets/${activeDataset.id}/cleanup`, { method: 'POST' });
+      const payload = await readJson<{ job?: CleanupJob; originalDataset?: Dataset; cleanedDataset?: Dataset; error?: string }>(response);
+      if (!response.ok || !payload.cleanedDataset || !payload.originalDataset) {
+        throw new Error(payload.error || 'Cleanup failed.');
+      }
+
+      setDatasets((current) => [
+        payload.cleanedDataset as Dataset,
+        payload.originalDataset as Dataset,
+        ...current.filter((item) => item.id !== payload.cleanedDataset?.id && item.id !== payload.originalDataset?.id)
+      ]);
+      setActiveDataset(payload.cleanedDataset);
+      setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
+      setCleanupMessage('Cleaned dataset created and ready for AI analytics.');
+      setPersistenceState('Original preserved. Cleaned dataset saved to the company workspace.');
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Cleanup failed.');
+    } finally {
+      setCleanupRunning(false);
+    }
+  }
+
+  async function downloadDatasetExport(dataset: Dataset | null) {
+    if (!dataset) {
+      return;
+    }
+
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}/export`);
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Export failed.');
+      }
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = dataset.fileName.replace(/\.(csv|xlsx|xls)$/i, '.csv');
+      link.click();
+      URL.revokeObjectURL(link.href);
+      setCleanupMessage('Dataset export downloaded.');
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Export failed.');
     }
   }
 
@@ -2066,6 +2179,12 @@ export function App() {
                 <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
                   Download PDF
                 </button>
+                <button className="ghost-button" type="button" disabled={!activeDataset || cleanupRunning || Boolean(activeDataset?.originalDatasetId)} onClick={cleanActiveDataset}>
+                  {cleanupRunning ? 'Cleaning...' : 'Clean Data'}
+                </button>
+                <button className="ghost-button" type="button" disabled={!activeCleanedDataset} onClick={() => downloadDatasetExport(activeCleanedDataset)}>
+                  Download Cleaned CSV
+                </button>
                 <button className="ghost-button" type="button" disabled={!activeDataset} onClick={saveCurrentDashboard}>
                   Save dashboard
                 </button>
@@ -2096,12 +2215,14 @@ export function App() {
                     <strong>{dataset.fileName}</strong>
                     <span>{dataset.rows} rows - {dataset.columns} columns - {(dataset.fileType ?? 'csv').toUpperCase()}</span>
                     {dataset.worksheetName && <small>{dataset.worksheetName}</small>}
+                    <small>{dataset.originalDatasetId ? 'Cleaned dataset' : `Cleanup ${dataset.cleanupStatus ?? 'pending'}`}</small>
                   </button>
                 ))}
                 {!companyDatasets.length && <span className="muted">No datasets for this company yet.</span>}
               </div>
 
               <p className="persistence-note">{persistenceState}</p>
+              {renderCleanupPanel(activeDataset, cleanupJobs, cleanupMessage)}
 
               <div className="csv-grid">
                 <article className="panel data-panel">
@@ -2348,6 +2469,101 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
         </div>
       ))}
     </div>
+  );
+}
+
+function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], cleanupMessage: string) {
+  const metrics = dataset?.cleanupMetrics ?? {};
+  const preview = dataset?.cleanupPreview;
+  const previewHeaders = Array.from(new Set([
+    ...Object.keys(preview?.before?.[0] ?? {}),
+    ...Object.keys(preview?.after?.[0] ?? {})
+  ])).slice(0, 5);
+  const metricItems = [
+    ['Duplicates removed', metrics.duplicatesRemoved ?? 0],
+    ['Rows fixed', metrics.rowsFixed ?? 0],
+    ['Invalid values', metrics.invalidValuesDetected ?? 0],
+    ['Columns standardized', metrics.columnsStandardized ?? 0],
+    ['Cleaned rows', metrics.totalCleanedRows ?? dataset?.rows ?? 0]
+  ];
+
+  return (
+    <section className="cleanup-grid" aria-label="Data cleanup pipeline">
+      <article className="panel cleanup-summary">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">AI-ready cleanup</p>
+            <h3>Cleanup summary</h3>
+          </div>
+          <span className={`cleanup-status ${dataset?.cleanupStatus ?? 'pending'}`}>{dataset?.cleanupStatus ?? 'pending'}</span>
+        </div>
+        <p className="persistence-note">{cleanupMessage}</p>
+        <div className="cleanup-metrics">
+          {metricItems.map(([label, value]) => (
+            <div key={label}>
+              <strong>{value}</strong>
+              <span>{label}</span>
+            </div>
+          ))}
+        </div>
+        <ul className="cleanup-logs">
+          {(dataset?.cleanupLogs?.length ? dataset.cleanupLogs : ['Upload a dataset, then run Clean Data to create a preserved original plus cleaned version.']).slice(0, 5).map((log) => (
+            <li key={log}>{log}</li>
+          ))}
+        </ul>
+      </article>
+
+      <article className="panel cleanup-preview">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Before / after</p>
+            <h3>Preview</h3>
+          </div>
+          {dataset?.futureAiReady && <span className="status-pill active">AI-ready</span>}
+        </div>
+        {preview && previewHeaders.length ? (
+          <div className="before-after-grid">
+            {(['before', 'after'] as const).map((side) => (
+              <div key={side}>
+                <strong>{side === 'before' ? 'Original' : 'Cleaned'}</strong>
+                <div className="mini-table-wrap">
+                  <table>
+                    <thead><tr>{previewHeaders.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+                    <tbody>
+                      {(preview[side] ?? []).slice(0, 3).map((row, index) => (
+                        <tr key={`${side}-${index}`}>{previewHeaders.map((header) => <td key={header}>{row[header] ?? ''}</td>)}</tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state compact-empty">Run cleanup to compare original and cleaned rows.</div>
+        )}
+      </article>
+
+      <article className="panel cleanup-history">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">History</p>
+            <h3>Cleanup jobs</h3>
+          </div>
+        </div>
+        <div className="history-list compact-history">
+          {cleanupJobs.length ? cleanupJobs.map((job) => (
+            <div className="history-item" key={job.id}>
+              <div>
+                <strong>{job.status}</strong>
+                <span>{new Date(job.updatedAt).toLocaleString()} - {(job.metrics?.totalCleanedRows ?? 0)} cleaned rows</span>
+              </div>
+              <span className={`cleanup-status ${job.status}`}>{job.status}</span>
+            </div>
+          )) : <p className="muted">Cleanup jobs for the selected dataset will appear here.</p>}
+        </div>
+      </article>
+    </section>
   );
 }
 
