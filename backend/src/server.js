@@ -10,7 +10,9 @@ import express from 'express';
 import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
+  companyExists,
   createAccountToken,
+  createCompany,
   createInvitation,
   createModuleRecord,
   createSession,
@@ -31,6 +33,7 @@ import {
   getModuleMetrics,
   initDatabase,
   listAuditLogs,
+  listCompanies,
   listDashboards,
   listDatasets,
   listEmailLogs,
@@ -539,6 +542,40 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
 
 function isValidEmail(email) {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(email || '').trim());
+}
+
+function validateCompanyInput(body) {
+  const company = {
+    name: String(body?.name || '').trim(),
+    industry: String(body?.industry || '').trim(),
+    ownerName: String(body?.ownerName || body?.owner_name || '').trim(),
+    email: String(body?.email || '').trim().toLowerCase(),
+    phone: String(body?.phone || '').trim()
+  };
+
+  if (!company.name || !company.industry || !company.ownerName || !company.email || !company.phone) {
+    const error = new Error('Company name, industry, owner name, email, and phone are required.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (!isValidEmail(company.email)) {
+    const error = new Error('Enter a valid company email address.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  if (company.name.length > 160 || company.industry.length > 120 || company.ownerName.length > 120 || company.phone.length > 40) {
+    const error = new Error('Company fields are too long.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  return company;
+}
+
+function requestedCompanyId(req) {
+  return String(req.query?.companyId || req.body?.companyId || '').trim();
 }
 
 async function sendEmail({ to, subject, text, replyTo, attachments, from }) {
@@ -1411,6 +1448,35 @@ app.get('/api/profile', (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
+app.get('/api/companies', async (_req, res, next) => {
+  try {
+    res.json({ companies: await listCompanies() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/companies', requireDurableStorage, async (req, res, next) => {
+  try {
+    const companyInput = validateCompanyInput(req.body);
+    const company = await createCompany({
+      id: randomUUID(),
+      ...companyInput,
+      status: 'Active'
+    });
+
+    await audit(req, 'company.created', 'company', company.id, {
+      name: company.name,
+      industry: company.industry,
+      email: company.email
+    });
+
+    res.status(201).json({ company });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch('/api/profile', requireDurableStorage, async (req, res, next) => {
   try {
     const user = await updateUser(req.user.id, {
@@ -1655,6 +1721,16 @@ async function handleDatasetUpload(req, res) {
   }
 
   const requestedWorksheetName = String(req.body?.worksheetName || '').trim();
+  const companyId = requestedCompanyId(req);
+  if (!companyId) {
+    res.status(400).json({ error: 'Select a company before uploading a dataset.' });
+    return;
+  }
+  if (!(await companyExists(companyId))) {
+    res.status(400).json({ error: 'Selected company workspace was not found.' });
+    return;
+  }
+
   const parsed = parseUploadedFile(req.file, requestedWorksheetName);
 
   if (!parsed.columns.length || !parsed.records.length) {
@@ -1676,7 +1752,11 @@ async function handleDatasetUpload(req, res) {
     preview: parsed.records.slice(0, 10),
     records: parsed.records,
     userId: req.user.id,
-    companyId: req.user.companyId,
+    companyId,
+    originalDatasetId: null,
+    cleanedDatasetId: null,
+    cleanupStatus: 'original',
+    cleanupLogs: [],
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
   };
@@ -1703,7 +1783,7 @@ app.post('/api/csv/upload', requireDurableStorage, upload.single('file'), (req, 
 
 app.get('/api/datasets', async (req, res, next) => {
   try {
-    const datasets = await listDatasets(req.user);
+    const datasets = await listDatasets(req.user, requestedCompanyId(req));
     res.json({ datasets: datasets.map(publicDataset) });
   } catch (error) {
     next(error);
@@ -1746,7 +1826,7 @@ app.post('/api/datasets/:id/chat', async (req, res, next) => {
 
 app.get('/api/dashboards', async (req, res, next) => {
   try {
-    res.json({ dashboards: await listDashboards(req.user) });
+    res.json({ dashboards: await listDashboards(req.user, requestedCompanyId(req)) });
   } catch (error) {
     next(error);
   }
@@ -1763,7 +1843,7 @@ app.post('/api/dashboards', requireDurableStorage, async (req, res, next) => {
     const dashboard = {
       id: req.body?.id || randomUUID(),
       userId: req.user.id,
-      companyId: req.user.companyId,
+      companyId: dataset.companyId,
       name: String(req.body?.name || `${dataset.fileName} dashboard`),
       datasetId: dataset.id,
       chartType: String(req.body?.chartType || 'bar'),
@@ -1781,7 +1861,7 @@ app.post('/api/dashboards', requireDurableStorage, async (req, res, next) => {
 
 app.get('/api/reports', async (req, res, next) => {
   try {
-    res.json({ reports: await listReports(req.user) });
+    res.json({ reports: await listReports(req.user, requestedCompanyId(req)) });
   } catch (error) {
     next(error);
   }
@@ -1798,7 +1878,7 @@ app.post('/api/reports', requireDurableStorage, async (req, res, next) => {
     const report = {
       id: randomUUID(),
       userId: req.user.id,
-      companyId: req.user.companyId,
+      companyId: dataset.companyId,
       datasetId: dataset.id,
       datasetName: dataset.fileName,
       title: String(req.body?.title || `${dataset.fileName} report`),

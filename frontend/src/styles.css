@@ -284,6 +284,21 @@ button {
   transform: translateX(2px);
 }
 
+.nav-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  margin-right: 10px;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: color-mix(in srgb, var(--accent-soft) 82%, #ffffff);
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0;
+  flex: 0 0 auto;
+}
+
 .content {
   min-width: 0;
   padding: 42px;
@@ -616,6 +631,28 @@ h3 {
   width: 1px;
   height: 1px;
   opacity: 0;
+}
+
+.company-selector {
+  display: grid;
+  gap: 6px;
+  min-width: min(100%, 260px);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+  text-transform: uppercase;
+}
+
+.company-selector select {
+  min-height: 42px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--panel);
+  font-size: 14px;
+  font-weight: 750;
+  text-transform: none;
 }
 
 .dataset-strip {
@@ -996,6 +1033,103 @@ th {
   background: var(--accent-soft);
   cursor: pointer;
   font-weight: 850;
+}
+
+.companies-page {
+  align-content: start;
+}
+
+.company-management-panel {
+  overflow: hidden;
+}
+
+.company-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 20px;
+}
+
+.company-summary-grid div {
+  display: grid;
+  gap: 6px;
+  min-height: 96px;
+  padding: 16px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-strong);
+}
+
+.company-summary-grid strong {
+  font-size: 24px;
+}
+
+.company-summary-grid span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.company-form {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px;
+  margin-top: 18px;
+}
+
+.company-form label {
+  display: grid;
+  gap: 7px;
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.company-form input {
+  min-height: 42px;
+  min-width: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  padding: 0 12px;
+  color: var(--text);
+  background: var(--panel);
+}
+
+.company-form-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.company-form-actions button:first-child,
+.company-actions button {
+  min-height: 38px;
+  border-radius: 8px;
+  color: var(--accent-text);
+  background: var(--accent-soft);
+  cursor: pointer;
+  font-weight: 850;
+}
+
+.company-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  min-width: 320px;
+}
+
+.company-actions button {
+  padding: 0 12px;
+}
+
+.company-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.company-table {
+  min-width: 1120px;
 }
 
 .module-stat-row {
@@ -1689,6 +1823,8 @@ th {
   .history-grid,
   .settings-grid,
   .module-grid,
+  .company-summary-grid,
+  .company-form,
   .support-grid,
   .faq-grid,
   .admin-insights,

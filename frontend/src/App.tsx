@@ -15,6 +15,7 @@ type Workflow = {
 
 type Dataset = {
   id: string;
+  companyId?: string;
   fileName: string;
   fileType?: string;
   worksheetName?: string | null;
@@ -30,6 +31,10 @@ type Dataset = {
   chart: Array<{ label: string; value: number }>;
   numericSummary: Array<{ column: string; total: number; average: number; min: number; max: number }>;
   insights: string[];
+  originalDatasetId?: string | null;
+  cleanedDatasetId?: string | null;
+  cleanupStatus?: string;
+  cleanupLogs?: string[];
 };
 
 type ChartType = 'bar' | 'line' | 'donut';
@@ -45,6 +50,7 @@ type AppView =
   | 'hr'
   | 'crm'
   | 'dataProcessing'
+  | 'companies'
   | 'analytics'
   | 'reports'
   | 'adminUsers'
@@ -74,6 +80,7 @@ type AdminUser = User & {
 
 type SavedDashboard = {
   id: string;
+  companyId?: string;
   name: string;
   datasetId: string;
   datasetName: string;
@@ -91,6 +98,7 @@ type SavedDashboard = {
 
 type ReportHistoryItem = {
   id: string;
+  companyId?: string;
   title: string;
   datasetId: string;
   datasetName: string;
@@ -139,6 +147,7 @@ type ModuleRecord = {
   title: string;
   status: string;
   amount?: number | null;
+  ownerEmail?: string;
   createdAt: string;
   updatedAt: string;
 };
@@ -162,6 +171,26 @@ type EmailLog = {
   error?: string;
   attempts: number;
   createdAt: string;
+};
+
+type Company = {
+  id: string;
+  name: string;
+  industry: string;
+  ownerName: string;
+  email: string;
+  phone: string;
+  status: string;
+  createdAt: string;
+  updatedAt?: string;
+};
+
+type CompanyFormValues = {
+  name: string;
+  industry: string;
+  ownerName: string;
+  email: string;
+  phone: string;
 };
 
 type ModuleMetrics = Record<string, { total: number; open: number }>;
@@ -214,20 +243,58 @@ function apiUrl(path: string) {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
-const moduleNav: Array<{ view: AppView; label: string; adminOnly?: boolean }> = [
-  { view: 'dashboard', label: 'Dashboard' },
-  { view: 'assistant', label: 'AI Assistant' },
-  { view: 'accounting', label: 'Accounting' },
-  { view: 'engineering', label: 'Engineering' },
-  { view: 'hr', label: 'HR' },
-  { view: 'crm', label: 'CRM' },
-  { view: 'dataProcessing', label: 'Data Processing' },
-  { view: 'analytics', label: 'Analytics' },
-  { view: 'reports', label: 'Reports' },
-  { view: 'adminUsers', label: 'Admin Panel', adminOnly: true },
-  { view: 'settings', label: 'Settings' },
-  { view: 'contact', label: 'Contact Us' }
+const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
+  { view: 'dashboard', label: 'Dashboard', icon: 'DB' },
+  { view: 'assistant', label: 'AI Assistant', icon: 'AI' },
+  { view: 'companies', label: 'Companies', icon: 'CO' },
+  { view: 'accounting', label: 'Accounting', icon: 'AC' },
+  { view: 'engineering', label: 'Engineering', icon: 'EN' },
+  { view: 'hr', label: 'HR', icon: 'HR' },
+  { view: 'crm', label: 'CRM', icon: 'CR' },
+  { view: 'dataProcessing', label: 'Data Processing', icon: 'DP' },
+  { view: 'analytics', label: 'Analytics', icon: 'AN' },
+  { view: 'reports', label: 'Reports', icon: 'RP' },
+  { view: 'adminUsers', label: 'Admin Panel', icon: 'AD', adminOnly: true },
+  { view: 'settings', label: 'Settings', icon: 'ST' },
+  { view: 'contact', label: 'Contact Us', icon: 'CS' }
 ];
+
+const sampleCompanies: Company[] = [
+  {
+    id: 'company-brightpath-logistics',
+    name: 'BrightPath Logistics LLC',
+    industry: 'Logistics',
+    ownerName: 'Operations Team',
+    email: 'ops@brightpath.example',
+    phone: '202-555-0141',
+    status: 'Active',
+    createdAt: new Date('2026-01-12T14:00:00Z').toISOString()
+  },
+  {
+    id: 'company-metrocare-health',
+    name: 'MetroCare Health',
+    industry: 'Healthcare',
+    ownerName: 'Care Administration',
+    email: 'admin@metrocare.example',
+    phone: '202-555-0186',
+    status: 'Active',
+    createdAt: new Date('2026-02-04T16:30:00Z').toISOString()
+  },
+  {
+    id: 'company-apex-accounting',
+    name: 'Apex Accounting Group',
+    industry: 'Finance',
+    ownerName: 'Client Services',
+    email: 'hello@apexaccounting.example',
+    phone: '202-555-0198',
+    status: 'Active',
+    createdAt: new Date('2026-03-18T13:15:00Z').toISOString()
+  }
+];
+
+function buildCompanyQuery(companyId: string) {
+  return companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
+}
 
 const moduleCards: Record<string, ModuleAction[]> = {
   accounting: [
@@ -330,6 +397,19 @@ export function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
+  const [companies, setCompanies] = useState<Company[]>(sampleCompanies);
+  const [companiesLoading, setCompaniesLoading] = useState(false);
+  const [companiesError, setCompaniesError] = useState('');
+  const [companySaving, setCompanySaving] = useState(false);
+  const [selectedCompanyId, setSelectedCompanyId] = useState(sampleCompanies[0]?.id ?? '');
+  const [companyFormOpen, setCompanyFormOpen] = useState(false);
+  const [companyForm, setCompanyForm] = useState<CompanyFormValues>({
+    name: '',
+    industry: '',
+    ownerName: '',
+    email: '',
+    phone: ''
+  });
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<UserRole>('employee');
   const [moduleMetrics, setModuleMetrics] = useState<ModuleMetrics>({});
@@ -430,6 +510,12 @@ export function App() {
   }, [currentView]);
 
   useEffect(() => {
+    if (user && selectedCompanyId) {
+      void loadCompanyWorkspace(selectedCompanyId);
+    }
+  }, [selectedCompanyId, user?.id]);
+
+  useEffect(() => {
     const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname);
     if (workspaceRoute) {
       setCurrentView(workspaceRoute.module as AppView);
@@ -439,6 +525,8 @@ export function App() {
       setCurrentView('analytics');
     } else if (location.pathname === '/reports/history') {
       setCurrentView('reports');
+    } else if (location.pathname === '/companies') {
+      setCurrentView('companies');
     } else if (location.pathname.startsWith('/admin/')) {
       setCurrentView('adminUsers');
     }
@@ -569,6 +657,7 @@ export function App() {
       setReports(reportsPayload.reports ?? []);
       setModuleMetrics(moduleMetricsPayload.metrics ?? {});
       setStatus('Live');
+      void loadCompanies();
 
       if (latestDashboard?.chartType) {
         setChartType(latestDashboard.chartType);
@@ -749,7 +838,29 @@ export function App() {
       .join(' ');
   }, [activeDataset, chartMax]);
 
+  const selectedCompany = useMemo(
+    () => companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? sampleCompanies[0],
+    [companies, selectedCompanyId]
+  );
+  const companyDatasets = useMemo(
+    () => selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets,
+    [datasets, selectedCompanyId]
+  );
+  const companyDashboards = useMemo(
+    () => selectedCompanyId ? dashboards.filter((dashboard) => dashboard.companyId === selectedCompanyId) : dashboards,
+    [dashboards, selectedCompanyId]
+  );
+  const companyReports = useMemo(
+    () => selectedCompanyId ? reports.filter((report) => report.companyId === selectedCompanyId) : reports,
+    [reports, selectedCompanyId]
+  );
+
   async function uploadDataset(file: File, worksheetName?: string) {
+    if (!selectedCompanyId) {
+      setUploadState('Select a company before uploading a dataset.');
+      return;
+    }
+
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (!extension || !['csv', 'xlsx', 'xls'].includes(extension)) {
       setUploadState('Upload a .csv, .xlsx, or .xls file.');
@@ -758,6 +869,7 @@ export function App() {
 
     const formData = new FormData();
     formData.append('file', file);
+    formData.append('companyId', selectedCompanyId);
     if (worksheetName) {
       formData.append('worksheetName', worksheetName);
     }
@@ -847,6 +959,7 @@ export function App() {
       body: JSON.stringify({
         name: `${activeDataset.fileName} ${chartType} dashboard`,
         datasetId: activeDataset.id,
+        companyId: activeDataset.companyId,
         chartType,
         config: {
           chartColumn: activeDataset.chartColumn,
@@ -872,8 +985,8 @@ export function App() {
 
   async function refreshHistory() {
     const [dashboardsResponse, reportsResponse] = await Promise.all([
-      apiFetch('/api/dashboards'),
-      apiFetch('/api/reports')
+      apiFetch(`/api/dashboards${buildCompanyQuery(selectedCompanyId)}`),
+      apiFetch(`/api/reports${buildCompanyQuery(selectedCompanyId)}`)
     ]);
     const dashboardsPayload = await readJson<{ dashboards: SavedDashboard[] }>(dashboardsResponse);
     const reportsPayload = await readJson<{ reports: ReportHistoryItem[] }>(reportsResponse);
@@ -1128,6 +1241,110 @@ export function App() {
     }
   }
 
+  function updateCompanyForm(field: keyof CompanyFormValues, value: string) {
+    setCompanyForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function resetCompanyForm() {
+    setCompanyForm({
+      name: '',
+      industry: '',
+      ownerName: '',
+      email: '',
+      phone: ''
+    });
+  }
+
+  async function loadCompanies() {
+    setCompaniesLoading(true);
+    setCompaniesError('');
+    try {
+      const response = await apiFetch('/api/companies');
+      const payload = await readJson<{ companies?: Company[]; error?: string }>(response);
+      if (!response.ok) {
+        throw new Error(payload.error || 'Could not load companies.');
+      }
+
+      const nextCompanies = payload.companies?.length ? payload.companies : sampleCompanies;
+      setCompanies(nextCompanies);
+      setSelectedCompanyId((current) => nextCompanies.some((company) => company.id === current) ? current : nextCompanies[0]?.id ?? '');
+    } catch (error) {
+      setCompanies(sampleCompanies);
+      setCompaniesError(error instanceof Error ? error.message : 'Could not load companies.');
+    } finally {
+      setCompaniesLoading(false);
+    }
+  }
+
+  async function loadCompanyWorkspace(companyId: string) {
+    if (!companyId) return;
+
+    try {
+      const query = buildCompanyQuery(companyId);
+      const [datasetsResponse, dashboardsResponse, reportsResponse] = await Promise.all([
+        apiFetch(`/api/datasets${query}`),
+        apiFetch(`/api/dashboards${query}`),
+        apiFetch(`/api/reports${query}`)
+      ]);
+      const datasetsPayload = await readJson<{ datasets?: Dataset[]; error?: string }>(datasetsResponse);
+      const dashboardsPayload = await readJson<{ dashboards?: SavedDashboard[]; error?: string }>(dashboardsResponse);
+      const reportsPayload = await readJson<{ reports?: ReportHistoryItem[]; error?: string }>(reportsResponse);
+
+      if (!datasetsResponse.ok) throw new Error(datasetsPayload.error || 'Could not load company datasets.');
+      if (!dashboardsResponse.ok) throw new Error(dashboardsPayload.error || 'Could not load company dashboards.');
+      if (!reportsResponse.ok) throw new Error(reportsPayload.error || 'Could not load company reports.');
+
+      const nextDatasets = datasetsPayload.datasets ?? [];
+      setDatasets(nextDatasets);
+      setDashboards(dashboardsPayload.dashboards ?? []);
+      setReports(reportsPayload.reports ?? []);
+      setActiveDataset((current) => current?.companyId === companyId ? current : nextDatasets[0] ?? null);
+      setPersistenceState(nextDatasets.length ? 'Company workspace data loaded.' : 'No datasets uploaded for this company yet.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Could not load company workspace.');
+    }
+  }
+
+  async function saveCompany(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const nextCompany = {
+      name: companyForm.name.trim(),
+      industry: companyForm.industry.trim(),
+      ownerName: companyForm.ownerName.trim(),
+      email: companyForm.email.trim(),
+      phone: companyForm.phone.trim()
+    };
+
+    if (!nextCompany.name || !nextCompany.industry || !nextCompany.ownerName || !nextCompany.email || !nextCompany.phone) {
+      setPersistenceState('Complete all company fields before saving.');
+      setCompaniesError('Complete all company fields before saving.');
+      return;
+    }
+
+    setCompanySaving(true);
+    setCompaniesError('');
+    try {
+      const response = await apiFetch('/api/companies', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(nextCompany)
+      });
+      const payload = await readJson<{ company?: Company; error?: string }>(response);
+      if (!response.ok || !payload.company) {
+        throw new Error(payload.error || 'Company could not be created.');
+      }
+
+      resetCompanyForm();
+      setCompanyFormOpen(false);
+      setPersistenceState(`${payload.company.name} workspace saved.`);
+      await loadCompanies();
+    } catch (error) {
+      setCompaniesError(error instanceof Error ? error.message : 'Company could not be created.');
+    } finally {
+      setCompanySaving(false);
+    }
+  }
+
   async function loadModuleRecords(module: string) {
     try {
       const response = await apiFetch(`/api/modules/${module}/records`);
@@ -1243,6 +1460,7 @@ export function App() {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         datasetId: activeDataset.id,
+        companyId: activeDataset.companyId,
         title: `${activeDataset.fileName} PDF report`,
         reportType: 'pdf',
         content: {
@@ -1280,6 +1498,10 @@ export function App() {
   }
 
   function openView(view: AppView) {
+    if (view === 'companies') {
+      navigate('/companies');
+      return;
+    }
     if (view === 'analytics') {
       navigate('/analytics/dashboard');
       return;
@@ -1395,6 +1617,7 @@ export function App() {
               type="button"
               onClick={() => item.view === 'settings' ? openSettings() : openView(item.view)}
             >
+                <span className="nav-icon">{item.icon}</span>
                 {item.label}
               </button>
             ))}
@@ -1445,12 +1668,23 @@ export function App() {
             apiFetch={apiFetch}
             auditLogs={auditLogs}
             canManage={canManageUsers(user)}
-            dashboards={dashboards}
+            companies={companies}
+            companiesError={companiesError}
+            companiesLoading={companiesLoading}
+            companyForm={companyForm}
+            companyFormOpen={companyFormOpen}
+            companySaving={companySaving}
+            dashboards={companyDashboards}
             deleteAdminUser={deleteAdminUser}
             downloadHistoricalReport={downloadHistoricalReport}
-            reports={reports}
+            reports={companyReports}
+            resetCompanyForm={resetCompanyForm}
+            saveCompany={saveCompany}
+            setCompanyFormOpen={setCompanyFormOpen}
+            loadCompanies={loadCompanies}
             systemStatus={systemStatus}
             updateAdminUser={updateAdminUser}
+            updateCompanyForm={updateCompanyForm}
             users={adminUsers}
           />
         ) : currentView === 'settings' ? (
@@ -1562,7 +1796,7 @@ export function App() {
                           <select
                             aria-label={`Role for ${adminUser.email}`}
                             className="role-select"
-                            disabled={adminUser.email === ownerEmail && user.email !== ownerEmail}
+                            disabled={adminUser.email === ownerEmail && user?.email !== ownerEmail}
                             value={adminUser.role}
                             onChange={(event) => updateAdminUser(adminUser.id, { role: event.target.value as AdminUser['role'] })}
                           >
@@ -1584,13 +1818,13 @@ export function App() {
                                 Promote
                               </button>
                             )}
-                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id || adminUser.email === ownerEmail} onClick={() => toggleAdminUser(adminUser)}>
+                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user?.id || adminUser.email === ownerEmail} onClick={() => toggleAdminUser(adminUser)}>
                               {adminUser.active ? 'Disable' : 'Enable'}
                             </button>
-                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user.id} onClick={() => revokeAdminUserSessions(adminUser)}>
+                            <button className="ghost-button compact" type="button" disabled={adminUser.id === user?.id} onClick={() => revokeAdminUserSessions(adminUser)}>
                               Revoke
                             </button>
-                            <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user.id || adminUser.email === ownerEmail} onClick={() => deleteAdminUser(adminUser)}>
+                            <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user?.id || adminUser.email === ownerEmail} onClick={() => deleteAdminUser(adminUser)}>
                               Delete
                             </button>
                           </div>
@@ -1611,7 +1845,7 @@ export function App() {
                   <form className="module-form invite-form" onSubmit={inviteWorkspaceUser}>
                     <input placeholder="employee@company.com" type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} />
                     <select value={inviteRole} onChange={(event) => setInviteRole(event.target.value as UserRole)}>
-                      {roleOptions.filter((role) => role !== 'owner' || user.email === ownerEmail).map((role) => (
+                      {roleOptions.filter((role) => role !== 'owner' || user?.email === ownerEmail).map((role) => (
                         <option key={role} value={role}>{roleLabel(role)}</option>
                       ))}
                     </select>
@@ -1750,9 +1984,9 @@ export function App() {
               <p className="eyebrow">Analytics</p>
               <h2>Executive analytics dashboard</h2>
               <div className="module-grid">
-                <div><strong>Dataset intelligence</strong><span>{datasets.length} saved datasets available for analysis.</span></div>
-                <div><strong>Dashboards</strong><span>{dashboards.length} saved dashboards across the workspace.</span></div>
-                <div><strong>Reports</strong><span>{reports.length} generated reports in history.</span></div>
+                <div><strong>Dataset intelligence</strong><span>{companyDatasets.length} saved datasets for {selectedCompany?.name ?? 'this company'}.</span></div>
+                <div><strong>Dashboards</strong><span>{companyDashboards.length} saved dashboards across this company workspace.</span></div>
+                <div><strong>Reports</strong><span>{companyReports.length} generated reports in company history.</span></div>
                 <div><strong>AI recommendations</strong><span>Use uploaded data to generate trends, variance explanations, and executive summaries.</span></div>
               </div>
             </article>
@@ -1765,7 +1999,7 @@ export function App() {
                 <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
               </div>
               <div className="history-list">
-                {dashboards.length ? dashboards.map((dashboard) => (
+                {companyDashboards.length ? companyDashboards.map((dashboard) => (
                   <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
                     <strong>{dashboard.name}</strong>
                     <span>{dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}</span>
@@ -1779,7 +2013,7 @@ export function App() {
                 <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
               </div>
               <div className="history-list">
-                {reports.length ? reports.map((report) => (
+                {companyReports.length ? companyReports.map((report) => (
                   <div className="history-item" key={report.id}>
                     <div>
                       <strong>{report.title}</strong>
@@ -1821,6 +2055,14 @@ export function App() {
                   <p className="eyebrow">Data studio</p>
                   <h2>Analyze business data in one clean view</h2>
                 </div>
+                <label className="company-selector">
+                  Company
+                  <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
+                    {companies.map((company) => (
+                      <option key={company.id} value={company.id}>{company.name}</option>
+                    ))}
+                  </select>
+                </label>
                 <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
                   Download PDF
                 </button>
@@ -1840,11 +2082,11 @@ export function App() {
               >
                 <input accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" onChange={handleDatasetUpload} />
                 <strong>Drop CSV or Excel file here</strong>
-                <span>{uploadState}</span>
+                <span>{selectedCompany ? `${selectedCompany.name}: ${uploadState}` : uploadState}</span>
               </label>
 
               <div className="dataset-strip">
-                {datasets.map((dataset) => (
+                {companyDatasets.map((dataset) => (
                   <button
                     className={activeDataset?.id === dataset.id ? 'selected' : ''}
                     key={dataset.id}
@@ -1856,6 +2098,7 @@ export function App() {
                     {dataset.worksheetName && <small>{dataset.worksheetName}</small>}
                   </button>
                 ))}
+                {!companyDatasets.length && <span className="muted">No datasets for this company yet.</span>}
               </div>
 
               <p className="persistence-note">{persistenceState}</p>
@@ -1875,6 +2118,7 @@ export function App() {
                     <>
                       <div className="file-meta">
                         <span>File type: {(activeDataset.fileType ?? 'csv').toUpperCase()}</span>
+                        <span>Cleanup status: {activeDataset.cleanupStatus ?? 'original'}</span>
                         {activeDataset.worksheetName && <span>Worksheet: {activeDataset.worksheetName}</span>}
                       </div>
                       {(activeDataset.worksheets?.length ?? 0) > 1 && (
@@ -1954,7 +2198,7 @@ export function App() {
                   <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
                 </div>
                 <div className="history-list">
-                  {dashboards.length ? dashboards.map((dashboard) => (
+                  {companyDashboards.length ? companyDashboards.map((dashboard) => (
                     <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
                       <strong>{dashboard.name}</strong>
                       <span>
@@ -1972,7 +2216,7 @@ export function App() {
                   <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
                 </div>
                 <div className="history-list">
-                  {reports.length ? reports.map((report) => (
+                  {companyReports.length ? companyReports.map((report) => (
                     <div className="history-item" key={report.id}>
                       <div>
                         <strong>{report.title}</strong>
@@ -2221,12 +2465,23 @@ function RoutedPages(props: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   auditLogs: AuditLog[];
   canManage: boolean;
+  companies: Company[];
+  companiesError: string;
+  companiesLoading: boolean;
+  companyForm: CompanyFormValues;
+  companyFormOpen: boolean;
+  companySaving: boolean;
   dashboards: SavedDashboard[];
   deleteAdminUser: (user: AdminUser) => void;
   downloadHistoricalReport: (report: ReportHistoryItem) => void;
   reports: ReportHistoryItem[];
+  loadCompanies: () => void;
+  resetCompanyForm: () => void;
+  saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  setCompanyFormOpen: (open: boolean) => void;
   systemStatus: SystemStatus | null;
   updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
+  updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   users: AdminUser[];
 }) {
   return (
@@ -2238,6 +2493,24 @@ function RoutedPages(props: {
           path={route.path}
         />
       ))}
+      <Route
+        path="/companies"
+        element={(
+          <CompaniesWorkspace
+            companies={props.companies}
+            error={props.companiesError}
+            companyForm={props.companyForm}
+            formOpen={props.companyFormOpen}
+            loading={props.companiesLoading}
+            saving={props.companySaving}
+            loadCompanies={props.loadCompanies}
+            resetCompanyForm={props.resetCompanyForm}
+            saveCompany={props.saveCompany}
+            setFormOpen={props.setCompanyFormOpen}
+            updateCompanyForm={props.updateCompanyForm}
+          />
+        )}
+      />
       <Route path="/analytics/dashboard" element={<AnalyticsWorkspace dashboards={props.dashboards} reports={props.reports} />} />
       <Route path="/reports/history" element={<ReportsHistoryWorkspace downloadHistoricalReport={props.downloadHistoricalReport} reports={props.reports} />} />
       <Route path="/admin/users" element={props.canManage ? <AdminUsersWorkspace deleteAdminUser={props.deleteAdminUser} updateAdminUser={props.updateAdminUser} users={props.users} /> : <Navigate to="/" replace />} />
@@ -2245,6 +2518,164 @@ function RoutedPages(props: {
       <Route path="/admin/system-monitoring" element={props.canManage ? <SystemMonitoringWorkspace status={props.systemStatus} /> : <Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
+  );
+}
+
+function CompaniesWorkspace({
+  companies,
+  companyForm,
+  error,
+  formOpen,
+  loading,
+  loadCompanies,
+  resetCompanyForm,
+  saveCompany,
+  saving,
+  setFormOpen,
+  updateCompanyForm
+}: {
+  companies: Company[];
+  companyForm: CompanyFormValues;
+  error: string;
+  formOpen: boolean;
+  loading: boolean;
+  loadCompanies: () => void;
+  resetCompanyForm: () => void;
+  saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
+  saving: boolean;
+  setFormOpen: (open: boolean) => void;
+  updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
+}) {
+  const closeForm = () => {
+    resetCompanyForm();
+    setFormOpen(false);
+  };
+
+  return (
+    <section className="routed-page companies-page">
+      <PageHeader
+        copy="Create and manage company workspaces for uploads, reports, dashboards, and AI data cleanup."
+        eyebrow="Companies"
+        title="Company Management"
+      />
+
+      <article className="panel company-management-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Workspace setup</p>
+            <h2>Company workspaces</h2>
+          </div>
+          <button className="ghost-button" type="button" onClick={() => setFormOpen(true)}>
+            Create Company
+          </button>
+          <button className="ghost-button compact" type="button" disabled={loading} onClick={loadCompanies}>
+            {loading ? 'Refreshing' : 'Refresh'}
+          </button>
+        </div>
+        <p className="module-copy">
+          Each company workspace is being prepared for its own uploads, reports, dashboards, cleaned datasets, and AI data cleanup pipelines.
+        </p>
+        {error && <p className="persistence-note warning-note">{error}</p>}
+        <div className="company-summary-grid">
+          <div><strong>{companies.length}</strong><span>Total workspaces</span></div>
+          <div><strong>{companies.filter((company) => company.status === 'Active').length}</strong><span>Active companies</span></div>
+          <div><strong>AI-ready</strong><span>Pipeline preparation</span></div>
+        </div>
+      </article>
+
+      {formOpen && (
+        <article className="panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">New workspace</p>
+              <h2>Create Company</h2>
+            </div>
+            <button className="ghost-button compact" type="button" onClick={closeForm}>
+              Close
+            </button>
+          </div>
+          <form className="company-form" onSubmit={saveCompany}>
+            <label>
+              Company Name
+              <input value={companyForm.name} onChange={(event) => updateCompanyForm('name', event.target.value)} />
+            </label>
+            <label>
+              Industry
+              <input value={companyForm.industry} onChange={(event) => updateCompanyForm('industry', event.target.value)} />
+            </label>
+            <label>
+              Owner Name
+              <input value={companyForm.ownerName} onChange={(event) => updateCompanyForm('ownerName', event.target.value)} />
+            </label>
+            <label>
+              Email
+              <input type="email" value={companyForm.email} onChange={(event) => updateCompanyForm('email', event.target.value)} />
+            </label>
+            <label>
+              Phone
+              <input value={companyForm.phone} onChange={(event) => updateCompanyForm('phone', event.target.value)} />
+            </label>
+            <div className="company-form-actions">
+              <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Company'}</button>
+              <button className="ghost-button compact" type="button" onClick={closeForm}>Cancel</button>
+            </div>
+          </form>
+        </article>
+      )}
+
+      <article className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Workspace directory</p>
+            <h2>Companies</h2>
+          </div>
+        </div>
+        <div className="table-wrap company-table-wrap">
+          <table className="company-table">
+            <thead>
+              <tr>
+                <th>Company Name</th>
+                <th>Industry</th>
+                <th>Owner</th>
+                <th>Email</th>
+                <th>Phone</th>
+                <th>Status</th>
+                <th>Created Date</th>
+                <th>Workspace Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={8}>Loading companies...</td>
+                </tr>
+              ) : companies.map((company) => (
+                <tr key={company.id}>
+                  <td>{company.name}</td>
+                  <td>{company.industry}</td>
+                  <td>{company.ownerName}</td>
+                  <td>{company.email}</td>
+                  <td>{company.phone}</td>
+                  <td><span className="status-pill active">{company.status}</span></td>
+                  <td>{new Date(company.createdAt).toLocaleDateString()}</td>
+                  <td>
+                    <div className="company-actions">
+                      {/* TODO: Wire these actions to company-scoped uploads, AI cleanup jobs, dashboards, and users. */}
+                      <button type="button" disabled title="Coming soon">Upload Data</button>
+                      <button type="button" disabled title="Coming soon">Clean Data</button>
+                      <button type="button" disabled title="Coming soon">View Dashboard</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="persistence-note">
+          Coming soon: each company will connect to company-specific uploads, reports, dashboards, cleaned datasets, and AI cleanup jobs.
+        </p>
+      </article>
+    </section>
   );
 }
 
