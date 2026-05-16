@@ -27,13 +27,13 @@ JWT_SECRET=replace-with-long-random-secret
 OWNER_EMAIL=melakue@metenovaai.com
 CLIENT_ORIGIN=https://your-frontend-domain
 APP_BASE_URL=https://your-frontend-domain
-SESSION_TTL_MINUTES=15
+SESSION_TTL_MINUTES=30
 SESSION_WARNING_SECONDS=60
 
 DATABASE_URL=postgresql://...
 
 RESEND_API_KEY=your-resend-api-key
-EMAIL_FROM=NewFuture Business Platform <support@metenovaai.com>
+EMAIL_FROM=support@metenovaai.com
 ```
 
 Production email delivery requires a verified sender/domain in the email provider. Support requests, invitations, verification messages, username recovery, and password reset emails are logged and can be retried from the admin area.

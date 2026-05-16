@@ -202,6 +202,10 @@ const ownerEmail = 'melakue@metenovaai.com';
 const roleOptions: UserRole[] = ['viewer', 'employee', 'manager', 'admin', 'owner'];
 const viteEnv = (import.meta as ViteImportMeta).env;
 const API_BASE = (viteEnv.VITE_API_URL || window.location.origin).replace(/\/$/, '');
+const AUTH_TOKEN_KEY = 'metenovaSessionToken';
+const LEGACY_AUTH_TOKEN_KEY = 'authToken';
+const SESSION_ACTIVITY_KEY = 'metenovaLastActivityAt';
+const LOGOUT_BROADCAST_KEY = 'metenovaLogoutAt';
 
 function apiUrl(path: string) {
   if (/^https?:\/\//i.test(path)) {
@@ -285,7 +289,10 @@ export function App() {
   const [lastUploadedFile, setLastUploadedFile] = useState<File | null>(null);
   const [chartType, setChartType] = useState<ChartType>('bar');
   const [theme, setTheme] = useState<Theme>(() => (localStorage.getItem('theme') as Theme) || 'light');
-  const [token, setToken] = useState(() => localStorage.getItem('authToken') || '');
+  const [token, setToken] = useState(() => {
+    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
+    return sessionStorage.getItem(AUTH_TOKEN_KEY) || '';
+  });
   const [user, setUser] = useState<User | null>(null);
   const [authDisabled, setAuthDisabled] = useState(false);
   const [configLoaded, setConfigLoaded] = useState(false);
@@ -335,7 +342,7 @@ export function App() {
   const [persistenceState, setPersistenceState] = useState('Enterprise-grade secure cloud storage ready.');
   const [durableStorage, setDurableStorage] = useState(true);
   const [emailConfigured, setEmailConfigured] = useState(false);
-  const [sessionTimeoutMs, setSessionTimeoutMs] = useState(15 * 60 * 1000);
+  const [sessionTimeoutMs, setSessionTimeoutMs] = useState(30 * 60 * 1000);
   const [sessionWarningSeconds, setSessionWarningSeconds] = useState(60);
   const [showSessionWarning, setShowSessionWarning] = useState(false);
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState(60);
@@ -364,7 +371,7 @@ export function App() {
         setAuthDisabled(Boolean(config.authDisabled));
         setDurableStorage(config.durableStorage !== false);
         setEmailConfigured(Boolean(config.emailConfigured));
-        setSessionTimeoutMs(Math.max(config.sessionTimeoutMinutes ?? 15, 5) * 60 * 1000);
+        setSessionTimeoutMs((config.sessionTimeoutMinutes ?? 30) * 60 * 1000);
         setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
         setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
       })
@@ -439,15 +446,7 @@ export function App() {
 
   useEffect(() => {
     const syncAuth = (event: StorageEvent) => {
-      if (event.key === 'authToken') {
-        const nextToken = event.newValue || '';
-        if (!nextToken) {
-          logout('Signed out in another tab.');
-          return;
-        }
-        setToken(nextToken);
-      }
-      if (event.key === 'metenovaLogoutAt' && event.newValue) {
+      if (event.key === LOGOUT_BROADCAST_KEY && event.newValue) {
         logout('Session ended in another tab.');
       }
     };
@@ -465,20 +464,20 @@ export function App() {
     const activityEvents = ['mousemove', 'keydown', 'click', 'scroll', 'touchstart', 'visibilitychange'];
     const markActive = () => {
       if (document.visibilityState !== 'hidden') {
-        localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+        sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
         setShowSessionWarning(false);
       }
     };
     const checkSession = () => {
-      const lastActivity = Number(localStorage.getItem('metenovaLastActivityAt') || Date.now());
+      const lastActivity = Number(sessionStorage.getItem(SESSION_ACTIVITY_KEY) || Date.now());
       const elapsed = Date.now() - lastActivity;
       const remainingMs = sessionTimeoutMs - elapsed;
       const nextSeconds = Math.max(Math.ceil(remainingMs / 1000), 0);
       setSessionSecondsLeft(nextSeconds);
 
       if (remainingMs <= 0) {
-        localStorage.setItem('metenovaLogoutAt', String(Date.now()));
-        logoutRemote('Session expired after inactivity.');
+        localStorage.setItem(LOGOUT_BROADCAST_KEY, String(Date.now()));
+        logoutRemote('Session expired after 30 minutes of inactivity.');
         return;
       }
 
@@ -510,8 +509,13 @@ export function App() {
       credentials: 'include'
     }).then((response) => {
       if (response.status === 401) {
-        logout();
-        throw new Error('Authentication required.');
+        return readJson<{ error?: string; code?: string }>(response).then((payload) => {
+          const message = payload.code === 'SESSION_EXPIRED'
+            ? 'Session expired. Please sign in again.'
+            : payload.error || 'Authentication required.';
+          logout(message);
+          throw new Error(message);
+        });
       }
 
       return response;
@@ -577,7 +581,9 @@ export function App() {
   }
 
   function logout(message = 'Signed out') {
-    localStorage.removeItem('authToken');
+    sessionStorage.removeItem(AUTH_TOKEN_KEY);
+    sessionStorage.removeItem(SESSION_ACTIVITY_KEY);
+    localStorage.removeItem(LEGACY_AUTH_TOKEN_KEY);
     setToken('');
     setUser(null);
     setDatasets([]);
@@ -598,7 +604,7 @@ export function App() {
         await apiFetch('/api/auth/logout', { method: 'POST' });
       }
     } finally {
-      localStorage.setItem('metenovaLogoutAt', String(Date.now()));
+      localStorage.setItem(LOGOUT_BROADCAST_KEY, String(Date.now()));
       logout(message);
     }
   }
@@ -633,8 +639,8 @@ export function App() {
         throw new Error(payload.error || 'Authentication failed.');
       }
 
-      localStorage.setItem('authToken', payload.token);
-      localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+      sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
+      sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
       setToken(payload.token);
       setUser(payload.user);
       setAuthPassword('');
@@ -666,8 +672,8 @@ export function App() {
         throw new Error(payload.error || 'Invitation could not be accepted.');
       }
 
-      localStorage.setItem('authToken', payload.token);
-      localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+      sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
+      sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
       window.history.replaceState({}, '', '/');
       setToken(payload.token);
       setUser(payload.user);
@@ -926,7 +932,8 @@ export function App() {
         setUser(payload.user);
         const refreshResponse = await apiFetch('/api/auth/refresh', { method: 'POST' });
         const refreshPayload = await readJson<AuthResponse>(refreshResponse);
-        localStorage.setItem('authToken', refreshPayload.token);
+        sessionStorage.setItem(AUTH_TOKEN_KEY, refreshPayload.token);
+        sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
         setToken(refreshPayload.token);
       }
       setAdminMessage('User access updated.');
@@ -2040,7 +2047,7 @@ export function App() {
             <p>Your session will expire in {sessionSecondsLeft} seconds because of inactivity.</p>
             <div className="session-actions">
               <button type="button" onClick={() => {
-                localStorage.setItem('metenovaLastActivityAt', String(Date.now()));
+                sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
                 setShowSessionWarning(false);
               }}>
                 Continue session

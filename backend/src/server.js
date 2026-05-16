@@ -74,7 +74,7 @@ const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
 const jwtSecret = process.env.JWT_SECRET || (!usingPostgres ? 'local-mvp-secret' : '');
 const requireStoredSessions = usingPostgres || process.env.REQUIRE_STORED_SESSIONS === 'true';
-const sessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES || 15);
+const sessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES || 30);
 const sessionTtlMs = Math.max(sessionTtlMinutes, 5) * 60 * 1000;
 const warningSeconds = Number(process.env.SESSION_WARNING_SECONDS || 60);
 const isEphemeralProductionStorage = !usingPostgres && process.env.VERCEL === '1';
@@ -87,7 +87,7 @@ const frontendDist = join(rootDir, 'frontend/dist');
 const legacyDatasetsFile = join(rootDir, 'backend/data/uploads/datasets.json');
 const authAttempts = new Map();
 const supportRecipientEmail = 'melakue@metenovaai.com';
-const supportSenderEmail = 'NewFuture Business Platform <support@metenovaai.com>';
+const supportSenderEmail = 'support@metenovaai.com';
 const emailFrom = process.env.EMAIL_FROM || supportSenderEmail;
 const resendConfigured = Boolean(process.env.RESEND_API_KEY);
 const emailConfigured = resendConfigured;
@@ -459,17 +459,27 @@ async function requireAuth(req, res, next) {
     const authHeader = req.headers.authorization || '';
     const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7) : '';
     if (!token) {
-      res.status(401).json({ error: 'Authentication required.' });
+      res.status(401).json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' });
       return;
     }
 
-    const payload = verifyJwt(token);
+    let payload;
+    try {
+      payload = verifyJwt(token);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Invalid token';
+      res.status(401).json({
+        error: message === 'Token expired' ? 'Session expired. Please sign in again.' : 'Authentication required.',
+        code: message === 'Token expired' ? 'SESSION_EXPIRED' : 'INVALID_TOKEN'
+      });
+      return;
+    }
     const storedUser = await findUserById(payload.sub);
     const session = payload.sid ? await findSessionById(payload.sid, payload.sub) : undefined;
     const user = storedUser ?? (!usingPostgres ? userFromToken(payload) : undefined);
 
     if (!user || user.active === false || (requireStoredSessions && !session)) {
-      res.status(401).json({ error: 'Authentication required.' });
+      res.status(401).json({ error: 'Session expired. Please sign in again.', code: 'SESSION_EXPIRED' });
       return;
     }
 
@@ -477,7 +487,7 @@ async function requireAuth(req, res, next) {
     req.session = session;
     next();
   } catch {
-    res.status(401).json({ error: 'Authentication required.' });
+    res.status(401).json({ error: 'Authentication required.', code: 'AUTH_REQUIRED' });
   }
 }
 
@@ -556,12 +566,23 @@ async function sendEmail({ to, subject, text, replyTo, attachments, from }) {
 
   if (!response.ok) {
     const details = await response.text().catch(() => '');
-    console.error(`Email send failed through Resend: ${response.status} ${details}`);
+    console.error('Resend email send failed:', {
+      status: response.status,
+      to,
+      from: from || emailFrom,
+      subject,
+      details
+    });
     throw new Error(details || 'Email provider rejected the message.');
   }
 
   const payload = await response.json().catch(() => ({}));
-  console.log(`Email sent through Resend to ${to}: ${payload.id ?? 'accepted'}`);
+  console.log('Resend email sent:', {
+    id: payload.id ?? 'accepted',
+    to,
+    from: from || emailFrom,
+    subject
+  });
   return { delivered: true, provider: 'resend', id: payload.id };
 }
 
@@ -1827,6 +1848,7 @@ initDatabase()
       console.error(`PostgreSQL startup error: ${dbStatus.connectionError}`);
     }
     console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
+    console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
     app.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
     });
