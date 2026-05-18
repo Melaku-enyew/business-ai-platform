@@ -102,10 +102,21 @@ type User = {
   twoFactorEnabled?: boolean;
   lastLoginAt?: string;
   createdAt?: string;
+  assignedCompanies?: CompanyAssignment[];
 };
 
 type AdminUser = User & {
   active: boolean;
+  createdAt?: string;
+};
+
+type CompanyAssignment = {
+  id: string;
+  userId: string;
+  companyId: string;
+  companyName: string;
+  role: UserRole;
+  assignedAt?: string;
   createdAt?: string;
 };
 
@@ -438,6 +449,10 @@ export function App() {
   const [adminUsers, setAdminUsers] = useState<AdminUser[]>([]);
   const [adminLoading, setAdminLoading] = useState(false);
   const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
+  const [accessUser, setAccessUser] = useState<AdminUser | null>(null);
+  const [accessCompanyIds, setAccessCompanyIds] = useState<string[]>([]);
+  const [accessRole, setAccessRole] = useState<UserRole>('employee');
+  const [accessSaving, setAccessSaving] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
@@ -1236,23 +1251,34 @@ export function App() {
 
     setAdminLoading(true);
     try {
-      const [usersResponse, auditResponse, systemResponse, invitationsResponse, emailLogsResponse] = await Promise.all([
-        apiFetch('/api/admin/users'),
-        apiFetch('/api/admin/audit-logs'),
-        apiFetch('/api/admin/system'),
-        apiFetch('/api/admin/invitations'),
-        apiFetch('/api/admin/email-logs')
-      ]);
+      const platformAdmin = user?.role === 'owner' || user?.role === 'admin';
+      const usersResponse = await apiFetch('/api/admin/users');
       const payload = await readJson<{ users: AdminUser[] }>(usersResponse);
-      const auditPayload = await readJson<{ auditLogs: AuditLog[] }>(auditResponse);
-      const systemPayload = await readJson<SystemStatus>(systemResponse);
-      const invitationPayload = await readJson<{ invitations: Invitation[] }>(invitationsResponse);
-      const emailLogPayload = await readJson<{ emailLogs: EmailLog[] }>(emailLogsResponse);
+      if (!usersResponse.ok) {
+        throw new Error((payload as { error?: string }).error || 'Could not load users.');
+      }
       setAdminUsers(payload.users ?? []);
-      setAuditLogs(auditPayload.auditLogs ?? []);
-      setSystemStatus(systemPayload);
-      setInvitations(invitationPayload.invitations ?? []);
-      setEmailLogs(emailLogPayload.emailLogs ?? []);
+      if (platformAdmin) {
+        const [auditResponse, systemResponse, invitationsResponse, emailLogsResponse] = await Promise.all([
+          apiFetch('/api/admin/audit-logs'),
+          apiFetch('/api/admin/system'),
+          apiFetch('/api/admin/invitations'),
+          apiFetch('/api/admin/email-logs')
+        ]);
+        const auditPayload = await readJson<{ auditLogs: AuditLog[] }>(auditResponse);
+        const systemPayload = await readJson<SystemStatus>(systemResponse);
+        const invitationPayload = await readJson<{ invitations: Invitation[] }>(invitationsResponse);
+        const emailLogPayload = await readJson<{ emailLogs: EmailLog[] }>(emailLogsResponse);
+        setAuditLogs(auditPayload.auditLogs ?? []);
+        setSystemStatus(systemPayload);
+        setInvitations(invitationPayload.invitations ?? []);
+        setEmailLogs(emailLogPayload.emailLogs ?? []);
+      } else {
+        setAuditLogs([]);
+        setSystemStatus(null);
+        setInvitations([]);
+        setEmailLogs([]);
+      }
       setAdminMessage('User directory refreshed.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'Could not load users.');
@@ -1286,6 +1312,44 @@ export function App() {
       setAdminMessage('User access updated.');
     } catch (error) {
       setAdminMessage(error instanceof Error ? error.message : 'User update failed.');
+    }
+  }
+
+  function openCompanyAccess(userRecord: AdminUser) {
+    setAccessUser(userRecord);
+    setAccessCompanyIds((userRecord.assignedCompanies ?? []).map((assignment) => assignment.companyId));
+    setAccessRole((userRecord.assignedCompanies?.[0]?.role as UserRole | undefined) ?? userRecord.role ?? 'employee');
+  }
+
+  function toggleAccessCompany(companyId: string) {
+    setAccessCompanyIds((current) => (
+      current.includes(companyId)
+        ? current.filter((entry) => entry !== companyId)
+        : [...current, companyId]
+    ));
+  }
+
+  async function saveCompanyAccess() {
+    if (!accessUser) return;
+    setAccessSaving(true);
+    try {
+      const assignments = accessCompanyIds.map((companyId) => ({ companyId, role: accessRole }));
+      const response = await apiFetch(`/api/admin/users/${accessUser.id}/company-assignments`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ assignments })
+      });
+      const payload = await readJson<{ user?: AdminUser; assignments?: CompanyAssignment[]; error?: string }>(response);
+      if (!response.ok || !payload.user) {
+        throw new Error(payload.error || 'Could not update company access.');
+      }
+      setAdminUsers((current) => current.map((entry) => entry.id === payload.user?.id ? payload.user : entry));
+      setAccessUser(null);
+      setAdminMessage('Company access updated.');
+    } catch (error) {
+      setAdminMessage(error instanceof Error ? error.message : 'Could not update company access.');
+    } finally {
+      setAccessSaving(false);
     }
   }
 
@@ -2025,6 +2089,20 @@ export function App() {
           </div>
         </header>
 
+        {accessUser && (
+          <CompanyAccessModal
+            accessCompanyIds={accessCompanyIds}
+            accessRole={accessRole}
+            companies={companies}
+            onClose={() => setAccessUser(null)}
+            onRoleChange={setAccessRole}
+            onSave={saveCompanyAccess}
+            onToggleCompany={toggleAccessCompany}
+            saving={accessSaving}
+            user={accessUser}
+          />
+        )}
+
         {location.pathname !== '/' ? (
           <RoutedPages
             apiFetch={apiFetch}
@@ -2040,6 +2118,7 @@ export function App() {
             deleteAdminUser={deleteAdminUser}
             deleteCompanyWorkspace={deleteCompanyWorkspace}
             downloadHistoricalReport={downloadHistoricalReport}
+            openCompanyAccess={openCompanyAccess}
             reports={companyReports}
             resetCompanyForm={resetCompanyForm}
             runCompanyAction={runCompanyAction}
@@ -2149,6 +2228,7 @@ export function App() {
                       <th>Name</th>
                       <th>Email</th>
                       <th>Role</th>
+                      <th>Assigned Companies</th>
                       <th>Status</th>
                       <th>Created</th>
                       <th>Actions</th>
@@ -2173,6 +2253,9 @@ export function App() {
                           </select>
                         </td>
                         <td>
+                          <AssignedCompaniesList assignments={adminUser.assignedCompanies ?? []} />
+                        </td>
+                        <td>
                           <span className={`status-pill ${adminUser.active ? 'active' : 'disabled'}`}>
                             {adminUser.active ? 'Active' : 'Disabled'}
                           </span>
@@ -2191,6 +2274,9 @@ export function App() {
                             <button className="ghost-button compact" type="button" disabled={adminUser.id === user?.id} onClick={() => revokeAdminUserSessions(adminUser)}>
                               Revoke
                             </button>
+                            <button className="ghost-button compact" type="button" onClick={() => openCompanyAccess(adminUser)}>
+                              Assign Companies
+                            </button>
                             <button className="ghost-button compact danger" type="button" disabled={adminUser.id === user?.id || adminUser.email === ownerEmail} onClick={() => deleteAdminUser(adminUser)}>
                               Delete
                             </button>
@@ -2200,13 +2286,13 @@ export function App() {
                     ))}
                     {!adminUsers.length && (
                       <tr>
-                        <td colSpan={6}>No users found.</td>
+                        <td colSpan={7}>No users found.</td>
                       </tr>
                     )}
                   </tbody>
                 </table>
               </div>
-              <div className="admin-ops-grid">
+              {(user?.role === 'owner' || user?.role === 'admin') && <div className="admin-ops-grid">
                 <article>
                   <h3>Invite workspace user</h3>
                   <form className="module-form invite-form" onSubmit={inviteWorkspaceUser}>
@@ -2245,7 +2331,7 @@ export function App() {
                     {!emailLogs.length && <p className="muted">No email delivery events yet.</p>}
                   </div>
                 </article>
-              </div>
+              </div>}
               <div className="admin-insights">
                 <article>
                   <h3>System monitoring</h3>
@@ -2874,7 +2960,7 @@ function renderCleanupPanel(
 }
 
 function canManageUsers(user: User | null) {
-  return user?.role === 'owner' || user?.role === 'admin';
+  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 }
 
 function canManageWorkspaceData(user: User | null) {
@@ -2890,6 +2976,88 @@ function roleLabel(role?: string) {
     viewer: 'Viewer / Client'
   };
   return labels[role ?? ''] ?? 'Employee';
+}
+
+function AssignedCompaniesList({ assignments }: { assignments: CompanyAssignment[] }) {
+  if (!assignments.length) {
+    return <span className="muted">No company access</span>;
+  }
+
+  return (
+    <div className="assigned-companies">
+      {assignments.slice(0, 3).map((assignment) => (
+        <span className="assignment-chip" key={assignment.id || assignment.companyId}>
+          {assignment.companyName || assignment.companyId}
+        </span>
+      ))}
+      {assignments.length > 3 && <span className="assignment-chip muted-chip">+{assignments.length - 3}</span>}
+    </div>
+  );
+}
+
+function CompanyAccessModal({
+  accessCompanyIds,
+  accessRole,
+  companies,
+  onClose,
+  onRoleChange,
+  onSave,
+  onToggleCompany,
+  saving,
+  user
+}: {
+  accessCompanyIds: string[];
+  accessRole: UserRole;
+  companies: Company[];
+  onClose: () => void;
+  onRoleChange: (role: UserRole) => void;
+  onSave: () => void;
+  onToggleCompany: (companyId: string) => void;
+  saving: boolean;
+  user: AdminUser;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="access-modal" aria-modal="true" role="dialog" aria-label={`Company access for ${user.name}`}>
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Company access</p>
+            <h2>{user.name}</h2>
+            <p className="muted">{user.email}</p>
+          </div>
+          <button className="ghost-button compact" type="button" onClick={onClose}>Close</button>
+        </div>
+        <label className="access-role-picker">
+          Company role
+          <select value={accessRole} onChange={(event) => onRoleChange(event.target.value as UserRole)}>
+            {roleOptions.filter((role) => role !== 'owner').map((role) => (
+              <option key={role} value={role}>{roleLabel(role)}</option>
+            ))}
+          </select>
+        </label>
+        <div className="company-access-list">
+          {companies.map((company) => (
+            <label className="company-access-row" key={company.id}>
+              <input
+                checked={accessCompanyIds.includes(company.id)}
+                type="checkbox"
+                onChange={() => onToggleCompany(company.id)}
+              />
+              <span>
+                <strong>{company.name}</strong>
+                <small>{company.industry}</small>
+              </span>
+            </label>
+          ))}
+          {!companies.length && <p className="muted">No companies are available to assign.</p>}
+        </div>
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>Cancel</button>
+          <button type="button" disabled={saving} onClick={onSave}>{saving ? 'Saving...' : 'Save Access'}</button>
+        </div>
+      </section>
+    </div>
+  );
 }
 
 function pipelineStepPath(stage: string) {
@@ -3001,6 +3169,7 @@ function RoutedPages(props: {
   deleteAdminUser: (user: AdminUser) => void;
   deleteCompanyWorkspace: (company: Company) => void;
   downloadHistoricalReport: (report: ReportHistoryItem) => void;
+  openCompanyAccess: (user: AdminUser) => void;
   reports: ReportHistoryItem[];
   loadCompanies: () => void;
   resetCompanyForm: () => void;
@@ -3049,7 +3218,7 @@ function RoutedPages(props: {
       />
       <Route path="/analytics/dashboard" element={<AnalyticsWorkspace dashboards={props.dashboards} reports={props.reports} />} />
       <Route path="/reports/history" element={<ReportsHistoryWorkspace downloadHistoricalReport={props.downloadHistoricalReport} reports={props.reports} />} />
-      <Route path="/admin/users" element={props.canManage ? <AdminUsersWorkspace deleteAdminUser={props.deleteAdminUser} updateAdminUser={props.updateAdminUser} users={props.users} /> : <Navigate to="/" replace />} />
+      <Route path="/admin/users" element={props.canManage ? <AdminUsersWorkspace deleteAdminUser={props.deleteAdminUser} openCompanyAccess={props.openCompanyAccess} updateAdminUser={props.updateAdminUser} users={props.users} /> : <Navigate to="/" replace />} />
       <Route path="/admin/audit-logs" element={props.canManage ? <AuditLogsWorkspace auditLogs={props.auditLogs} /> : <Navigate to="/" replace />} />
       <Route path="/admin/system-monitoring" element={props.canManage ? <SystemMonitoringWorkspace status={props.systemStatus} /> : <Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
@@ -3417,7 +3586,17 @@ function ReportsHistoryWorkspace({ reports, downloadHistoricalReport }: { report
   );
 }
 
-function AdminUsersWorkspace({ users, updateAdminUser, deleteAdminUser }: { users: AdminUser[]; updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void; deleteAdminUser: (user: AdminUser) => void }) {
+function AdminUsersWorkspace({
+  users,
+  updateAdminUser,
+  deleteAdminUser,
+  openCompanyAccess
+}: {
+  users: AdminUser[];
+  updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
+  deleteAdminUser: (user: AdminUser) => void;
+  openCompanyAccess: (user: AdminUser) => void;
+}) {
   const [search, setSearch] = useState('');
   const filteredUsers = users.filter((user) => [user.name, user.email, user.role].some((value) => value.toLowerCase().includes(search.toLowerCase())));
   return (
@@ -3428,7 +3607,7 @@ function AdminUsersWorkspace({ users, updateAdminUser, deleteAdminUser }: { user
         <div className="record-toolbar"><input placeholder="Search users" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
         <div className="table-wrap routed-table">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Assigned Companies</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {filteredUsers.map((adminUser) => (
                 <tr key={adminUser.id}>
@@ -3439,8 +3618,14 @@ function AdminUsersWorkspace({ users, updateAdminUser, deleteAdminUser }: { user
                       {roleOptions.map((role) => <option key={role} value={role}>{roleLabel(role)}</option>)}
                     </select>
                   </td>
+                  <td><AssignedCompaniesList assignments={adminUser.assignedCompanies ?? []} /></td>
                   <td>{adminUser.active ? 'Active' : 'Disabled'}</td>
-                  <td><button className="ghost-button compact danger" type="button" onClick={() => deleteAdminUser(adminUser)}>Delete</button></td>
+                  <td>
+                    <div className="admin-actions">
+                      <button className="ghost-button compact" type="button" onClick={() => openCompanyAccess(adminUser)}>Manage Access</button>
+                      <button className="ghost-button compact danger" type="button" onClick={() => deleteAdminUser(adminUser)}>Delete</button>
+                    </div>
+                  </td>
                 </tr>
               ))}
             </tbody>

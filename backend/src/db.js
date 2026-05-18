@@ -127,6 +127,22 @@ async function pgQuery(text, params = []) {
   return db.query(text, params);
 }
 
+async function withTransaction(operation) {
+  const db = await getPool();
+  const client = await db.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await operation(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (error) {
+    await client.query('ROLLBACK');
+    throw error;
+  } finally {
+    client.release();
+  }
+}
+
 export async function initDatabase() {
   if (!usingPostgres) {
     const store = await loadDevStore();
@@ -191,12 +207,20 @@ export async function initDatabase() {
     );
 
     CREATE TABLE IF NOT EXISTS user_company_assignments (
+      id TEXT,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
       company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
       role TEXT NOT NULL DEFAULT 'member',
       assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       PRIMARY KEY (user_id, company_id)
     );
+    ALTER TABLE user_company_assignments ADD COLUMN IF NOT EXISTS id TEXT;
+    ALTER TABLE user_company_assignments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    UPDATE user_company_assignments
+       SET id = COALESCE(id, md5(user_id || ':' || company_id)),
+           created_at = COALESCE(created_at, assigned_at, NOW())
+     WHERE id IS NULL;
 
     CREATE TABLE IF NOT EXISTS datasets (
       id TEXT PRIMARY KEY,
@@ -385,6 +409,7 @@ export async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user_expires_at ON sessions (user_id, expires_at DESC);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_company_assignments_id ON user_company_assignments (id);
     CREATE INDEX IF NOT EXISTS idx_user_company_assignments_company ON user_company_assignments (company_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_companies_updated_at ON companies (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
@@ -421,8 +446,8 @@ export async function initDatabase() {
   }
 
   await pgQuery(`
-    INSERT INTO user_company_assignments (user_id, company_id, role)
-    SELECT id, company_id, role
+    INSERT INTO user_company_assignments (id, user_id, company_id, role)
+    SELECT md5(id || ':' || company_id), id, company_id, role
     FROM users
     WHERE company_id IS NOT NULL
     ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;
@@ -548,6 +573,84 @@ export async function listCompanies(user) {
     [defaultCompanyId]
   );
   return result.rows.map(rowToCompany);
+}
+
+export async function listUserCompanyAssignments(userId) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) return [];
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const companiesById = new Map((store.companies ?? []).map((company) => [company.id, rowToCompany(company)]));
+    return (store.userCompanyAssignments ?? [])
+      .filter((assignment) => assignment.userId === normalizedUserId)
+      .map((assignment) => rowToCompanyAssignment({
+        ...assignment,
+        id: assignment.id ?? `${assignment.userId}:${assignment.companyId}`,
+        companyName: companiesById.get(assignment.companyId)?.name ?? assignment.companyName ?? 'Unknown company'
+      }))
+      .sort((a, b) => a.companyName.localeCompare(b.companyName));
+  }
+
+  const result = await pgQuery(
+    `SELECT assignments.*, companies.name AS company_name
+       FROM user_company_assignments assignments
+       INNER JOIN companies ON companies.id = assignments.company_id
+      WHERE assignments.user_id = $1
+      ORDER BY companies.name ASC;`,
+    [normalizedUserId]
+  );
+  return result.rows.map(rowToCompanyAssignment);
+}
+
+export async function replaceUserCompanyAssignments(userId, assignments) {
+  const normalizedUserId = String(userId || '').trim();
+  const normalizedAssignments = (Array.isArray(assignments) ? assignments : [])
+    .map((assignment) => ({
+      companyId: String(assignment.companyId || assignment.company_id || '').trim(),
+      role: normalizeRole(assignment.role)
+    }))
+    .filter((assignment) => assignment.companyId && assignment.companyId !== defaultCompanyId);
+
+  const uniqueAssignments = [...new Map(normalizedAssignments.map((assignment) => [assignment.companyId, assignment])).values()];
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const companies = new Set((store.companies ?? []).map((company) => company.id));
+    const validAssignments = uniqueAssignments.filter((assignment) => companies.has(assignment.companyId));
+    store.userCompanyAssignments = [
+      ...(store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== normalizedUserId),
+      ...validAssignments.map((assignment) => ({
+        id: `${normalizedUserId}:${assignment.companyId}`,
+        userId: normalizedUserId,
+        companyId: assignment.companyId,
+        role: assignment.role,
+        assignedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      }))
+    ];
+    const primaryCompanyId = validAssignments[0]?.companyId ?? defaultCompanyId;
+    store.users = (store.users ?? []).map((user) => user.id === normalizedUserId ? { ...user, companyId: primaryCompanyId } : user);
+    await saveDevStore(store);
+    return listUserCompanyAssignments(normalizedUserId);
+  }
+
+  await withTransaction(async (client) => {
+    await client.query('DELETE FROM user_company_assignments WHERE user_id = $1;', [normalizedUserId]);
+    for (const assignment of uniqueAssignments) {
+      await client.query(
+        `INSERT INTO user_company_assignments (id, user_id, company_id, role)
+         SELECT $1, $2, $3, $4
+         WHERE EXISTS (SELECT 1 FROM companies WHERE id = $3 AND id <> $5)
+         ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;`,
+        [`${normalizedUserId}:${assignment.companyId}`, normalizedUserId, assignment.companyId, assignment.role, defaultCompanyId]
+      );
+    }
+    const primaryCompanyId = uniqueAssignments[0]?.companyId ?? defaultCompanyId;
+    await client.query('UPDATE users SET company_id = $2 WHERE id = $1;', [normalizedUserId, primaryCompanyId]);
+  });
+
+  return listUserCompanyAssignments(normalizedUserId);
 }
 
 export async function createCompany(company) {
@@ -700,7 +803,7 @@ export async function createUser(user) {
     const store = await loadDevStore();
     store.users = [savedUser, ...store.users.filter((entry) => entry.email !== savedUser.email)];
     store.userCompanyAssignments = [
-      { userId: savedUser.id, companyId: savedUser.companyId, role: savedUser.role, assignedAt: new Date().toISOString() },
+      { id: `${savedUser.id}:${savedUser.companyId}`, userId: savedUser.id, companyId: savedUser.companyId, role: savedUser.role, assignedAt: new Date().toISOString(), createdAt: new Date().toISOString() },
       ...(store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== savedUser.id || assignment.companyId !== savedUser.companyId)
     ];
     await saveDevStore(store);
@@ -740,10 +843,10 @@ export async function createUser(user) {
     ]
   );
   await pgQuery(
-    `INSERT INTO user_company_assignments (user_id, company_id, role)
-     VALUES ($1, $2, $3)
+    `INSERT INTO user_company_assignments (id, user_id, company_id, role)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;`,
-    [savedUser.id, savedUser.companyId, savedUser.role]
+    [`${savedUser.id}:${savedUser.companyId}`, savedUser.id, savedUser.companyId, savedUser.role]
   );
   return rowToUser(result.rows[0]);
 }
@@ -777,16 +880,32 @@ export async function findUserById(id) {
 export async function listUsers(requestingUser) {
   if (!usingPostgres) {
     const store = await loadDevStore();
-    return store.users
-      .filter((user) => isOwner(requestingUser) || user.companyId === getCompanyId(requestingUser))
+    const accessibleIds = await getAccessibleCompanyIds(requestingUser);
+    const visibleUsers = store.users
+      .filter((user) => accessibleIds === null || accessibleIds.includes(user.companyId))
       .map((user) => rowToUser(user));
+    return Promise.all(visibleUsers.map(async (user) => ({
+      ...user,
+      assignedCompanies: await listUserCompanyAssignments(user.id)
+    })));
   }
 
   const params = [];
-  const where = isOwner(requestingUser) ? '' : 'WHERE company_id = $1';
-  if (!isOwner(requestingUser)) params.push(getCompanyId(requestingUser));
+  let where = '';
+  const accessibleIds = await getAccessibleCompanyIds(requestingUser);
+  if (accessibleIds !== null) {
+    if (!accessibleIds.length) return [];
+    params.push(accessibleIds);
+    where = 'WHERE company_id = ANY($1::text[]) OR id IN (SELECT user_id FROM user_company_assignments WHERE company_id = ANY($1::text[]))';
+  }
   const result = await pgQuery(`SELECT * FROM users ${where} ORDER BY created_at DESC;`, params);
-  return result.rows.map((row) => rowToUser(row));
+  return Promise.all(result.rows.map(async (row) => {
+    const user = rowToUser(row);
+    return {
+      ...user,
+      assignedCompanies: await listUserCompanyAssignments(user.id)
+    };
+  }));
 }
 
 export async function updateUser(id, updates) {
@@ -814,7 +933,7 @@ export async function updateUser(id, updates) {
       return updated;
     });
     store.userCompanyAssignments = [
-      { userId: id, companyId: next.companyId ?? defaultCompanyId, role: next.role, assignedAt: new Date().toISOString() },
+      { id: `${id}:${next.companyId ?? defaultCompanyId}`, userId: id, companyId: next.companyId ?? defaultCompanyId, role: next.role, assignedAt: new Date().toISOString(), createdAt: new Date().toISOString() },
       ...(store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== id || assignment.companyId !== (next.companyId ?? defaultCompanyId))
     ];
     await saveDevStore(store);
@@ -848,10 +967,10 @@ export async function updateUser(id, updates) {
     ]
   );
   await pgQuery(
-    `INSERT INTO user_company_assignments (user_id, company_id, role)
-     VALUES ($1, $2, $3)
+    `INSERT INTO user_company_assignments (id, user_id, company_id, role)
+     VALUES ($1, $2, $3, $4)
      ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;`,
-    [id, next.companyId ?? defaultCompanyId, next.role]
+    [`${id}:${next.companyId ?? defaultCompanyId}`, id, next.companyId ?? defaultCompanyId, next.role]
   );
   return result.rows[0] ? rowToUser(result.rows[0]) : undefined;
 }
@@ -1639,6 +1758,114 @@ export async function updateNotification(user, id, updates) {
   return result.rows[0] ? rowToNotification(result.rows[0]) : undefined;
 }
 
+export async function listPipelines(user, companyId) {
+  const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.pipelines ?? [])
+      .filter((pipeline) => !requestedCompanyId || pipeline.companyId === requestedCompanyId)
+      .filter((pipeline) => assignedCompanyIds === null || assignedCompanyIds.includes(pipeline.companyId))
+      .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
+      .map(rowToPipeline);
+  }
+
+  const filters = [];
+  const params = [];
+  if (requestedCompanyId) {
+    params.push(requestedCompanyId);
+    filters.push(`company_id = $${params.length}`);
+  }
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    filters.push(`company_id = ANY($${params.length}::text[])`);
+  }
+  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  const result = await pgQuery(`SELECT * FROM pipelines ${where} ORDER BY updated_at DESC, created_at DESC;`, params);
+  return result.rows.map(rowToPipeline);
+}
+
+export async function getPipeline(id, user) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const pipeline = (store.pipelines ?? []).find((entry) => entry.id === id && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)));
+    return pipeline ? rowToPipeline(pipeline) : undefined;
+  }
+
+  const params = [id];
+  const accessFilter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($2::text[])';
+  if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
+  const result = await pgQuery(`SELECT * FROM pipelines WHERE id = $1 ${accessFilter} LIMIT 1;`, params);
+  return result.rows[0] ? rowToPipeline(result.rows[0]) : undefined;
+}
+
+export async function savePipeline(pipeline) {
+  const saved = {
+    id: pipeline.id,
+    companyId: pipeline.companyId,
+    userId: pipeline.userId,
+    department: String(pipeline.department || '').trim(),
+    name: String(pipeline.name || '').trim(),
+    status: pipeline.status ?? 'active',
+    metadata: pipeline.metadata ?? {},
+    createdAt: pipeline.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.pipelines = [saved, ...(store.pipelines ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToPipeline(saved);
+  }
+
+  const result = await pgQuery(
+    `INSERT INTO pipelines (id, company_id, user_id, department, name, status, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7)
+     ON CONFLICT (id) DO UPDATE SET
+       company_id = EXCLUDED.company_id,
+       user_id = EXCLUDED.user_id,
+       department = EXCLUDED.department,
+       name = EXCLUDED.name,
+       status = EXCLUDED.status,
+       metadata = EXCLUDED.metadata,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.userId, saved.department, saved.name, saved.status, JSON.stringify(saved.metadata)]
+  );
+  return rowToPipeline(result.rows[0]);
+}
+
+export async function updatePipeline(id, updates, user) {
+  const pipeline = await getPipeline(id, user);
+  if (!pipeline) return undefined;
+  return savePipeline({
+    ...pipeline,
+    ...(updates.department != null ? { department: String(updates.department).trim() } : {}),
+    ...(updates.name != null ? { name: String(updates.name).trim() } : {}),
+    ...(updates.status != null ? { status: String(updates.status).trim() || pipeline.status } : {}),
+    ...(updates.metadata != null ? { metadata: updates.metadata } : {})
+  });
+}
+
+export async function deletePipeline(id, user) {
+  const pipeline = await getPipeline(id, user);
+  if (!pipeline) return false;
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.pipelines = (store.pipelines ?? []).filter((entry) => entry.id !== id);
+    await saveDevStore(store);
+    return true;
+  }
+
+  const result = await pgQuery('DELETE FROM pipelines WHERE id = $1 AND company_id = $2;', [id, pipeline.companyId]);
+  return result.rowCount > 0;
+}
+
 export async function createModuleRecord(record) {
   const saved = {
     ...record,
@@ -1672,6 +1899,7 @@ export async function createModuleRecord(record) {
 }
 
 export async function listModuleRecords(user, module) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return (store.moduleRecords ?? [])
@@ -1681,8 +1909,12 @@ export async function listModuleRecords(user, module) {
       .map(rowToModuleRecord);
   }
   const params = [module];
-  const companyFilter = isOwner(user) ? '' : 'AND company_id = $2';
-  if (!isOwner(user)) params.push(getCompanyId(user));
+  let companyFilter = '';
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    companyFilter = 'AND company_id = ANY($2::text[])';
+  }
   const result = await pgQuery(
     `SELECT * FROM module_records
      WHERE module = $1 ${companyFilter}
@@ -1694,6 +1926,7 @@ export async function listModuleRecords(user, module) {
 }
 
 export async function updateModuleRecord(user, id, updates) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   const amountProvided = updates.amount !== undefined;
   const normalized = {
     title: updates.title != null ? String(updates.title).trim() : null,
@@ -1730,9 +1963,10 @@ export async function updateModuleRecord(user, id, updates) {
     amountProvided
   ];
   let companyFilter = '';
-  if (!isOwner(user)) {
-    params.push(getCompanyId(user));
-    companyFilter = `AND company_id = $${params.length}`;
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return undefined;
+    params.push(assignedCompanyIds);
+    companyFilter = `AND company_id = ANY($${params.length}::text[])`;
   }
   const result = await pgQuery(
     `UPDATE module_records SET
@@ -1749,6 +1983,7 @@ export async function updateModuleRecord(user, id, updates) {
 }
 
 export async function deleteModuleRecord(user, id) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     const before = store.moduleRecords?.length ?? 0;
@@ -1758,9 +1993,10 @@ export async function deleteModuleRecord(user, id) {
   }
   const params = [id];
   let companyFilter = '';
-  if (!isOwner(user)) {
-    params.push(getCompanyId(user));
-    companyFilter = `AND company_id = $${params.length}`;
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return false;
+    params.push(assignedCompanyIds);
+    companyFilter = `AND company_id = ANY($${params.length}::text[])`;
   }
   const result = await pgQuery(`DELETE FROM module_records WHERE id = $1 ${companyFilter};`, params);
   return result.rowCount > 0;
@@ -1768,6 +2004,7 @@ export async function deleteModuleRecord(user, id) {
 
 export async function getModuleMetrics(user) {
   const modules = ['accounting', 'engineering', 'hr', 'crm', 'dataProcessing'];
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return modules.reduce((metrics, module) => {
@@ -1777,8 +2014,12 @@ export async function getModuleMetrics(user) {
     }, {});
   }
   const params = [];
-  const where = isOwner(user) ? '' : 'WHERE company_id = $1';
-  if (!isOwner(user)) params.push(getCompanyId(user));
+  let where = '';
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return modules.reduce((metrics, module) => ({ ...metrics, [module]: { total: 0, open: 0 } }), {});
+    params.push(assignedCompanyIds);
+    where = 'WHERE company_id = ANY($1::text[])';
+  }
   const result = await pgQuery(
     `SELECT module, COUNT(*)::int AS total_count,
       SUM(CASE WHEN status <> 'closed' THEN 1 ELSE 0 END)::int AS open_count
@@ -2058,6 +2299,32 @@ function rowToNotification(row) {
     metadata: parseJson(row.metadata, {}),
     archivedAt: toIso(row.archived_at ?? row.archivedAt),
     createdAt: toIso(row.created_at ?? row.createdAt)
+  };
+}
+
+function rowToCompanyAssignment(row) {
+  return {
+    id: row.id ?? `${row.user_id ?? row.userId}:${row.company_id ?? row.companyId}`,
+    userId: row.user_id ?? row.userId,
+    companyId: row.company_id ?? row.companyId,
+    companyName: row.company_name ?? row.companyName ?? '',
+    role: normalizeRole(row.role),
+    assignedAt: toIso(row.assigned_at ?? row.assignedAt ?? row.created_at ?? row.createdAt),
+    createdAt: toIso(row.created_at ?? row.createdAt ?? row.assigned_at ?? row.assignedAt)
+  };
+}
+
+function rowToPipeline(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    department: row.department,
+    name: row.name,
+    status: row.status ?? 'active',
+    metadata: parseJson(row.metadata, {}),
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
   };
 }
 

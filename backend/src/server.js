@@ -23,6 +23,7 @@ import {
   deleteReport,
   deleteUser,
   deleteModuleRecord,
+  deletePipeline,
   ensureOwnerAccount,
   findUserByEmail,
   findUserById,
@@ -37,6 +38,7 @@ import {
   getDevUser,
   getDataset,
   getModuleMetrics,
+  getPipeline,
   initDatabase,
   listAuditLogs,
   listCompanies,
@@ -47,8 +49,10 @@ import {
   listInvitations,
   listModuleRecords,
   listNotifications,
+  listPipelines,
   listReports,
   listSessions,
+  listUserCompanyAssignments,
   listUsers,
   markAccountTokenUsed,
   markInvitationAccepted,
@@ -62,6 +66,7 @@ import {
   saveDataset,
   saveEmailLog,
   saveNotification,
+  savePipeline,
   saveReport,
   saveAuditLog,
   revokeSession,
@@ -71,8 +76,10 @@ import {
   updateEmailLog,
   updateCompany,
   updateNotification,
+  updatePipeline,
   updateModuleRecord,
   updateUser,
+  replaceUserCompanyAssignments,
   usingPostgres
 } from './db.js';
 import { cleanDataset, recordsToCsv } from './dataCleanup.js';
@@ -444,7 +451,8 @@ function publicUser(user) {
     preferences: user.preferences ?? {},
     twoFactorEnabled: user.twoFactorEnabled === true,
     lastLoginAt: user.lastLoginAt,
-    createdAt: user.createdAt
+    createdAt: user.createdAt,
+    assignedCompanies: user.assignedCompanies ?? []
   };
 }
 
@@ -786,15 +794,26 @@ function requireDurableStorage(req, res, next) {
   next();
 }
 
-function canManageTargetUser(actor, target) {
-  return Boolean(target && (actor.email === ownerEmail || actor.role === 'owner' || target.companyId === actor.companyId));
+async function canManageTargetUser(actor, target) {
+  if (!target) return false;
+  if (actor.email === ownerEmail || actor.role === 'owner' || actor.role === 'admin') return true;
+  if (!hasRole(actor, 'manager') || !Array.isArray(actor.accessibleCompanyIds)) return false;
+  const assignments = await listUserCompanyAssignments(target.id);
+  const targetCompanyIds = new Set([target.companyId, ...assignments.map((assignment) => assignment.companyId)].filter(Boolean));
+  return [...targetCompanyIds].some((companyId) => actor.accessibleCompanyIds.includes(companyId));
 }
 
 function canAssignRole(actor, role) {
   if (role === 'owner') {
     return actor.email === ownerEmail;
   }
-  return hasRole(actor, 'admin');
+  if (role === 'admin') {
+    return hasRole(actor, 'admin');
+  }
+  if (role === 'manager') {
+    return hasRole(actor, 'admin');
+  }
+  return hasRole(actor, 'manager');
 }
 
 function roleLabel(role) {
@@ -1391,7 +1410,7 @@ app.get('/api/auth/sessions', requireAuth, async (req, res, next) => {
   }
 });
 
-app.get('/api/admin/workspace', requireAuth, requireRole('admin'), async (req, res, next) => {
+app.get('/api/admin/workspace', requireAuth, requireRole('manager'), async (req, res, next) => {
   try {
     const [dashboards, reports] = await Promise.all([
       listDashboards(req.user),
@@ -1409,7 +1428,7 @@ app.get('/api/admin/workspace', requireAuth, requireRole('admin'), async (req, r
   }
 });
 
-app.get('/api/admin/users', requireAuth, requireRole('admin'), async (req, res, next) => {
+app.get('/api/admin/users', requireAuth, requireRole('manager'), async (req, res, next) => {
   try {
     res.json({ users: (await listUsers(req.user)).map(publicUser) });
   } catch (error) {
@@ -1417,7 +1436,7 @@ app.get('/api/admin/users', requireAuth, requireRole('admin'), async (req, res, 
   }
 });
 
-app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), requireDurableStorage, async (req, res, next) => {
+app.patch('/api/admin/users/:id', requireAuth, requireRole('manager'), requireDurableStorage, async (req, res, next) => {
   try {
     const updates = {};
 
@@ -1440,7 +1459,7 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), requireDura
     }
 
     const existing = await findUserById(req.params.id);
-    if (!canManageTargetUser(req.user, existing)) {
+    if (!(await canManageTargetUser(req.user, existing))) {
       res.status(403).json({ error: 'You can only manage users in your company workspace.' });
       return;
     }
@@ -1465,6 +1484,65 @@ app.patch('/api/admin/users/:id', requireAuth, requireRole('admin'), requireDura
   }
 });
 
+app.get('/api/admin/users/:id/company-assignments', requireAuth, requireRole('manager'), async (req, res, next) => {
+  try {
+    const existing = await findUserById(req.params.id);
+    if (!(await canManageTargetUser(req.user, existing))) {
+      res.status(403).json({ error: 'You can only manage users assigned to your company workspace.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+    res.json({ assignments: await listUserCompanyAssignments(req.params.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.put('/api/admin/users/:id/company-assignments', requireAuth, requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const existing = await findUserById(req.params.id);
+    if (!existing) {
+      res.status(404).json({ error: 'User not found.' });
+      return;
+    }
+    if (existing.email === ownerEmail && req.user.email !== ownerEmail) {
+      res.status(403).json({ error: 'Owner company access cannot be changed by another account.' });
+      return;
+    }
+    if (!(await canManageTargetUser(req.user, existing))) {
+      res.status(403).json({ error: 'You can only manage users assigned to your company workspace.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+
+    const requestedAssignments = Array.isArray(req.body?.assignments) ? req.body.assignments : [];
+    const allowedCompanyIds = await getAccessibleCompanyIds(req.user);
+    const normalizedAssignments = requestedAssignments
+      .map((assignment) => ({
+        companyId: String(assignment.companyId || '').trim(),
+        role: roles.includes(assignment.role) ? assignment.role : existing.role
+      }))
+      .filter((assignment) => assignment.companyId);
+
+    if (allowedCompanyIds !== null && normalizedAssignments.some((assignment) => !allowedCompanyIds.includes(assignment.companyId))) {
+      res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+    if (normalizedAssignments.some((assignment) => assignment.role === 'owner' && req.user.email !== ownerEmail)) {
+      res.status(403).json({ error: 'Only the permanent owner can assign owner company access.' });
+      return;
+    }
+
+    const assignments = await replaceUserCompanyAssignments(req.params.id, normalizedAssignments);
+    const updatedUser = await findUserById(req.params.id);
+    const responseUser = { ...updatedUser, assignedCompanies: assignments };
+    await audit(req, 'admin.company_assignments_updated', 'user', req.params.id, {
+      companyIds: assignments.map((assignment) => assignment.companyId)
+    });
+    res.json({ user: publicUser(responseUser), assignments });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req, res, next) => {
   try {
     if (req.params.id === req.user.id) {
@@ -1473,7 +1551,7 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req
     }
 
     const existing = await findUserById(req.params.id);
-    if (!canManageTargetUser(req.user, existing)) {
+    if (!(await canManageTargetUser(req.user, existing))) {
       res.status(403).json({ error: 'You can only manage users in your company workspace.' });
       return;
     }
@@ -1490,7 +1568,7 @@ app.delete('/api/admin/users/:id', requireAuth, requireRole('admin'), async (req
   }
 });
 
-app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('admin'), async (req, res, next) => {
+app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('manager'), async (req, res, next) => {
   try {
     if (req.params.id === req.user.id) {
       res.status(400).json({ error: 'Use logout to end your current session.' });
@@ -1498,7 +1576,7 @@ app.post('/api/admin/users/:id/revoke', requireAuth, requireRole('admin'), async
     }
 
     const existing = await findUserById(req.params.id);
-    if (!canManageTargetUser(req.user, existing)) {
+    if (!(await canManageTargetUser(req.user, existing))) {
       res.status(403).json({ error: 'You can only manage users in your company workspace.' });
       return;
     }
@@ -1714,6 +1792,95 @@ app.delete('/api/companies/:id', requireRole('owner'), requireDurableStorage, as
   }
 });
 
+app.get('/api/pipelines', async (req, res, next) => {
+  try {
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ pipelines: await listPipelines(req.user, companyId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/pipelines', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const companyId = String(req.body?.companyId || requestedCompanyId(req) || '').trim();
+    if (!companyId) {
+      res.status(400).json({ error: 'Company workspace is required.' });
+      return;
+    }
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    if (!canManageCompany(req.user, companyId)) {
+      res.status(403).json({ error: 'Insufficient pipeline permissions.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+
+    const name = String(req.body?.name || '').trim();
+    const department = String(req.body?.department || '').trim();
+    if (!name || !department) {
+      res.status(400).json({ error: 'Pipeline name and department are required.' });
+      return;
+    }
+
+    const pipeline = await savePipeline({
+      id: randomUUID(),
+      companyId,
+      userId: req.user.id,
+      name,
+      department,
+      status: String(req.body?.status || 'active'),
+      metadata: req.body?.metadata ?? {}
+    });
+    await audit(req, 'pipeline.created', 'pipeline', pipeline.id, { companyId, department });
+    res.status(201).json({ pipeline });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/pipelines/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const pipeline = await getPipeline(req.params.id, req.user);
+    if (!pipeline) {
+      res.status(404).json({ error: 'Pipeline not found.' });
+      return;
+    }
+    if (!canManageCompany(req.user, pipeline.companyId)) {
+      res.status(403).json({ error: 'Insufficient pipeline permissions.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+    const updated = await updatePipeline(req.params.id, {
+      name: req.body?.name,
+      department: req.body?.department,
+      status: req.body?.status,
+      metadata: req.body?.metadata
+    }, req.user);
+    await audit(req, 'pipeline.updated', 'pipeline', req.params.id, { companyId: pipeline.companyId });
+    res.json({ pipeline: updated });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/pipelines/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const pipeline = await getPipeline(req.params.id, req.user);
+    if (!pipeline) {
+      res.status(404).json({ error: 'Pipeline not found.' });
+      return;
+    }
+    if (!canManageCompany(req.user, pipeline.companyId)) {
+      res.status(403).json({ error: 'Insufficient pipeline permissions.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+    await deletePipeline(req.params.id, req.user);
+    await audit(req, 'pipeline.deleted', 'pipeline', req.params.id, { companyId: pipeline.companyId });
+    res.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.patch('/api/profile', requireDurableStorage, async (req, res, next) => {
   try {
     const user = await updateUser(req.user.id, {
@@ -1799,15 +1966,21 @@ app.post('/api/modules/:module/records', requireDurableStorage, async (req, res,
   try {
     const title = String(req.body?.title || '').trim();
     const recordType = String(req.body?.recordType || 'item').trim();
+    const companyId = String(req.body?.companyId || req.user.companyId || '').trim();
 
     if (!title) {
       res.status(400).json({ error: 'Title is required.' });
       return;
     }
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    if (!hasRole(req.user, 'employee')) {
+      res.status(403).json({ error: 'Insufficient workflow permissions.' });
+      return;
+    }
 
     const record = await createModuleRecord({
       id: randomUUID(),
-      companyId: req.user.companyId,
+      companyId,
       userId: req.user.id,
       module: req.params.module,
       recordType,

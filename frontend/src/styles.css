@@ -2123,12 +2123,96 @@ th {
     gap: 4px;
   }
 
-  .floating-help {
-    right: 14px;
-    bottom: 14px;
-    min-width: 56px;
-    min-height: 46px;
-  }
+.floating-help {
+  right: 14px;
+  bottom: 14px;
+  min-width: 56px;
+  min-height: 46px;
+}
+}
+
+.assigned-companies {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-width: 280px;
+}
+
+.assignment-chip {
+  border: 1px solid rgba(24, 119, 242, 0.2);
+  border-radius: 999px;
+  background: rgba(24, 119, 242, 0.08);
+  color: #123f73;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 5px 8px;
+}
+
+.muted-chip {
+  border-color: rgba(15, 23, 42, 0.12);
+  background: rgba(15, 23, 42, 0.06);
+  color: #64748b;
+}
+
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgba(15, 23, 42, 0.42);
+}
+
+.access-modal {
+  width: min(680px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  overflow: auto;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: 8px;
+  background: #ffffff;
+  box-shadow: 0 24px 80px rgba(15, 23, 42, 0.25);
+  padding: 24px;
+}
+
+.access-role-picker {
+  display: grid;
+  gap: 8px;
+  margin: 18px 0;
+  color: #475569;
+  font-size: 13px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.company-access-list {
+  display: grid;
+  gap: 10px;
+}
+
+.company-access-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.company-access-row span {
+  display: grid;
+  gap: 3px;
+}
+
+.company-access-row small {
+  color: #64748b;
+}
+
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 18px;
 }
 
 @keyframes card-rise {
