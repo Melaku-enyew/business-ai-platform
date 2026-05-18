@@ -17,6 +17,10 @@ import {
   createModuleRecord,
   createSession,
   createUser,
+  deleteCleanupJob,
+  deleteCompany,
+  deleteDataset,
+  deleteReport,
   deleteUser,
   deleteModuleRecord,
   ensureOwnerAccount,
@@ -40,6 +44,7 @@ import {
   listEmailLogs,
   listInvitations,
   listModuleRecords,
+  listNotifications,
   listReports,
   listSessions,
   listUsers,
@@ -54,6 +59,7 @@ import {
   saveCleanupJob,
   saveDataset,
   saveEmailLog,
+  saveNotification,
   saveReport,
   saveAuditLog,
   revokeSession,
@@ -61,6 +67,8 @@ import {
   roles,
   updateUserPassword,
   updateEmailLog,
+  updateCompany,
+  updateNotification,
   updateModuleRecord,
   updateUser,
   usingPostgres
@@ -79,6 +87,7 @@ const port = Number(process.env.PORT || 4000);
 const clientOrigin = process.env.CLIENT_ORIGIN || 'http://localhost:5174';
 const authDisabled = process.env.AUTH_DISABLED === 'true';
 const jwtSecret = process.env.JWT_SECRET || (!usingPostgres ? 'local-mvp-secret' : '');
+const csrfToken = process.env.CSRF_TOKEN || randomBytes(32).toString('base64url');
 const requireStoredSessions = usingPostgres || process.env.REQUIRE_STORED_SESSIONS === 'true';
 const sessionTtlMinutes = Number(process.env.SESSION_TTL_MINUTES || 30);
 const sessionTtlMs = Math.max(sessionTtlMinutes, 5) * 60 * 1000;
@@ -165,6 +174,42 @@ function parseCsv(text) {
   return rowsToRecords(rows);
 }
 
+function parseJsonDataset(text) {
+  let payload;
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    const error = new Error('Upload a valid JSON file.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const records = Array.isArray(payload)
+    ? payload
+    : Array.isArray(payload?.records)
+      ? payload.records
+      : Array.isArray(payload?.data)
+        ? payload.data
+        : [];
+
+  if (!records.length || records.some((record) => record == null || typeof record !== 'object' || Array.isArray(record))) {
+    const error = new Error('JSON uploads must contain an array of objects.');
+    error.statusCode = 400;
+    throw error;
+  }
+
+  const columns = [...new Set(records.flatMap((record) => Object.keys(record)))];
+  return {
+    columns,
+    records: records.map((record) =>
+      columns.reduce((normalized, column) => {
+        normalized[column] = record[column] == null ? '' : String(record[column]);
+        return normalized;
+      }, {})
+    )
+  };
+}
+
 function rowsToRecords(rows) {
   const normalizedRows = rows
     .map((row) => row.map((value) => String(value ?? '').trim()))
@@ -195,11 +240,29 @@ function getFileExtension(fileName) {
   return String(fileName || '').split('.').pop()?.toLowerCase() || '';
 }
 
+function validateUploadMetadata(file) {
+  const extension = getFileExtension(file.originalname);
+  const allowedExtensions = ['csv', 'xlsx', 'xls', 'json'];
+  const allowedMimeTypes = new Set([
+    'text/csv',
+    'application/csv',
+    'application/json',
+    'application/vnd.ms-excel',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/octet-stream'
+  ]);
+  if (!allowedExtensions.includes(extension) || (file.mimetype && !allowedMimeTypes.has(file.mimetype))) {
+    const error = new Error('Upload a supported CSV, XLSX, XLS, or JSON file.');
+    error.statusCode = 400;
+    throw error;
+  }
+}
+
 function parseUploadedFile(file, requestedWorksheetName) {
   const extension = getFileExtension(file.originalname);
 
-  if (!['csv', 'xlsx', 'xls'].includes(extension)) {
-    const error = new Error('Upload a .csv, .xlsx, or .xls file.');
+  if (!['csv', 'xlsx', 'xls', 'json'].includes(extension)) {
+    const error = new Error('Upload a .csv, .xlsx, .xls, or .json file.');
     error.statusCode = 400;
     throw error;
   }
@@ -211,6 +274,16 @@ function parseUploadedFile(file, requestedWorksheetName) {
       fileType: 'csv',
       worksheetName: 'CSV',
       worksheets: ['CSV']
+    };
+  }
+
+  if (extension === 'json') {
+    const parsed = parseJsonDataset(file.buffer.toString('utf8'));
+    return {
+      ...parsed,
+      fileType: 'json',
+      worksheetName: 'JSON',
+      worksheets: ['JSON']
     };
   }
 
@@ -345,7 +418,7 @@ function reportLines(dataset) {
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
     '',
-    'AI Insights',
+    'Business Insights',
     ...dataset.insights.map((item) => `- ${item}`),
     '',
     'Numeric Summary',
@@ -523,6 +596,14 @@ function requireRole(role) {
   };
 }
 
+function canManageCompany(user, companyId) {
+  return hasRole(user, 'owner') || (hasRole(user, 'manager') && user.companyId === companyId);
+}
+
+function canManageDataset(user, dataset) {
+  return hasRole(user, 'owner') || (hasRole(user, 'manager') && user.companyId === dataset.companyId);
+}
+
 function hashToken(token) {
   return createHmac('sha256', jwtSecret).update(token).digest('base64url');
 }
@@ -539,6 +620,18 @@ async function audit(req, action, targetType, targetId, metadata = {}) {
     action,
     targetType,
     targetId,
+    metadata
+  });
+}
+
+async function notifyWorkspace({ companyId, userId, type, title, message, metadata = {} }) {
+  await saveNotification({
+    id: randomUUID(),
+    companyId,
+    userId,
+    type,
+    title,
+    message,
     metadata
   });
 }
@@ -871,7 +964,61 @@ app.use(cors({
   },
   credentials: true
 }));
+app.use((req, res, next) => {
+  const requestId = req.headers['x-request-id'] || randomUUID();
+  const startedAt = Date.now();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+  res.on('finish', () => {
+    const durationMs = Date.now() - startedAt;
+    if (req.path.startsWith('/api')) {
+      console.log(JSON.stringify({
+        level: res.statusCode >= 500 ? 'error' : 'info',
+        requestId,
+        method: req.method,
+        path: req.path,
+        statusCode: res.statusCode,
+        durationMs
+      }));
+    }
+  });
+  next();
+});
 app.use(express.json());
+
+app.get('/api/health', (_req, res) => {
+  res.json({
+    status: 'ok',
+    service: 'metenova-business-platform',
+    timestamp: new Date().toISOString(),
+    uptimeSeconds: Math.round(process.uptime())
+  });
+});
+
+app.get('/api/readiness', (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
+  const ready = !dbStatus.usingPostgres || (dbStatus.connected && dbStatus.tablesInitialized);
+  res.status(ready ? 200 : 503).json({
+    ready,
+    database: dbStatus,
+    emailConfigured,
+    durableStorage: !isEphemeralProductionStorage,
+    timestamp: new Date().toISOString()
+  });
+});
+
+app.get('/api/diagnostics', requireAuth, requireRole('admin'), (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
+  res.json({
+    environment: process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local',
+    database: dbStatus,
+    emailConfigured,
+    authDisabled,
+    uploadLimitMb: Math.round(maxUploadBytes / 1024 / 1024),
+    maxSpreadsheetRows,
+    timestamp: new Date().toISOString()
+  });
+});
 
 function authRateLimit(req, res, next) {
   const key = `${req.ip}:${String(req.body?.email || '').toLowerCase()}`;
@@ -914,6 +1061,11 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/config', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
+  res.cookie?.('metenova_csrf', csrfToken, {
+    httpOnly: false,
+    sameSite: 'strict',
+    secure: process.env.NODE_ENV === 'production'
+  });
   res.json({
     authDisabled,
     storage: usingPostgres ? 'postgresql' : 'local-development',
@@ -921,7 +1073,8 @@ app.get('/api/config', (_req, res) => {
     postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
     emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
-    sessionWarningSeconds: warningSeconds
+    sessionWarningSeconds: warningSeconds,
+    csrfToken
   });
 });
 
@@ -1158,11 +1311,28 @@ app.post('/api/auth/login', authRateLimit, async (req, res, next) => {
 
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
       await recordLoginFailure(email);
+      await saveAuditLog({
+        id: randomUUID(),
+        actorEmail: email,
+        action: 'auth.login_failed',
+        targetType: 'user',
+        targetId: user?.id,
+        metadata: { reason: 'invalid_credentials' }
+      });
       res.status(401).json({ error: 'Invalid email or password.' });
       return;
     }
 
     if (user.active === false) {
+      await saveAuditLog({
+        id: randomUUID(),
+        actorUserId: user.id,
+        actorEmail: user.email,
+        action: 'auth.login_blocked',
+        targetType: 'user',
+        targetId: user.id,
+        metadata: { reason: 'disabled_account' }
+      });
       res.status(403).json({ error: 'This account is disabled.' });
       return;
     }
@@ -1433,6 +1603,18 @@ app.post('/api/auth/logout', requireAuth, async (req, res, next) => {
 });
 
 app.use('/api', requireAuth);
+app.use('/api', (req, res, next) => {
+  if (authDisabled || ['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
+    next();
+    return;
+  }
+  const provided = req.headers['x-csrf-token'];
+  if (provided !== csrfToken) {
+    res.status(403).json({ error: 'Invalid CSRF token.', code: 'CSRF_INVALID', requestId: req.requestId });
+    return;
+  }
+  next();
+});
 
 app.get('/api/roles', (_req, res) => {
   res.json({
@@ -1475,6 +1657,45 @@ app.post('/api/companies', requireDurableStorage, async (req, res, next) => {
     });
 
     res.status(201).json({ company });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/companies/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    if (!canManageCompany(req.user, req.params.id)) {
+      res.status(403).json({ error: 'Insufficient company permissions.' });
+      return;
+    }
+    const company = await updateCompany(req.params.id, {
+      name: req.body?.name,
+      industry: req.body?.industry,
+      ownerName: req.body?.ownerName,
+      email: req.body?.email,
+      phone: req.body?.phone,
+      status: req.body?.status
+    });
+    if (!company) {
+      res.status(404).json({ error: 'Company not found.' });
+      return;
+    }
+    await audit(req, 'company.updated', 'company', company.id, { name: company.name });
+    res.json({ company });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/companies/:id', requireRole('owner'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const deleted = await deleteCompany(req.params.id);
+    if (!deleted) {
+      res.status(404).json({ error: 'Company not found or cannot be deleted.' });
+      return;
+    }
+    await audit(req, 'company.deleted', 'company', req.params.id);
+    res.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -1719,9 +1940,10 @@ app.get('/api/workflows', async (_req, res, next) => {
 
 async function handleDatasetUpload(req, res) {
   if (!req.file) {
-    res.status(400).json({ error: 'A .csv, .xlsx, or .xls file is required.' });
+    res.status(400).json({ error: 'A .csv, .xlsx, .xls, or .json file is required.' });
     return;
   }
+  validateUploadMetadata(req.file);
 
   const requestedWorksheetName = String(req.body?.worksheetName || '').trim();
   const companyId = requestedCompanyId(req);
@@ -1768,6 +1990,15 @@ async function handleDatasetUpload(req, res) {
     ...summary
   };
   await saveDataset(dataset);
+  await notifyWorkspace({
+    companyId,
+    userId: req.user.id,
+    type: 'upload_completed',
+    title: 'Upload completed',
+    message: `${dataset.fileName} was uploaded to the company workspace.`,
+    metadata: { datasetId: dataset.id }
+  });
+  await audit(req, 'dataset.uploaded', 'dataset', dataset.id, { companyId, fileName: dataset.fileName });
 
   res.json(publicDataset(dataset));
 }
@@ -1820,6 +2051,45 @@ app.get('/api/datasets/:id/cleanup-jobs', async (req, res, next) => {
     }
 
     res.json({ cleanupJobs: await listCleanupJobs(req.user, dataset.originalDatasetId ?? dataset.id) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/cleanup-jobs', async (req, res, next) => {
+  try {
+    res.json({ cleanupJobs: await listCleanupJobs(req.user, req.query?.datasetId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/datasets/:id/archive', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    if (!canManageDataset(req.user, dataset)) {
+      res.status(403).json({ error: 'Insufficient dataset permissions.' });
+      return;
+    }
+    const archived = await saveDataset({
+      ...dataset,
+      cleanupStatus: 'archived',
+      cleanupLogs: [...new Set([...(dataset.cleanupLogs ?? []), 'Dataset archived.'])]
+    });
+    await audit(req, 'dataset.archived', 'dataset', dataset.id, { companyId: dataset.companyId });
+    await notifyWorkspace({
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      type: 'dataset_archived',
+      title: 'Dataset archived',
+      message: `${dataset.fileName} was archived.`,
+      metadata: { datasetId: dataset.id }
+    });
+    res.json({ dataset: publicDataset(archived) });
   } catch (error) {
     next(error);
   }
@@ -1918,6 +2188,14 @@ app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, ne
       cleanedDatasetId: cleanedDataset.id,
       metrics: cleaned.metrics
     });
+    await notifyWorkspace({
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      type: 'cleanup_completed',
+      title: 'Cleanup completed',
+      message: `${cleanedDataset.fileName} is ready for export and analytics.`,
+      metadata: { datasetId: dataset.id, cleanedDatasetId: cleanedDataset.id, metrics: cleaned.metrics }
+    });
 
     res.status(201).json({
       job: completedJob,
@@ -1933,6 +2211,62 @@ app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, ne
         logs: [...(job.logs ?? []), 'Cleanup failed.']
       }).catch(() => {});
     }
+    if (job?.companyId) {
+      await notifyWorkspace({
+        companyId: job.companyId,
+        userId: req.user.id,
+        type: 'pipeline_failed',
+        title: 'Cleanup failed',
+        message: error instanceof Error ? error.message : 'Cleanup failed.',
+        metadata: { jobId: job.id }
+      }).catch(() => {});
+    }
+    next(error);
+  }
+});
+
+app.delete('/api/datasets/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    if (!canManageDataset(req.user, dataset)) {
+      res.status(403).json({ error: 'Insufficient dataset permissions.' });
+      return;
+    }
+    const deleted = await deleteDataset(req.user, req.params.id);
+    await audit(req, 'dataset.deleted', 'dataset', req.params.id, {
+      companyId: dataset.companyId,
+      fileName: dataset.fileName,
+      cleanedDatasetId: dataset.cleanedDatasetId,
+      originalDatasetId: dataset.originalDatasetId
+    });
+    await notifyWorkspace({
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      type: 'dataset_deleted',
+      title: 'Dataset deleted',
+      message: `${dataset.fileName} and linked cleanup assets were deleted.`,
+      metadata: { datasetId: dataset.id }
+    });
+    res.json({ deleted: publicDataset(deleted) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/cleanup-jobs/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const job = await deleteCleanupJob(req.user, req.params.id);
+    if (!job) {
+      res.status(404).json({ error: 'Cleanup job not found.' });
+      return;
+    }
+    await audit(req, 'dataset.cleanup_job_deleted', 'cleanup_job', req.params.id, { companyId: job.companyId });
+    res.json({ cleanupJob: job });
+  } catch (error) {
     next(error);
   }
 });
@@ -2018,6 +2352,20 @@ app.get('/api/reports', async (req, res, next) => {
   }
 });
 
+app.delete('/api/reports/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const report = await deleteReport(req.user, req.params.id);
+    if (!report) {
+      res.status(404).json({ error: 'Report not found.' });
+      return;
+    }
+    await audit(req, 'report.deleted', 'report', req.params.id, { companyId: report.companyId, datasetId: report.datasetId });
+    res.json({ report });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/reports', requireDurableStorage, async (req, res, next) => {
   try {
     const dataset = await getDataset(req.body?.datasetId, req.user);
@@ -2042,9 +2390,44 @@ app.post('/api/reports', requireDurableStorage, async (req, res, next) => {
       }
     };
     const savedReport = await saveReport(report);
+    await notifyWorkspace({
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      type: 'report_generated',
+      title: 'Report generated',
+      message: `${savedReport.title} is available in report history.`,
+      metadata: { reportId: savedReport.id, datasetId: dataset.id }
+    });
     res.status(201).json({
       report: savedReport
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/notifications', async (req, res, next) => {
+  try {
+    res.json({ notifications: await listNotifications(req.user, requestedCompanyId(req)) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.patch('/api/notifications/:id', requireDurableStorage, async (req, res, next) => {
+  try {
+    const notification = await updateNotification(req.user, req.params.id, {
+      status: req.body?.status,
+      archive: req.body?.archive
+    });
+    if (!notification) {
+      res.status(404).json({ error: 'Notification not found.' });
+      return;
+    }
+    await audit(req, req.body?.archive ? 'notification.archived' : 'notification.updated', 'notification', req.params.id, {
+      status: notification.status
+    });
+    res.json({ notification });
   } catch (error) {
     next(error);
   }
@@ -2058,7 +2441,20 @@ if (existsSync(frontendDist)) {
 }
 
 app.use((error, _req, res, _next) => {
-  res.status(error.statusCode || 500).json({ success: false, error: error.message || 'Unexpected server error.' });
+  const statusCode = error.statusCode || 500;
+  console.error(JSON.stringify({
+    level: 'error',
+    requestId: _req.requestId,
+    method: _req.method,
+    path: _req.path,
+    statusCode,
+    error: error.message || 'Unexpected server error.'
+  }));
+  res.status(statusCode).json({
+    success: false,
+    error: error.message || 'Unexpected server error.',
+    requestId: _req.requestId
+  });
 });
 
 initDatabase()

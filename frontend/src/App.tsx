@@ -50,6 +50,9 @@ type CleanupMetrics = {
   invalidValuesDetected?: number;
   columnsStandardized?: number;
   totalCleanedRows?: number;
+  failedRows?: number;
+  processingDurationMs?: number;
+  anomaliesDetected?: number;
 };
 
 type CleanupJob = {
@@ -148,6 +151,7 @@ type ConfigResponse = {
   emailConfigured?: boolean;
   sessionTimeoutMinutes?: number;
   sessionWarningSeconds?: number;
+  csrfToken?: string;
 };
 
 type AuditLog = {
@@ -198,6 +202,16 @@ type EmailLog = {
   status: string;
   error?: string;
   attempts: number;
+  createdAt: string;
+};
+
+type NotificationItem = {
+  id: string;
+  companyId?: string;
+  type: string;
+  title: string;
+  message: string;
+  status: string;
   createdAt: string;
 };
 
@@ -273,7 +287,7 @@ function apiUrl(path: string) {
 
 const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
   { view: 'dashboard', label: 'Dashboard', icon: 'DB' },
-  { view: 'assistant', label: 'AI Assistant', icon: 'AI' },
+  { view: 'assistant', label: 'Business Assistant', icon: 'BA' },
   { view: 'companies', label: 'Companies', icon: 'CO' },
   { view: 'accounting', label: 'Accounting', icon: 'AC' },
   { view: 'engineering', label: 'Engineering', icon: 'EN' },
@@ -330,7 +344,7 @@ const moduleCards: Record<string, ModuleAction[]> = {
     { title: 'Expense Tracking', copy: 'Classify expenses, flag unusual spend, and prepare monthly close.', type: 'expense', path: '/accounting/expenses' },
     { title: 'Payroll', copy: 'Review payroll cycles, department allocations, and exception queues.', type: 'payroll', path: '/accounting/payroll' },
     { title: 'Financial Reports', copy: 'Generate budget, cash flow, tax, and executive finance reports.', type: 'financial_report', path: '/accounting/financial-reports' },
-    { title: 'AI Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', type: 'assistant', path: '/accounting/ai-financial-assistant' }
+    { title: 'Business Financial Assistant', copy: 'Ask concise questions about trends, budget variance, and risks.', type: 'assistant', path: '/accounting/ai-financial-assistant' }
   ],
   engineering: [
     { title: 'Project Management', copy: 'Organize milestones, owners, blockers, and project health.', type: 'project', path: '/engineering/projects' },
@@ -428,6 +442,7 @@ export function App() {
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [companies, setCompanies] = useState<Company[]>(sampleCompanies);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState('');
@@ -451,6 +466,8 @@ export function App() {
   const [recordStatusFilter, setRecordStatusFilter] = useState('all');
   const [selectedRecord, setSelectedRecord] = useState<ModuleRecord | null>(null);
   const [persistenceState, setPersistenceState] = useState('Enterprise-grade secure cloud storage ready.');
+  const [workspaceAction, setWorkspaceAction] = useState('');
+  const [csrfToken, setCsrfToken] = useState('');
   const [durableStorage, setDurableStorage] = useState(true);
   const [emailConfigured, setEmailConfigured] = useState(false);
   const [sessionTimeoutMs, setSessionTimeoutMs] = useState(30 * 60 * 1000);
@@ -482,6 +499,7 @@ export function App() {
         setAuthDisabled(Boolean(config.authDisabled));
         setDurableStorage(config.durableStorage !== false);
         setEmailConfigured(Boolean(config.emailConfigured));
+        setCsrfToken(config.csrfToken ?? '');
         setSessionTimeoutMs((config.sessionTimeoutMinutes ?? 30) * 60 * 1000);
         setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
         setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
@@ -626,6 +644,9 @@ export function App() {
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
+    if (csrfToken && !['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase())) {
+      headers.set('X-CSRF-Token', csrfToken);
+    }
 
     const requestUrl = apiUrl(path);
     console.info('[Metenova API] request', { path, requestUrl });
@@ -719,6 +740,7 @@ export function App() {
     setCleanupJobs([]);
     setDashboards([]);
     setReports([]);
+    setNotifications([]);
     setAdminUsers([]);
     setCurrentView('dashboard');
     setAccountOpen(false);
@@ -907,8 +929,8 @@ export function App() {
     }
 
     const extension = file.name.split('.').pop()?.toLowerCase();
-    if (!extension || !['csv', 'xlsx', 'xls'].includes(extension)) {
-      setUploadState('Upload a .csv, .xlsx, or .xls file.');
+    if (!extension || !['csv', 'xlsx', 'xls', 'json'].includes(extension)) {
+      setUploadState('Upload a .csv, .xlsx, .xls, or .json file.');
       return;
     }
 
@@ -987,7 +1009,7 @@ export function App() {
       ]);
       setActiveDataset(payload.cleanedDataset);
       setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
-      setCleanupMessage('Cleaned dataset created and ready for AI analytics.');
+      setCleanupMessage('Cleaned dataset created and ready for business analytics.');
       setPersistenceState('Original preserved. Cleaned dataset saved to the company workspace.');
     } catch (error) {
       setCleanupMessage(error instanceof Error ? error.message : 'Cleanup failed.');
@@ -1016,6 +1038,105 @@ export function App() {
       setCleanupMessage('Dataset export downloaded.');
     } catch (error) {
       setCleanupMessage(error instanceof Error ? error.message : 'Export failed.');
+    }
+  }
+
+  async function deleteDatasetRecord(dataset: Dataset | null = activeDataset) {
+    if (!dataset) return;
+    if (!canManageWorkspaceData(user)) {
+      setPersistenceState('You need manager access to delete datasets.');
+      return;
+    }
+    if (!window.confirm(`Delete ${dataset.fileName}? This removes linked cleanup jobs, reports, dashboards, analytics, and exports.`)) {
+      return;
+    }
+    setWorkspaceAction(`Deleting ${dataset.fileName}...`);
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}`, { method: 'DELETE' });
+      const payload = await readJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || 'Dataset delete failed.');
+      setDatasets((current) => current.filter((item) => item.id !== dataset.id && item.originalDatasetId !== dataset.id && item.id !== dataset.cleanedDatasetId));
+      setDashboards((current) => current.filter((dashboard) => dashboard.datasetId !== dataset.id && dashboard.datasetId !== dataset.cleanedDatasetId));
+      setReports((current) => current.filter((report) => report.datasetId !== dataset.id && report.datasetId !== dataset.cleanedDatasetId));
+      setCleanupJobs([]);
+      setActiveDataset((current) => current?.id === dataset.id ? null : current);
+      setPersistenceState('Dataset and linked workspace assets deleted.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Dataset delete failed.');
+    } finally {
+      setWorkspaceAction('');
+    }
+  }
+
+  async function archiveDatasetRecord(dataset: Dataset | null = activeDataset) {
+    if (!dataset) return;
+    if (!canManageWorkspaceData(user)) {
+      setPersistenceState('You need manager access to archive datasets.');
+      return;
+    }
+    setWorkspaceAction(`Archiving ${dataset.fileName}...`);
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}/archive`, { method: 'POST' });
+      const payload = await readJson<{ dataset?: Dataset; error?: string }>(response);
+      if (!response.ok || !payload.dataset) throw new Error(payload.error || 'Dataset archive failed.');
+      setDatasets((current) => current.map((entry) => entry.id === payload.dataset?.id ? payload.dataset as Dataset : entry));
+      setActiveDataset(payload.dataset);
+      setPersistenceState('Dataset archived.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Dataset archive failed.');
+    } finally {
+      setWorkspaceAction('');
+    }
+  }
+
+  async function deleteCleanupJobRecord(job: CleanupJob) {
+    if (!canManageWorkspaceData(user)) {
+      setCleanupMessage('You need manager access to delete cleanup jobs.');
+      return;
+    }
+    if (!window.confirm('Delete this cleanup job from history?')) return;
+    try {
+      const response = await apiFetch(`/api/cleanup-jobs/${job.id}`, { method: 'DELETE' });
+      const payload = await readJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || 'Cleanup job delete failed.');
+      setCleanupJobs((current) => current.filter((entry) => entry.id !== job.id));
+      setCleanupMessage('Cleanup job deleted.');
+    } catch (error) {
+      setCleanupMessage(error instanceof Error ? error.message : 'Cleanup job delete failed.');
+    }
+  }
+
+  async function deleteReportRecord(report: ReportHistoryItem) {
+    if (!canManageWorkspaceData(user)) {
+      setPersistenceState('You need manager access to delete reports.');
+      return;
+    }
+    if (!window.confirm(`Delete report ${report.title}?`)) return;
+    try {
+      const response = await apiFetch(`/api/reports/${report.id}`, { method: 'DELETE' });
+      const payload = await readJson<{ error?: string }>(response);
+      if (!response.ok) throw new Error(payload.error || 'Report delete failed.');
+      setReports((current) => current.filter((entry) => entry.id !== report.id));
+      setPersistenceState('Report deleted.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Report delete failed.');
+    }
+  }
+
+  async function updateNotificationRecord(notification: NotificationItem, updates: { status?: string; archive?: boolean }) {
+    try {
+      const response = await apiFetch(`/api/notifications/${notification.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updates)
+      });
+      const payload = await readJson<{ notification?: NotificationItem; error?: string }>(response);
+      if (!response.ok || !payload.notification) throw new Error(payload.error || 'Notification update failed.');
+      setNotifications((current) => updates.archive
+        ? current.filter((entry) => entry.id !== notification.id)
+        : current.map((entry) => entry.id === notification.id ? payload.notification as NotificationItem : entry));
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Notification update failed.');
     }
   }
 
@@ -1394,23 +1515,27 @@ export function App() {
 
     try {
       const query = buildCompanyQuery(companyId);
-      const [datasetsResponse, dashboardsResponse, reportsResponse] = await Promise.all([
+      const [datasetsResponse, dashboardsResponse, reportsResponse, notificationsResponse] = await Promise.all([
         apiFetch(`/api/datasets${query}`),
         apiFetch(`/api/dashboards${query}`),
-        apiFetch(`/api/reports${query}`)
+        apiFetch(`/api/reports${query}`),
+        apiFetch(`/api/notifications${query}`)
       ]);
       const datasetsPayload = await readJson<{ datasets?: Dataset[]; error?: string }>(datasetsResponse);
       const dashboardsPayload = await readJson<{ dashboards?: SavedDashboard[]; error?: string }>(dashboardsResponse);
       const reportsPayload = await readJson<{ reports?: ReportHistoryItem[]; error?: string }>(reportsResponse);
+      const notificationsPayload = await readJson<{ notifications?: NotificationItem[]; error?: string }>(notificationsResponse);
 
       if (!datasetsResponse.ok) throw new Error(datasetsPayload.error || 'Could not load company datasets.');
       if (!dashboardsResponse.ok) throw new Error(dashboardsPayload.error || 'Could not load company dashboards.');
       if (!reportsResponse.ok) throw new Error(reportsPayload.error || 'Could not load company reports.');
+      if (!notificationsResponse.ok) throw new Error(notificationsPayload.error || 'Could not load notifications.');
 
       const nextDatasets = datasetsPayload.datasets ?? [];
       setDatasets(nextDatasets);
       setDashboards(dashboardsPayload.dashboards ?? []);
       setReports(reportsPayload.reports ?? []);
+      setNotifications(notificationsPayload.notifications ?? []);
       setActiveDataset((current) => current?.companyId === companyId ? current : nextDatasets[0] ?? null);
       setPersistenceState(nextDatasets.length ? 'Company workspace data loaded.' : 'No datasets uploaded for this company yet.');
     } catch (error) {
@@ -1455,6 +1580,130 @@ export function App() {
       setCompaniesError(error instanceof Error ? error.message : 'Company could not be created.');
     } finally {
       setCompanySaving(false);
+    }
+  }
+
+  async function updateCompanyName(company: Company) {
+    const nextName = window.prompt('Company name', company.name)?.trim();
+    if (!nextName || nextName === company.name) return;
+    setWorkspaceAction(`Renaming ${company.name}...`);
+    try {
+      const response = await apiFetch(`/api/companies/${company.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: nextName })
+      });
+      const payload = await readJson<{ company?: Company; error?: string }>(response);
+      if (!response.ok || !payload.company) throw new Error(payload.error || 'Company update failed.');
+      setCompanies((current) => current.map((entry) => entry.id === company.id ? payload.company as Company : entry));
+      setPersistenceState('Company renamed.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Company update failed.');
+    } finally {
+      setWorkspaceAction('');
+    }
+  }
+
+  async function deleteCompanyWorkspace(company: Company) {
+    if (user?.role !== 'owner') {
+      setPersistenceState('Only the owner role can delete a company workspace.');
+      return;
+    }
+    if (!window.confirm(`Delete ${company.name}? This removes company datasets, cleanup jobs, reports, dashboards, pipelines, and users.`)) return;
+    setWorkspaceAction(`Deleting ${company.name}...`);
+    try {
+      const response = await apiFetch(`/api/companies/${company.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Company delete failed.');
+      }
+      setCompanies((current) => current.filter((entry) => entry.id !== company.id));
+      if (selectedCompanyId === company.id) {
+        const fallbackCompany = companies.find((entry) => entry.id !== company.id);
+        setSelectedCompanyId(fallbackCompany?.id ?? '');
+        setDatasets([]);
+        setDashboards([]);
+        setReports([]);
+        setNotifications([]);
+        setActiveDataset(null);
+      }
+      setPersistenceState('Company workspace deleted.');
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Company delete failed.');
+    } finally {
+      setWorkspaceAction('');
+    }
+  }
+
+  async function runCompanyAction(company: Company, action: string) {
+    setSelectedCompanyId(company.id);
+    setWorkspaceAction(`${action} for ${company.name}...`);
+    try {
+      await loadCompanyWorkspace(company.id);
+      const query = buildCompanyQuery(company.id);
+
+      if (action === 'Upload Data') {
+        navigate('/');
+        setCurrentView('dashboard');
+        setUploadState(`${company.name}: choose a CSV or Excel file to upload.`);
+      } else if (action === 'Clean Data') {
+        const response = await apiFetch(`/api/datasets${query}`);
+        const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
+        const candidate = (payload.datasets ?? []).find((dataset) => !dataset.originalDatasetId);
+        if (!candidate) throw new Error('Upload an original dataset before running cleanup.');
+        setActiveDataset(candidate);
+        const cleanupResponse = await apiFetch(`/api/datasets/${candidate.id}/cleanup`, { method: 'POST' });
+        const cleanupPayload = await readJson<{ cleanedDataset?: Dataset; originalDataset?: Dataset; job?: CleanupJob; error?: string }>(cleanupResponse);
+        if (!cleanupResponse.ok || !cleanupPayload.cleanedDataset || !cleanupPayload.originalDataset) {
+          throw new Error(cleanupPayload.error || 'Cleanup failed.');
+        }
+        setDatasets((current) => [
+          cleanupPayload.cleanedDataset as Dataset,
+          cleanupPayload.originalDataset as Dataset,
+          ...current.filter((item) => item.id !== cleanupPayload.cleanedDataset?.id && item.id !== cleanupPayload.originalDataset?.id)
+        ]);
+        setActiveDataset(cleanupPayload.cleanedDataset);
+        if (cleanupPayload.job) setCleanupJobs((current) => [cleanupPayload.job as CleanupJob, ...current]);
+        navigate('/');
+        setCurrentView('dashboard');
+        setCleanupMessage('Company cleanup completed.');
+      } else if (action === 'View Dashboard') {
+        navigate('/');
+        setCurrentView('dashboard');
+      } else if (action === 'Reports') {
+        navigate('/reports/history');
+      } else if (action === 'Analytics') {
+        navigate('/analytics/dashboard');
+      } else if (action === 'Pipelines') {
+        navigate('/data-processing/cleanup');
+      } else if (action === 'Export Data') {
+        const response = await apiFetch(`/api/datasets${query}`);
+        const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
+        const dataset = (payload.datasets ?? []).find((item) => item.cleanupStatus === 'completed') ?? payload.datasets?.[0] ?? null;
+        if (!dataset) throw new Error('No datasets are available to export.');
+        await downloadDatasetExport(dataset);
+      } else if (action === 'Delete Dataset') {
+        const response = await apiFetch(`/api/datasets${query}`);
+        const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
+        const dataset = payload.datasets?.[0] ?? null;
+        if (!dataset) throw new Error('No datasets are available to delete.');
+        await deleteDatasetRecord(dataset);
+      } else if (action === 'Delete Cleanup Job') {
+        const response = await apiFetch('/api/cleanup-jobs');
+        const payload = await readJson<{ cleanupJobs?: CleanupJob[]; error?: string }>(response);
+        if (!response.ok) throw new Error(payload.error || 'Could not load cleanup jobs.');
+        const job = (payload.cleanupJobs ?? []).find((entry) => entry.companyId === company.id);
+        if (!job) throw new Error('No cleanup jobs are available to delete.');
+        await deleteCleanupJobRecord(job);
+      }
+      setPersistenceState(`${action} completed for ${company.name}.`);
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : `${action} failed.`);
+    } finally {
+      setWorkspaceAction('');
     }
   }
 
@@ -1741,7 +1990,7 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Operations command center</p>
-            <h1>AI workflow performance</h1>
+            <h1>Business workflow performance</h1>
           </div>
           <div className="top-actions">
             <button className="ghost-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
@@ -1789,16 +2038,20 @@ export function App() {
             companySaving={companySaving}
             dashboards={companyDashboards}
             deleteAdminUser={deleteAdminUser}
+            deleteCompanyWorkspace={deleteCompanyWorkspace}
             downloadHistoricalReport={downloadHistoricalReport}
             reports={companyReports}
             resetCompanyForm={resetCompanyForm}
+            runCompanyAction={runCompanyAction}
             saveCompany={saveCompany}
             setCompanyFormOpen={setCompanyFormOpen}
             loadCompanies={loadCompanies}
             systemStatus={systemStatus}
+            updateCompanyName={updateCompanyName}
             updateAdminUser={updateAdminUser}
             updateCompanyForm={updateCompanyForm}
             users={adminUsers}
+            workspaceAction={workspaceAction}
           />
         ) : currentView === 'settings' ? (
           <section className="settings-grid">
@@ -2023,8 +2276,8 @@ export function App() {
               <p className="eyebrow">Metenova AI</p>
               <h2>Contact & Support</h2>
               <p className="module-copy">
-                Metenova AI is a modern AI-powered business operations and analytics platform designed to help companies manage data,
-                analytics, business workflows, reporting, AI automation, data cleanup, user management, reports, and enterprise operations
+                Metenova AI is a modern business operations and analytics platform designed to help companies manage data,
+                analytics, business workflows, reporting, business automation, data cleanup, user management, reports, and enterprise operations
                 in a scalable modular system.
               </p>
               <div className="support-grid">
@@ -2100,7 +2353,7 @@ export function App() {
                 <div><strong>Dataset intelligence</strong><span>{companyDatasets.length} saved datasets for {selectedCompany?.name ?? 'this company'}.</span></div>
                 <div><strong>Dashboards</strong><span>{companyDashboards.length} saved dashboards across this company workspace.</span></div>
                 <div><strong>Reports</strong><span>{companyReports.length} generated reports in company history.</span></div>
-                <div><strong>AI recommendations</strong><span>Use uploaded data to generate trends, variance explanations, and executive summaries.</span></div>
+                <div><strong>Business recommendations</strong><span>Use uploaded data to generate trends, variance explanations, and executive summaries.</span></div>
               </div>
             </article>
           </section>
@@ -2162,6 +2415,31 @@ export function App() {
               ))}
             </section>
 
+            <section className="panel notification-center" aria-label="Notification center">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Notifications</p>
+                  <h2>Company activity feed</h2>
+                </div>
+                <span className="status-pill active">{notifications.length} updates</span>
+              </div>
+              <div className="notification-list">
+                {notifications.slice(0, 5).map((notification) => (
+                  <div key={notification.id}>
+                    <div>
+                      <strong>{notification.title}</strong>
+                      <span>{notification.message} - {new Date(notification.createdAt).toLocaleString()}</span>
+                    </div>
+                    <div className="notification-actions">
+                      <button className="ghost-button compact" type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>Mark Read</button>
+                      <button className="ghost-button compact" type="button" onClick={() => updateNotificationRecord(notification, { archive: true })}>Archive</button>
+                    </div>
+                  </div>
+                ))}
+                {!notifications.length && <p className="muted">Upload, cleanup, export, report, and failed pipeline alerts will appear here.</p>}
+              </div>
+            </section>
+
             <section className="csv-section" id="csv">
               <div className="section-heading">
                 <div>
@@ -2199,8 +2477,8 @@ export function App() {
                 onDragLeave={() => setIsDragging(false)}
                 onDrop={handleDrop}
               >
-                <input accept=".csv,.xlsx,.xls,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" onChange={handleDatasetUpload} />
-                <strong>Drop CSV or Excel file here</strong>
+                <input accept=".csv,.xlsx,.xls,.json,text/csv,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" onChange={handleDatasetUpload} />
+                <strong>Drop CSV, Excel, or JSON file here</strong>
                 <span>{selectedCompany ? `${selectedCompany.name}: ${uploadState}` : uploadState}</span>
               </label>
 
@@ -2222,7 +2500,7 @@ export function App() {
               </div>
 
               <p className="persistence-note">{persistenceState}</p>
-              {renderCleanupPanel(activeDataset, cleanupJobs, cleanupMessage)}
+              {renderCleanupPanel(activeDataset, cleanupJobs, cleanupMessage, deleteCleanupJobRecord)}
 
               <div className="csv-grid">
                 <article className="panel data-panel">
@@ -2241,6 +2519,20 @@ export function App() {
                         <span>File type: {(activeDataset.fileType ?? 'csv').toUpperCase()}</span>
                         <span>Cleanup status: {activeDataset.cleanupStatus ?? 'original'}</span>
                         {activeDataset.worksheetName && <span>Worksheet: {activeDataset.worksheetName}</span>}
+                      </div>
+                      <div className="dataset-actions-row">
+                        <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(activeDataset)}>
+                          Export CSV
+                        </button>
+                        <button className="ghost-button compact" type="button" onClick={cleanActiveDataset} disabled={cleanupRunning || Boolean(activeDataset.originalDatasetId)}>
+                          Reprocess
+                        </button>
+                        <button className="ghost-button compact" type="button" onClick={() => archiveDatasetRecord(activeDataset)}>
+                          Archive Dataset
+                        </button>
+                        <button className="ghost-button compact danger" type="button" onClick={() => deleteDatasetRecord(activeDataset)}>
+                          Delete Dataset
+                        </button>
                       </div>
                       {(activeDataset.worksheets?.length ?? 0) > 1 && (
                         <div className="sheet-tabs" aria-label="Worksheet tabs">
@@ -2301,7 +2593,7 @@ export function App() {
                   </article>
 
                   <article className="panel ai-panel">
-                    <h3>AI insights</h3>
+                    <h3>Business insights</h3>
                     <ul>
                       {(activeDataset?.insights ?? ['Upload a CSV or Excel file to generate clear, practical data insights.']).map((item) => (
                         <li key={item}>{item}</li>
@@ -2349,6 +2641,9 @@ export function App() {
                       <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>
                         Download
                       </button>
+                      <button className="ghost-button compact danger" type="button" onClick={() => deleteReportRecord(report)}>
+                        Delete Report
+                      </button>
                     </div>
                   )) : <p className="muted">Downloaded reports will appear here.</p>}
                 </div>
@@ -2358,7 +2653,7 @@ export function App() {
             <section className="assistant-grid" id="assistant">
               <article className="panel chat-panel">
                 <div className="panel-header">
-                  <h2>AI data assistant</h2>
+                  <h2>Business data assistant</h2>
                   <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
                 </div>
                 <div className="messages">
@@ -2472,7 +2767,12 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
   );
 }
 
-function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], cleanupMessage: string) {
+function renderCleanupPanel(
+  dataset: Dataset | null,
+  cleanupJobs: CleanupJob[],
+  cleanupMessage: string,
+  deleteCleanupJobRecord: (job: CleanupJob) => void
+) {
   const metrics = dataset?.cleanupMetrics ?? {};
   const preview = dataset?.cleanupPreview;
   const previewHeaders = Array.from(new Set([
@@ -2484,7 +2784,9 @@ function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], 
     ['Rows fixed', metrics.rowsFixed ?? 0],
     ['Invalid values', metrics.invalidValuesDetected ?? 0],
     ['Columns standardized', metrics.columnsStandardized ?? 0],
-    ['Cleaned rows', metrics.totalCleanedRows ?? dataset?.rows ?? 0]
+    ['Cleaned rows', metrics.totalCleanedRows ?? dataset?.rows ?? 0],
+    ['Failed rows', metrics.failedRows ?? 0],
+    ['Anomalies', metrics.anomaliesDetected ?? 0]
   ];
 
   return (
@@ -2492,7 +2794,7 @@ function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], 
       <article className="panel cleanup-summary">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">AI-ready cleanup</p>
+            <p className="eyebrow">Business-ready cleanup</p>
             <h3>Cleanup summary</h3>
           </div>
           <span className={`cleanup-status ${dataset?.cleanupStatus ?? 'pending'}`}>{dataset?.cleanupStatus ?? 'pending'}</span>
@@ -2519,7 +2821,7 @@ function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], 
             <p className="eyebrow">Before / after</p>
             <h3>Preview</h3>
           </div>
-          {dataset?.futureAiReady && <span className="status-pill active">AI-ready</span>}
+          {dataset?.futureAiReady && <span className="status-pill active">Business-ready</span>}
         </div>
         {preview && previewHeaders.length ? (
           <div className="before-after-grid">
@@ -2556,9 +2858,12 @@ function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], 
             <div className="history-item" key={job.id}>
               <div>
                 <strong>{job.status}</strong>
-                <span>{new Date(job.updatedAt).toLocaleString()} - {(job.metrics?.totalCleanedRows ?? 0)} cleaned rows</span>
+                <span>{new Date(job.updatedAt).toLocaleString()} - {(job.metrics?.totalCleanedRows ?? 0)} cleaned rows - {(job.metrics?.processingDurationMs ?? 0)} ms</span>
               </div>
-              <span className={`cleanup-status ${job.status}`}>{job.status}</span>
+              <div className="cleanup-job-actions">
+                <span className={`cleanup-status ${job.status}`}>{job.status}</span>
+                <button className="ghost-button compact danger" type="button" onClick={() => deleteCleanupJobRecord(job)}>Delete Cleanup Job</button>
+              </div>
             </div>
           )) : <p className="muted">Cleanup jobs for the selected dataset will appear here.</p>}
         </div>
@@ -2569,6 +2874,10 @@ function renderCleanupPanel(dataset: Dataset | null, cleanupJobs: CleanupJob[], 
 
 function canManageUsers(user: User | null) {
   return user?.role === 'owner' || user?.role === 'admin';
+}
+
+function canManageWorkspaceData(user: User | null) {
+  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 }
 
 function roleLabel(role?: string) {
@@ -2689,16 +2998,20 @@ function RoutedPages(props: {
   companySaving: boolean;
   dashboards: SavedDashboard[];
   deleteAdminUser: (user: AdminUser) => void;
+  deleteCompanyWorkspace: (company: Company) => void;
   downloadHistoricalReport: (report: ReportHistoryItem) => void;
   reports: ReportHistoryItem[];
   loadCompanies: () => void;
   resetCompanyForm: () => void;
+  runCompanyAction: (company: Company, action: string) => void;
   saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   setCompanyFormOpen: (open: boolean) => void;
   systemStatus: SystemStatus | null;
   updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
+  updateCompanyName: (company: Company) => void;
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   users: AdminUser[];
+  workspaceAction: string;
 }) {
   return (
     <Routes>
@@ -2723,7 +3036,11 @@ function RoutedPages(props: {
             resetCompanyForm={props.resetCompanyForm}
             saveCompany={props.saveCompany}
             setFormOpen={props.setCompanyFormOpen}
+            runCompanyAction={props.runCompanyAction}
+            deleteCompanyWorkspace={props.deleteCompanyWorkspace}
+            updateCompanyName={props.updateCompanyName}
             updateCompanyForm={props.updateCompanyForm}
+            workspaceAction={props.workspaceAction}
           />
         )}
       />
@@ -2745,10 +3062,14 @@ function CompaniesWorkspace({
   loading,
   loadCompanies,
   resetCompanyForm,
+  runCompanyAction,
   saveCompany,
   saving,
   setFormOpen,
-  updateCompanyForm
+  updateCompanyForm,
+  updateCompanyName,
+  deleteCompanyWorkspace,
+  workspaceAction
 }: {
   companies: Company[];
   companyForm: CompanyFormValues;
@@ -2757,10 +3078,14 @@ function CompaniesWorkspace({
   loading: boolean;
   loadCompanies: () => void;
   resetCompanyForm: () => void;
+  runCompanyAction: (company: Company, action: string) => void;
   saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   saving: boolean;
   setFormOpen: (open: boolean) => void;
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
+  updateCompanyName: (company: Company) => void;
+  deleteCompanyWorkspace: (company: Company) => void;
+  workspaceAction: string;
 }) {
   const closeForm = () => {
     resetCompanyForm();
@@ -2770,7 +3095,7 @@ function CompaniesWorkspace({
   return (
     <section className="routed-page companies-page">
       <PageHeader
-        copy="Create and manage company workspaces for uploads, reports, dashboards, and AI data cleanup."
+        copy="Create and manage company workspaces for uploads, reports, dashboards, and business data cleanup."
         eyebrow="Companies"
         title="Company Management"
       />
@@ -2789,13 +3114,13 @@ function CompaniesWorkspace({
           </button>
         </div>
         <p className="module-copy">
-          Each company workspace is being prepared for its own uploads, reports, dashboards, cleaned datasets, and AI data cleanup pipelines.
+          Each company workspace has isolated uploads, reports, dashboards, cleaned datasets, and business cleanup pipelines.
         </p>
         {error && <p className="persistence-note warning-note">{error}</p>}
         <div className="company-summary-grid">
           <div><strong>{companies.length}</strong><span>Total workspaces</span></div>
           <div><strong>{companies.filter((company) => company.status === 'Active').length}</strong><span>Active companies</span></div>
-          <div><strong>AI-ready</strong><span>Pipeline preparation</span></div>
+          <div><strong>Business-ready</strong><span>Pipeline operations</span></div>
         </div>
       </article>
 
@@ -2876,10 +3201,19 @@ function CompaniesWorkspace({
                   <td>{new Date(company.createdAt).toLocaleDateString()}</td>
                   <td>
                     <div className="company-actions">
-                      {/* TODO: Wire these actions to company-scoped uploads, AI cleanup jobs, dashboards, and users. */}
-                      <button type="button" disabled title="Coming soon">Upload Data</button>
-                      <button type="button" disabled title="Coming soon">Clean Data</button>
-                      <button type="button" disabled title="Coming soon">View Dashboard</button>
+                      {['Upload Data', 'Clean Data', 'View Dashboard', 'Reports', 'Analytics', 'Pipelines', 'Export Data', 'Delete Dataset', 'Delete Cleanup Job'].map((action) => (
+                        <button
+                          className={action.startsWith('Delete') ? 'danger-action' : ''}
+                          disabled={Boolean(workspaceAction)}
+                          key={action}
+                          type="button"
+                          onClick={() => runCompanyAction(company, action)}
+                        >
+                          {workspaceAction.includes(company.name) && workspaceAction.startsWith(action) ? 'Working...' : action}
+                        </button>
+                      ))}
+                      <button type="button" disabled={Boolean(workspaceAction)} onClick={() => updateCompanyName(company)}>Rename</button>
+                      <button className="danger-action" type="button" disabled={Boolean(workspaceAction)} onClick={() => deleteCompanyWorkspace(company)}>Delete Company</button>
                     </div>
                   </td>
                 </tr>
@@ -2888,7 +3222,7 @@ function CompaniesWorkspace({
           </table>
         </div>
         <p className="persistence-note">
-          Coming soon: each company will connect to company-specific uploads, reports, dashboards, cleaned datasets, and AI cleanup jobs.
+          {workspaceAction || 'Each company action is company-scoped and loads isolated uploads, reports, dashboards, cleaned datasets, and cleanup jobs.'}
         </p>
       </article>
     </section>
@@ -3032,12 +3366,12 @@ function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, opt
 function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboard[]; reports: ReportHistoryItem[] }) {
   return (
     <PageLayout>
-      <PageHeader title="Analytics Dashboard" eyebrow="Analytics" copy="Executive KPI workspace for dashboards, reports, and AI-ready analysis." />
+      <PageHeader title="Analytics Dashboard" eyebrow="Analytics" copy="Executive KPI workspace for dashboards, reports, and business-ready analysis." />
       <article className="panel">
         <div className="module-grid">
           <div><strong>{dashboards.length}</strong><span>Saved dashboards</span></div>
           <div><strong>{reports.length}</strong><span>Generated reports</span></div>
-          <div><strong>Live</strong><span>AI analytics workspace</span></div>
+          <div><strong>Live</strong><span>Business analytics workspace</span></div>
         </div>
       </article>
     </PageLayout>
@@ -3182,10 +3516,10 @@ function renderModulePage(
     dataProcessing: 'Data processing & cleanup'
   };
   const descriptions: Record<string, string> = {
-    accounting: 'Invoices, expenses, payroll, financial reports, budgets, tax tracking, and an AI financial assistant.',
+    accounting: 'Invoices, expenses, payroll, financial reports, budgets, tax tracking, and a business financial assistant.',
     engineering: 'Project management, task tracking, team assignments, document uploads, blueprint management, and workflow reports.',
-    hr: 'People operations, roles, onboarding, team assignments, and HR-ready AI support.',
-    crm: 'Client records, opportunity tracking, support history, and AI-assisted relationship management.',
+    hr: 'People operations, roles, onboarding, team assignments, and HR-ready business support.',
+    crm: 'Client records, opportunity tracking, support history, and business-assisted relationship management.',
     dataProcessing: 'Data cleanup, duplicate detection, validation, normalization, import/export, batch processing, and data quality reports.'
   };
   const cards = moduleCards[view] ?? [];
@@ -3206,7 +3540,7 @@ function renderModulePage(
   return (
     <>
       <article className="panel module-hero">
-        <p className="eyebrow">Modular AI ERP</p>
+        <p className="eyebrow">Modular Business ERP</p>
         <h2>{titles[view]}</h2>
         <p className="module-copy">{descriptions[view]}</p>
         <div className="module-stat-row">
@@ -3258,7 +3592,7 @@ function renderModulePage(
               <div className="workflow-row" key={record.id}>
                 <div>
                   <strong>{record.title}</strong>
-                  <span>{record.recordType} - queued with AI cleanup recommendations</span>
+                  <span>{record.recordType} - queued with business cleanup recommendations</span>
                 </div>
                 <small>{record.status}</small>
               </div>
@@ -3341,7 +3675,7 @@ function renderAssistantPanel(
   return (
     <article className="panel chat-panel">
       <div className="panel-header">
-        <h2>AI data assistant</h2>
+        <h2>Business data assistant</h2>
         <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
       </div>
       <div className="messages">
@@ -3405,7 +3739,7 @@ function buildReportLines(dataset: Dataset) {
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
     '',
-    'AI Insights',
+    'Business Insights',
     ...dataset.insights.map((item) => `- ${item}`),
     '',
     'Numeric Summary',

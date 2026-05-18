@@ -9,12 +9,17 @@ export function cleanDataset(dataset) {
   const seenRows = new Set();
   const logs = [];
   const cleanedRecords = [];
+  const startedAt = Date.now();
+  const numericValuesByColumn = new Map();
   const metrics = {
     duplicatesRemoved: 0,
     rowsFixed: 0,
     invalidValuesDetected: 0,
     columnsStandardized: originalHeaders.filter((header) => columnMap[header] !== header).length,
-    totalCleanedRows: 0
+    totalCleanedRows: 0,
+    failedRows: 0,
+    processingDurationMs: 0,
+    anomaliesDetected: 0
   };
 
   for (const record of dataset.records ?? []) {
@@ -31,6 +36,12 @@ export function cleanDataset(dataset) {
       if (!normalizedValue.isEmpty) nonEmptyCount += 1;
       if (normalizedValue.changed || targetHeader !== header) rowChanged = true;
       if (normalizedValue.invalid) metrics.invalidValuesDetected += 1;
+      if (normalizedValue.invalid) metrics.failedRows += 1;
+      if (normalizedValue.numericValue != null) {
+        const values = numericValuesByColumn.get(targetHeader) ?? [];
+        values.push(normalizedValue.numericValue);
+        numericValuesByColumn.set(targetHeader, values);
+      }
     }
 
     if (nonEmptyCount === 0) {
@@ -53,13 +64,18 @@ export function cleanDataset(dataset) {
   }
 
   metrics.totalCleanedRows = cleanedRecords.length;
+  metrics.anomaliesDetected = detectAnomalies(numericValuesByColumn);
+  metrics.processingDurationMs = Date.now() - startedAt;
   if (metrics.columnsStandardized > 0) {
     logs.push(`Standardized ${metrics.columnsStandardized} column names.`);
   }
   if (metrics.invalidValuesDetected > 0) {
     logs.push(`Detected ${metrics.invalidValuesDetected} invalid numeric values.`);
   }
-  logs.push(`Cleaned ${metrics.totalCleanedRows} rows for AI-ready analytics.`);
+  if (metrics.anomaliesDetected > 0) {
+    logs.push(`Flagged ${metrics.anomaliesDetected} numeric anomalies for business review.`);
+  }
+  logs.push(`Cleaned ${metrics.totalCleanedRows} rows for Business-ready analytics.`);
 
   return {
     headers: standardizedHeaders,
@@ -76,9 +92,13 @@ export function cleanDataset(dataset) {
       'whitespace_trimming',
       'date_normalization',
       'numeric_validation',
+      'currency_validation',
       'column_standardization',
-      'basic_value_normalization'
+      'basic_value_normalization',
+      'anomaly_detection',
+      'business_cleanup_recommendations'
     ],
+    recommendations: buildRecommendations(metrics),
     // TODO: Add AI recommendations once LLM-backed profiling is enabled.
     // TODO: Add anomaly detection over cleaned numeric and date columns.
     // TODO: Add predictive analytics using cleaned historical records.
@@ -135,7 +155,7 @@ function normalizeValue(value, header) {
     const numeric = Number(compact.replace(/[$,%\s]/g, '').replace(/^\((.*)\)$/, '-$1'));
     if (Number.isFinite(numeric)) {
       const normalizedNumber = String(numeric);
-      return { value: normalizedNumber, changed: normalizedNumber !== raw, invalid: false, isEmpty: false };
+      return { value: normalizedNumber, changed: normalizedNumber !== raw, invalid: false, isEmpty: false, numericValue: numeric };
     }
     return { value: compact, changed: compact !== raw, invalid: true, isEmpty: false };
   }
@@ -146,6 +166,28 @@ function normalizeValue(value, header) {
   }
 
   return { value: compact, changed: compact !== raw, invalid: false, isEmpty: false };
+}
+
+function detectAnomalies(valuesByColumn) {
+  let anomalies = 0;
+  for (const values of valuesByColumn.values()) {
+    if (values.length < 4) continue;
+    const total = values.reduce((sum, value) => sum + value, 0);
+    const average = total / values.length;
+    const variance = values.reduce((sum, value) => sum + (value - average) ** 2, 0) / values.length;
+    const standardDeviation = Math.sqrt(variance);
+    if (!standardDeviation) continue;
+    anomalies += values.filter((value) => Math.abs(value - average) > standardDeviation * 3).length;
+  }
+  return anomalies;
+}
+
+function buildRecommendations(metrics) {
+  return [
+    metrics.duplicatesRemoved > 0 ? 'Review duplicate source systems before the next upload.' : 'No duplicate rows were found in this cleanup run.',
+    metrics.invalidValuesDetected > 0 ? 'Validate numeric and currency fields with department owners.' : 'Numeric and currency fields passed basic validation.',
+    metrics.anomaliesDetected > 0 ? 'Inspect anomaly candidates before executive reporting.' : 'No statistical anomalies were detected in numeric fields.'
+  ];
 }
 
 function normalizeDate(value) {

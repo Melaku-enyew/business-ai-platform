@@ -214,6 +214,9 @@ export async function initDatabase() {
     ALTER TABLE datasets ADD COLUMN IF NOT EXISTS cleaned_dataset_id TEXT;
     ALTER TABLE datasets ADD COLUMN IF NOT EXISTS cleanup_status TEXT NOT NULL DEFAULT 'original';
     ALTER TABLE datasets ADD COLUMN IF NOT EXISTS cleanup_logs JSONB NOT NULL DEFAULT '[]'::jsonb;
+    ALTER TABLE datasets ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    ALTER TABLE datasets ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
+    ALTER TABLE datasets ADD COLUMN IF NOT EXISTS retention_until TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS cleanup_jobs (
       id TEXT PRIMARY KEY,
@@ -225,9 +228,63 @@ export async function initDatabase() {
       metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
       logs JSONB NOT NULL DEFAULT '[]'::jsonb,
       error TEXT,
+      deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE cleanup_jobs ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+
+    CREATE TABLE IF NOT EXISTS pipelines (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      department TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'active',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_runs (
+      id TEXT PRIMARY KEY,
+      pipeline_id TEXT REFERENCES pipelines(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      progress INTEGER NOT NULL DEFAULT 0,
+      logs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
+      scheduled_for TIMESTAMPTZ,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS analytics (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE CASCADE,
+      analytics_type TEXT NOT NULL,
+      summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT REFERENCES users(id) ON DELETE CASCADE,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'unread',
+      archived_at TIMESTAMPTZ,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    ALTER TABLE notifications ADD COLUMN IF NOT EXISTS archived_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS dashboards (
       id TEXT PRIMARY KEY,
@@ -250,8 +307,10 @@ export async function initDatabase() {
       title TEXT NOT NULL,
       report_type TEXT NOT NULL DEFAULT 'pdf',
       content JSONB NOT NULL DEFAULT '{}'::jsonb,
+      deleted_at TIMESTAMPTZ,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+    ALTER TABLE reports ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
 
     CREATE TABLE IF NOT EXISTS module_records (
       id TEXT PRIMARY KEY,
@@ -321,12 +380,18 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_companies_updated_at ON companies (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_company_uploaded_at ON datasets (company_id, uploaded_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_datasets_company_active ON datasets (company_id, uploaded_at DESC) WHERE deleted_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_cleanup_jobs_company_created_at ON cleanup_jobs (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_cleanup_jobs_original_dataset ON cleanup_jobs (original_dataset_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipelines_company_department ON pipelines (company_id, department, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_runs_company_status ON pipeline_runs (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_analytics_company_created_at ON analytics (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_notifications_company_created_at ON notifications (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_user_updated_at ON dashboards (user_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_company_updated_at ON dashboards (company_id, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_reports_user_created_at ON reports (user_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_reports_company_created_at ON reports (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_reports_company_active ON reports (company_id, created_at DESC) WHERE deleted_at IS NULL;
     CREATE INDEX IF NOT EXISTS idx_module_records_company_module ON module_records (company_id, module, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_account_tokens_user_purpose ON account_tokens (user_id, purpose, expires_at DESC);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at ON audit_logs (created_at DESC);
@@ -364,6 +429,22 @@ export async function initDatabase() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_cleanup_jobs_company') THEN
         ALTER TABLE cleanup_jobs
           ADD CONSTRAINT fk_cleanup_jobs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipelines_company') THEN
+        ALTER TABLE pipelines
+          ADD CONSTRAINT fk_pipelines_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_runs_company') THEN
+        ALTER TABLE pipeline_runs
+          ADD CONSTRAINT fk_pipeline_runs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_analytics_company') THEN
+        ALTER TABLE analytics
+          ADD CONSTRAINT fk_analytics_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_notifications_company') THEN
+        ALTER TABLE notifications
+          ADD CONSTRAINT fk_notifications_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_dashboards_company') THEN
         ALTER TABLE dashboards
@@ -435,6 +516,90 @@ export async function createCompany(company) {
     [saved.id, saved.name, saved.industry, saved.ownerName, saved.email, saved.phone, saved.status]
   );
   return rowToCompany(result.rows[0]);
+}
+
+export async function updateCompany(id, updates) {
+  const companyId = String(id || '').trim();
+  const normalized = {
+    name: updates.name != null ? String(updates.name).trim() : null,
+    industry: updates.industry != null ? String(updates.industry).trim() : null,
+    ownerName: updates.ownerName != null ? String(updates.ownerName).trim() : null,
+    email: updates.email != null ? String(updates.email).trim().toLowerCase() : null,
+    phone: updates.phone != null ? String(updates.phone).trim() : null,
+    status: updates.status != null ? String(updates.status).trim() || 'Active' : null
+  };
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    let updated;
+    store.companies = (store.companies ?? []).map((company) => {
+      if (company.id !== companyId || company.id === defaultCompanyId) return company;
+      updated = {
+        ...company,
+        ...(normalized.name != null ? { name: normalized.name } : {}),
+        ...(normalized.industry != null ? { industry: normalized.industry } : {}),
+        ...(normalized.ownerName != null ? { ownerName: normalized.ownerName } : {}),
+        ...(normalized.email != null ? { email: normalized.email } : {}),
+        ...(normalized.phone != null ? { phone: normalized.phone } : {}),
+        ...(normalized.status != null ? { status: normalized.status } : {}),
+        updatedAt: new Date().toISOString()
+      };
+      return updated;
+    });
+    await saveDevStore(store);
+    return updated ? rowToCompany(updated) : undefined;
+  }
+
+  const result = await pgQuery(
+    `UPDATE companies SET
+       name = COALESCE($2, name),
+       industry = COALESCE($3, industry),
+       owner_name = COALESCE($4, owner_name),
+       email = COALESCE($5, email),
+       phone = COALESCE($6, phone),
+       status = COALESCE($7, status),
+       updated_at = NOW()
+     WHERE id = $1 AND id <> $8
+     RETURNING *;`,
+    [companyId, normalized.name, normalized.industry, normalized.ownerName, normalized.email, normalized.phone, normalized.status, defaultCompanyId]
+  );
+  return result.rows[0] ? rowToCompany(result.rows[0]) : undefined;
+}
+
+export async function deleteCompany(id) {
+  const companyId = String(id || '').trim();
+  if (!companyId || companyId === defaultCompanyId) return false;
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const before = store.companies?.length ?? 0;
+    store.companies = (store.companies ?? []).filter((company) => company.id !== companyId);
+    store.users = (store.users ?? []).filter((user) => user.companyId !== companyId);
+    store.datasets = (store.datasets ?? []).filter((dataset) => dataset.companyId !== companyId);
+    store.cleanupJobs = (store.cleanupJobs ?? []).filter((job) => job.companyId !== companyId);
+    store.dashboards = (store.dashboards ?? []).filter((dashboard) => dashboard.companyId !== companyId);
+    store.reports = (store.reports ?? []).filter((report) => report.companyId !== companyId);
+    store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.companyId !== companyId);
+    store.notifications = (store.notifications ?? []).filter((notification) => notification.companyId !== companyId);
+    store.analytics = (store.analytics ?? []).filter((entry) => entry.companyId !== companyId);
+    store.pipelines = (store.pipelines ?? []).filter((entry) => entry.companyId !== companyId);
+    await saveDevStore(store);
+    return (store.companies?.length ?? 0) < before;
+  }
+
+  await pgQuery('DELETE FROM cleanup_jobs WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM reports WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM dashboards WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM analytics WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM notifications WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM pipelines WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM module_records WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM invitations WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM email_logs WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM datasets WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM users WHERE company_id = $1;', [companyId]);
+  const result = await pgQuery('DELETE FROM companies WHERE id = $1 AND id <> $2;', [companyId, defaultCompanyId]);
+  return result.rowCount > 0;
 }
 
 export async function companyExists(id) {
@@ -943,6 +1108,7 @@ export async function listDatasets(user, companyId) {
     const store = await loadDevStore();
     return store.datasets
       .filter((dataset) => {
+        if (dataset.deletedAt) return false;
         if (!requestedCompanyId) return isOwner(user) || dataset.companyId === getCompanyId(user) || dataset.userId === user.id;
         return dataset.companyId === requestedCompanyId && (isOwner(user) || dataset.userId === user.id || dataset.companyId === getCompanyId(user));
       })
@@ -963,21 +1129,51 @@ export async function listDatasets(user, companyId) {
     params.push(getCompanyId(user), user.id);
     where = 'WHERE (company_id = $1 OR user_id = $2)';
   }
-  const result = await pgQuery(`SELECT * FROM datasets ${where} ORDER BY uploaded_at DESC LIMIT 50;`, params);
+  const activeWhere = where ? `${where} AND deleted_at IS NULL` : 'WHERE deleted_at IS NULL';
+  const result = await pgQuery(`SELECT * FROM datasets ${activeWhere} ORDER BY uploaded_at DESC LIMIT 50;`, params);
   return result.rows.map(rowToDataset);
 }
 
 export async function getDataset(id, user) {
   if (!usingPostgres) {
     const store = await loadDevStore();
-    const dataset = store.datasets.find((entry) => entry.id === id && (isOwner(user) || entry.companyId === getCompanyId(user) || entry.userId === user.id));
+    const dataset = store.datasets.find((entry) => !entry.deletedAt && entry.id === id && (isOwner(user) || entry.companyId === getCompanyId(user) || entry.userId === user.id));
     return dataset ? rowToDataset(dataset) : undefined;
   }
   const params = [id];
   const accessFilter = isOwner(user) ? '' : 'AND (company_id = $2 OR user_id = $3)';
   if (!isOwner(user)) params.push(getCompanyId(user), user.id);
-  const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 ${accessFilter} LIMIT 1;`, params);
+  const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 AND deleted_at IS NULL ${accessFilter} LIMIT 1;`, params);
   return result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
+}
+
+export async function deleteDataset(user, id) {
+  const dataset = await getDataset(id, user);
+  if (!dataset) return undefined;
+
+  const datasetIds = new Set([dataset.id]);
+  if (!dataset.originalDatasetId && dataset.cleanedDatasetId) datasetIds.add(dataset.cleanedDatasetId);
+  if (dataset.originalDatasetId) datasetIds.add(dataset.originalDatasetId);
+  const ids = [...datasetIds];
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const deletedAt = new Date().toISOString();
+    const retentionUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+    store.cleanupJobs = (store.cleanupJobs ?? []).map((job) => ids.includes(job.originalDatasetId) || ids.includes(job.cleanedDatasetId) ? { ...job, deletedAt } : job);
+    store.reports = (store.reports ?? []).map((report) => ids.includes(report.datasetId) ? { ...report, deletedAt } : report);
+    store.analytics = (store.analytics ?? []).map((entry) => ids.includes(entry.datasetId) ? { ...entry, deletedAt } : entry);
+    store.datasets = (store.datasets ?? []).map((entry) => ids.includes(entry.id) ? { ...entry, deletedAt, retentionUntil } : entry);
+    await saveDevStore(store);
+    return dataset;
+  }
+
+  await pgQuery('UPDATE cleanup_jobs SET deleted_at = NOW(), status = $2, updated_at = NOW() WHERE original_dataset_id = ANY($1::text[]) OR cleaned_dataset_id = ANY($1::text[]);', [ids, 'archived']);
+  await pgQuery('UPDATE reports SET deleted_at = NOW() WHERE dataset_id = ANY($1::text[]);', [ids]);
+  await pgQuery('DELETE FROM dashboards WHERE dataset_id = ANY($1::text[]);', [ids]);
+  await pgQuery('UPDATE analytics SET summary = jsonb_set(summary, $2, to_jsonb(NOW()::text), true) WHERE dataset_id = ANY($1::text[]);', [ids, '{deletedAt}']);
+  await pgQuery("UPDATE datasets SET deleted_at = NOW(), retention_until = NOW() + INTERVAL '30 days', cleanup_status = 'archived' WHERE id = ANY($1::text[]);", [ids]);
+  return dataset;
 }
 
 export async function saveCleanupJob(job) {
@@ -1038,7 +1234,7 @@ export async function listCleanupJobs(user, datasetId) {
   if (!usingPostgres) {
     const store = await loadDevStore();
     return (store.cleanupJobs ?? [])
-      .filter((job) => (!requestedDatasetId || job.originalDatasetId === requestedDatasetId || job.cleanedDatasetId === requestedDatasetId) && canAccessCompanyRecord(user, job))
+      .filter((job) => !job.deletedAt && (!requestedDatasetId || job.originalDatasetId === requestedDatasetId || job.cleanedDatasetId === requestedDatasetId) && canAccessCompanyRecord(user, job))
       .slice(0, 50)
       .map(rowToCleanupJob);
   }
@@ -1053,9 +1249,26 @@ export async function listCleanupJobs(user, datasetId) {
     params.push(getCompanyId(user));
     filters.push(`company_id = $${params.length}`);
   }
-  const where = filters.length ? `WHERE ${filters.join(' AND ')}` : '';
+  filters.push('deleted_at IS NULL');
+  const where = `WHERE ${filters.join(' AND ')}`;
   const result = await pgQuery(`SELECT * FROM cleanup_jobs ${where} ORDER BY created_at DESC LIMIT 50;`, params);
   return result.rows.map(rowToCleanupJob);
+}
+
+export async function deleteCleanupJob(user, id) {
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const deletedAt = new Date().toISOString();
+    const job = (store.cleanupJobs ?? []).find((entry) => entry.id === id && !entry.deletedAt && canAccessCompanyRecord(user, entry));
+    store.cleanupJobs = (store.cleanupJobs ?? []).map((entry) => entry.id === id && canAccessCompanyRecord(user, entry) ? { ...entry, deletedAt, status: 'archived' } : entry);
+    await saveDevStore(store);
+    return job ? rowToCleanupJob(job) : undefined;
+  }
+  const params = [id];
+  const filter = isOwner(user) ? '' : 'AND company_id = $2';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`UPDATE cleanup_jobs SET deleted_at = NOW(), status = 'archived', updated_at = NOW() WHERE id = $1 ${filter} RETURNING *;`, params);
+  return result.rows[0] ? rowToCleanupJob(result.rows[0]) : undefined;
 }
 
 export async function saveDashboard(dashboard) {
@@ -1183,6 +1396,7 @@ export async function listReports(user, companyId) {
     const store = await loadDevStore();
     return store.reports
       .filter((report) => {
+        if (report.deletedAt) return false;
         if (!requestedCompanyId) return isOwner(user) || report.companyId === getCompanyId(user) || report.userId === user.id;
         return report.companyId === requestedCompanyId && (isOwner(user) || report.userId === user.id || report.companyId === getCompanyId(user));
       })
@@ -1197,14 +1411,16 @@ export async function listReports(user, companyId) {
   if (requestedCompanyId) {
     params.push(requestedCompanyId);
     if (isOwner(user)) {
-      companyFilter = 'WHERE reports.company_id = $1';
+      companyFilter = 'WHERE reports.company_id = $1 AND reports.deleted_at IS NULL';
     } else {
       params.push(user.id, getCompanyId(user));
-      companyFilter = 'WHERE reports.company_id = $1 AND (reports.user_id = $2 OR reports.company_id = $3)';
+      companyFilter = 'WHERE reports.company_id = $1 AND (reports.user_id = $2 OR reports.company_id = $3) AND reports.deleted_at IS NULL';
     }
   } else if (!isOwner(user)) {
     params.push(getCompanyId(user), user.id);
-    companyFilter = 'WHERE (reports.company_id = $1 OR reports.user_id = $2)';
+    companyFilter = 'WHERE (reports.company_id = $1 OR reports.user_id = $2) AND reports.deleted_at IS NULL';
+  } else {
+    companyFilter = 'WHERE reports.deleted_at IS NULL';
   }
   const result = await pgQuery(
     `SELECT reports.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
@@ -1217,6 +1433,108 @@ export async function listReports(user, companyId) {
     params
   );
   return result.rows.map(rowToReport);
+}
+
+export async function deleteReport(user, id) {
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const deletedAt = new Date().toISOString();
+    const report = (store.reports ?? []).find((entry) => entry.id === id && !entry.deletedAt && canAccessCompanyRecord(user, entry));
+    store.reports = (store.reports ?? []).map((entry) => entry.id === id && canAccessCompanyRecord(user, entry) ? { ...entry, deletedAt } : entry);
+    await saveDevStore(store);
+    return report ? rowToReport(report) : undefined;
+  }
+  const params = [id];
+  const filter = isOwner(user) ? '' : 'AND company_id = $2';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(`UPDATE reports SET deleted_at = NOW() WHERE id = $1 ${filter} RETURNING *;`, params);
+  return result.rows[0] ? rowToReport(result.rows[0]) : undefined;
+}
+
+export async function saveNotification(notification) {
+  const saved = {
+    id: notification.id,
+    companyId: notification.companyId ?? defaultCompanyId,
+    userId: notification.userId ?? null,
+    type: notification.type,
+    title: notification.title,
+    message: notification.message,
+    status: notification.status ?? 'unread',
+    metadata: notification.metadata ?? {},
+    createdAt: notification.createdAt ?? new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.notifications = [saved, ...(store.notifications ?? [])].slice(0, 300);
+    await saveDevStore(store);
+    return saved;
+  }
+  const result = await pgQuery(
+    `INSERT INTO notifications (id, company_id, user_id, type, title, message, status, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.userId, saved.type, saved.title, saved.message, saved.status, JSON.stringify(saved.metadata)]
+  );
+  return rowToNotification(result.rows[0]);
+}
+
+export async function listNotifications(user, companyId) {
+  const requestedCompanyId = String(companyId || '').trim();
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.notifications ?? [])
+      .filter((notification) => !notification.archivedAt && (!requestedCompanyId || notification.companyId === requestedCompanyId) && canAccessCompanyRecord(user, notification))
+      .slice(0, 50)
+      .map(rowToNotification);
+  }
+  const params = [];
+  const filters = [];
+  if (requestedCompanyId) {
+    params.push(requestedCompanyId);
+    filters.push(`company_id = $${params.length}`);
+  }
+  if (!isOwner(user)) {
+    params.push(getCompanyId(user));
+    filters.push(`company_id = $${params.length}`);
+  }
+  filters.push('archived_at IS NULL');
+  const where = `WHERE ${filters.join(' AND ')}`;
+  const result = await pgQuery(`SELECT * FROM notifications ${where} ORDER BY created_at DESC LIMIT 50;`, params);
+  return result.rows.map(rowToNotification);
+}
+
+export async function updateNotification(user, id, updates) {
+  const status = updates.status != null ? String(updates.status) : null;
+  const archive = updates.archive === true;
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    let updated;
+    store.notifications = (store.notifications ?? []).map((notification) => {
+      if (notification.id !== id || !canAccessCompanyRecord(user, notification)) return notification;
+      updated = {
+        ...notification,
+        ...(status ? { status } : {}),
+        ...(archive ? { archivedAt: new Date().toISOString() } : {})
+      };
+      return updated;
+    });
+    await saveDevStore(store);
+    return updated ? rowToNotification(updated) : undefined;
+  }
+
+  const params = [id, status, archive];
+  const filter = isOwner(user) ? '' : 'AND company_id = $4';
+  if (!isOwner(user)) params.push(getCompanyId(user));
+  const result = await pgQuery(
+    `UPDATE notifications SET
+       status = COALESCE($2, status),
+       archived_at = CASE WHEN $3::boolean THEN NOW() ELSE archived_at END
+     WHERE id = $1 ${filter}
+     RETURNING *;`,
+    params
+  );
+  return result.rows[0] ? rowToNotification(result.rows[0]) : undefined;
 }
 
 export async function createModuleRecord(record) {
@@ -1569,6 +1887,7 @@ function rowToReport(row) {
     title: row.title,
     reportType: row.report_type ?? row.reportType,
     content: parseJson(row.content, {}),
+    deletedAt: toIso(row.deleted_at ?? row.deletedAt),
     createdAt: toIso(row.created_at ?? row.createdAt)
   };
 }
@@ -1601,7 +1920,10 @@ function rowToDataset(row) {
     cleanupMetrics: analysis.cleanupMetrics ?? {},
     cleanupPreview: analysis.cleanupPreview ?? null,
     cleanupOperations: analysis.cleanupOperations ?? [],
-    futureAiReady: analysis.futureAiReady === true
+    futureAiReady: analysis.futureAiReady === true,
+    deletedAt: toIso(row.deleted_at ?? row.deletedAt),
+    archivedAt: toIso(row.archived_at ?? row.archivedAt),
+    retentionUntil: toIso(row.retention_until ?? row.retentionUntil)
   };
 }
 
@@ -1616,8 +1938,24 @@ function rowToCleanupJob(row) {
     metrics: parseJson(row.metrics, {}),
     logs: parseJson(row.logs, []),
     error: row.error ?? null,
+    deletedAt: toIso(row.deleted_at ?? row.deletedAt),
     createdAt: toIso(row.created_at ?? row.createdAt),
     updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
+function rowToNotification(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    type: row.type,
+    title: row.title,
+    message: row.message,
+    status: row.status ?? 'unread',
+    metadata: parseJson(row.metadata, {}),
+    archivedAt: toIso(row.archived_at ?? row.archivedAt),
+    createdAt: toIso(row.created_at ?? row.createdAt)
   };
 }
 
@@ -1832,7 +2170,10 @@ async function loadDevStore() {
       auditLogs: [],
       emailLogs: [],
       invitations: [],
-      cleanupJobs: []
+      cleanupJobs: [],
+      notifications: [],
+      analytics: [],
+      pipelines: []
     };
   }
 
@@ -1849,7 +2190,10 @@ async function loadDevStore() {
     auditLogs: store.auditLogs ?? [],
     emailLogs: store.emailLogs ?? [],
     invitations: store.invitations ?? [],
-    cleanupJobs: store.cleanupJobs ?? []
+    cleanupJobs: store.cleanupJobs ?? [],
+    notifications: store.notifications ?? [],
+    analytics: store.analytics ?? [],
+    pipelines: store.pipelines ?? []
   };
 }
 

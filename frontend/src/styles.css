@@ -1116,16 +1116,30 @@ th {
   display: flex;
   gap: 8px;
   flex-wrap: wrap;
-  min-width: 320px;
+  min-width: 520px;
 }
 
 .company-actions button {
+  border: 1px solid var(--line-strong);
   padding: 0 12px;
+  color: var(--text);
+  background: var(--panel);
+  box-shadow: 0 8px 20px rgba(18, 32, 51, 0.04);
+}
+
+.company-actions button:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  transform: translateY(-1px);
 }
 
 .company-actions button:disabled {
   cursor: not-allowed;
-  opacity: 0.55;
+  opacity: 0.68;
+}
+
+.company-actions .danger-action {
+  color: #b54b4b;
+  border-color: color-mix(in srgb, #b54b4b 24%, var(--line-strong));
 }
 
 .company-table {
@@ -1288,7 +1302,7 @@ th {
 
 .cleanup-metrics {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
   gap: 10px;
   margin: 14px 0;
 }
@@ -1349,6 +1363,63 @@ th {
 
 .compact-history {
   margin-top: 0;
+}
+
+.cleanup-job-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.dataset-actions-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 14px;
+}
+
+.notification-center {
+  margin-bottom: 22px;
+}
+
+.notification-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.notification-list div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.notification-list div div {
+  display: grid;
+  align-items: initial;
+  justify-content: initial;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+}
+
+.notification-actions {
+  display: flex !important;
+  align-items: center !important;
+  justify-content: flex-end !important;
+  flex-wrap: wrap;
+}
+
+.notification-list span {
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .pipeline-stages {
