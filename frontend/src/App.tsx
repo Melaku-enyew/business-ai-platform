@@ -407,6 +407,7 @@ export function App() {
   const [cleanupJobs, setCleanupJobs] = useState<CleanupJob[]>([]);
   const [cleanupMessage, setCleanupMessage] = useState('Cleanup pipeline ready.');
   const [cleanupRunning, setCleanupRunning] = useState(false);
+  const [deletingDatasetId, setDeletingDatasetId] = useState('');
   const [status, setStatus] = useState('Connecting');
   const [uploadState, setUploadState] = useState('Drop a CSV or Excel file here to start analysis.');
   const [isDragging, setIsDragging] = useState(false);
@@ -1085,23 +1086,43 @@ export function App() {
       setPersistenceState('You need manager access to delete datasets.');
       return;
     }
-    if (!window.confirm(`Delete ${dataset.fileName}? This removes linked cleanup jobs, reports, dashboards, analytics, and exports.`)) {
+    const versionLabel = dataset.originalDatasetId ? 'this cleaned version' : 'this original dataset and its cleaned versions';
+    if (!window.confirm(`Delete ${dataset.fileName}? This removes ${versionLabel} from active datasets and archives linked cleanup/report assets.`)) {
       return;
     }
+    setDeletingDatasetId(dataset.id);
     setWorkspaceAction(`Deleting ${dataset.fileName}...`);
     try {
       const response = await apiFetch(`/api/datasets/${dataset.id}`, { method: 'DELETE' });
-      const payload = await readJson<{ error?: string }>(response);
-      if (!response.ok) throw new Error(payload.error || 'Dataset delete failed.');
-      setDatasets((current) => current.filter((item) => item.id !== dataset.id && item.originalDatasetId !== dataset.id && item.id !== dataset.cleanedDatasetId));
-      setDashboards((current) => current.filter((dashboard) => dashboard.datasetId !== dataset.id && dashboard.datasetId !== dataset.cleanedDatasetId));
-      setReports((current) => current.filter((report) => report.datasetId !== dataset.id && report.datasetId !== dataset.cleanedDatasetId));
-      setCleanupJobs([]);
-      setActiveDataset((current) => current?.id === dataset.id ? null : current);
-      setPersistenceState('Dataset and linked workspace assets deleted.');
+      const payload = await readJson<{ success?: boolean; datasetId?: string; deleted?: boolean; deletedIds?: string[]; error?: string }>(response);
+      if (!response.ok || !payload.success || !payload.deleted) {
+        console.error('[Metenova API] Dataset delete failed', { datasetId: dataset.id, status: response.status, payload });
+        throw new Error(payload.error || 'Dataset delete failed.');
+      }
+      const deletedIds = new Set(payload.deletedIds?.length ? payload.deletedIds : [payload.datasetId ?? dataset.id]);
+      setDatasets((current) => current.filter((item) => !deletedIds.has(item.id)));
+      setDashboards((current) => current.filter((dashboard) => !deletedIds.has(dashboard.datasetId)));
+      setReports((current) => current.filter((report) => !deletedIds.has(report.datasetId)));
+      setCleanupJobs((current) => current.filter((job) => !deletedIds.has(job.originalDatasetId) && !(job.cleanedDatasetId && deletedIds.has(job.cleanedDatasetId))));
+      setActiveDataset((current) => {
+        if (!current || deletedIds.has(current.id)) {
+          return datasets.find((item) => !deletedIds.has(item.id) && item.companyId === dataset.companyId) ?? null;
+        }
+        return current;
+      });
+      if (dataset.companyId) {
+        await loadCompanyWorkspace(dataset.companyId);
+      } else {
+        await loadWorkspace();
+      }
+      setCleanupMessage(`${dataset.fileName} deleted from active datasets.`);
+      setPersistenceState('Dataset deleted and workspace refreshed.');
     } catch (error) {
-      setPersistenceState(error instanceof Error ? error.message : 'Dataset delete failed.');
+      const message = error instanceof Error ? error.message : 'Dataset delete failed.';
+      setCleanupMessage(message);
+      setPersistenceState(message);
     } finally {
+      setDeletingDatasetId('');
       setWorkspaceAction('');
     }
   }
@@ -2142,6 +2163,7 @@ export function App() {
             deleteAdminUser={deleteAdminUser}
             deleteCompanyWorkspace={deleteCompanyWorkspace}
             deleteDatasetRecord={deleteDatasetRecord}
+            deletingDatasetId={deletingDatasetId}
             downloadHistoricalReport={downloadHistoricalReport}
             downloadDatasetExport={downloadDatasetExport}
             openCompanyAccess={openCompanyAccess}
@@ -2649,8 +2671,8 @@ export function App() {
                         <button className="ghost-button compact" type="button" onClick={() => archiveDatasetRecord(activeDataset)}>
                           Archive Dataset
                         </button>
-                        <button className="ghost-button compact danger" type="button" onClick={() => deleteDatasetRecord(activeDataset)}>
-                          Delete Dataset
+                        <button className="ghost-button compact danger" type="button" disabled={deletingDatasetId === activeDataset.id} onClick={() => deleteDatasetRecord(activeDataset)}>
+                          {deletingDatasetId === activeDataset.id ? 'Deleting...' : 'Delete Dataset'}
                         </button>
                       </div>
                       {(activeDataset.worksheets?.length ?? 0) > 1 && (
@@ -3323,6 +3345,7 @@ function RoutedPages(props: {
   deleteAdminUser: (user: AdminUser) => void;
   deleteCompanyWorkspace: (company: Company) => void;
   deleteDatasetRecord: (dataset: Dataset | null) => void;
+  deletingDatasetId: string;
   downloadDatasetExport: (dataset: Dataset | null) => void;
   downloadHistoricalReport: (report: ReportHistoryItem) => void;
   openCompanyAccess: (user: AdminUser) => void;
@@ -3356,6 +3379,7 @@ function RoutedPages(props: {
               companies={props.companies}
               datasets={props.datasets}
               deleteDatasetRecord={props.deleteDatasetRecord}
+              deletingDatasetId={props.deletingDatasetId}
               downloadDatasetExport={props.downloadDatasetExport}
               route={route}
               selectedCompanyId={props.selectedCompanyId}
@@ -3598,6 +3622,7 @@ function ModuleWorkspacePage({
   companies,
   datasets,
   deleteDatasetRecord,
+  deletingDatasetId,
   downloadDatasetExport,
   route,
   selectedCompanyId,
@@ -3611,6 +3636,7 @@ function ModuleWorkspacePage({
   companies: Company[];
   datasets: Dataset[];
   deleteDatasetRecord: (dataset: Dataset | null) => void;
+  deletingDatasetId: string;
   downloadDatasetExport: (dataset: Dataset | null) => void;
   route: WorkspaceRoute;
   selectedCompanyId: string;
@@ -3902,7 +3928,9 @@ function ModuleWorkspacePage({
                 <button className="ghost-button compact" type="button" onClick={() => approveDataset(dataset)}>Approve</button>
                 <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'export' })}>Export</button>
                 <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(dataset)}>Download</button>
-                <button className="ghost-button compact danger" type="button" onClick={() => deleteDatasetRecord(dataset)}>Delete</button>
+                <button className="ghost-button compact danger" type="button" disabled={deletingDatasetId === dataset.id} onClick={() => deleteDatasetRecord(dataset)}>
+                  {deletingDatasetId === dataset.id ? 'Deleting...' : 'Delete'}
+                </button>
               </div>
             </div>
           ))}

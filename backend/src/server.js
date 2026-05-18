@@ -2265,7 +2265,7 @@ app.post('/api/datasets/:id/archive', requireRole('manager'), requireDurableStor
       return;
     }
     if (!canManageDataset(req.user, dataset)) {
-      res.status(403).json({ error: 'Insufficient dataset permissions.' });
+      res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
       return;
     }
     const archived = await saveDataset({
@@ -2418,8 +2418,12 @@ app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, ne
   }
 });
 
-app.delete('/api/datasets/:id', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+app.delete('/api/datasets/:id', requireDurableStorage, async (req, res, next) => {
   try {
+    if (!hasRole(req.user, 'manager')) {
+      res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
     const dataset = await getDataset(req.params.id, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
@@ -2429,7 +2433,7 @@ app.delete('/api/datasets/:id', requireRole('manager'), requireDurableStorage, a
       res.status(403).json({ error: 'Insufficient dataset permissions.' });
       return;
     }
-    const deleted = await deleteDataset(req.user, req.params.id);
+    const deleteResult = await deleteDataset(req.user, req.params.id);
     await audit(req, 'dataset.deleted', 'dataset', req.params.id, {
       companyId: dataset.companyId,
       fileName: dataset.fileName,
@@ -2441,10 +2445,16 @@ app.delete('/api/datasets/:id', requireRole('manager'), requireDurableStorage, a
       userId: req.user.id,
       type: 'dataset_deleted',
       title: 'Dataset deleted',
-      message: `${dataset.fileName} and linked cleanup assets were deleted.`,
-      metadata: { datasetId: dataset.id }
+      message: `${dataset.fileName} was removed from active workspace datasets.`,
+      metadata: { datasetId: dataset.id, deletedIds: deleteResult?.deletedIds ?? [dataset.id] }
     });
-    res.json({ deleted: publicDataset(deleted) });
+    res.json({
+      success: true,
+      datasetId: dataset.id,
+      deleted: true,
+      deletedIds: deleteResult?.deletedIds ?? [dataset.id],
+      dataset: publicDataset(dataset)
+    });
   } catch (error) {
     next(error);
   }

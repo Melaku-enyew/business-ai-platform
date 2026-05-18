@@ -1356,29 +1356,52 @@ export async function deleteDataset(user, id) {
   const dataset = await getDataset(id, user);
   if (!dataset) return undefined;
 
-  const datasetIds = new Set([dataset.id]);
-  if (!dataset.originalDatasetId && dataset.cleanedDatasetId) datasetIds.add(dataset.cleanedDatasetId);
-  if (dataset.originalDatasetId) datasetIds.add(dataset.originalDatasetId);
-  const ids = [...datasetIds];
-
   if (!usingPostgres) {
     const store = await loadDevStore();
+    const relatedVersionIds = new Set([dataset.id]);
+    if (!dataset.originalDatasetId) {
+      (store.datasets ?? [])
+        .filter((entry) => entry.originalDatasetId === dataset.id)
+        .forEach((entry) => relatedVersionIds.add(entry.id));
+    }
+    const ids = [...relatedVersionIds];
     const deletedAt = new Date().toISOString();
     const retentionUntil = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
-    store.cleanupJobs = (store.cleanupJobs ?? []).map((job) => ids.includes(job.originalDatasetId) || ids.includes(job.cleanedDatasetId) ? { ...job, deletedAt } : job);
+    store.cleanupJobs = (store.cleanupJobs ?? []).map((job) => (
+      ids.includes(job.originalDatasetId) || ids.includes(job.cleanedDatasetId)
+        ? { ...job, deletedAt, status: 'archived' }
+        : job
+    ));
     store.reports = (store.reports ?? []).map((report) => ids.includes(report.datasetId) ? { ...report, deletedAt } : report);
     store.analytics = (store.analytics ?? []).map((entry) => ids.includes(entry.datasetId) ? { ...entry, deletedAt } : entry);
-    store.datasets = (store.datasets ?? []).map((entry) => ids.includes(entry.id) ? { ...entry, deletedAt, retentionUntil } : entry);
+    store.dashboards = (store.dashboards ?? []).filter((dashboard) => !ids.includes(dashboard.datasetId));
+    store.datasets = (store.datasets ?? []).map((entry) => {
+      if (ids.includes(entry.id)) return { ...entry, deletedAt, retentionUntil, cleanupStatus: 'archived' };
+      if (ids.includes(entry.cleanedDatasetId)) return { ...entry, cleanedDatasetId: null };
+      return entry;
+    });
     await saveDevStore(store);
-    return dataset;
+    return { dataset, deletedIds: ids };
   }
 
-  await pgQuery('UPDATE cleanup_jobs SET deleted_at = NOW(), status = $2, updated_at = NOW() WHERE original_dataset_id = ANY($1::text[]) OR cleaned_dataset_id = ANY($1::text[]);', [ids, 'archived']);
-  await pgQuery('UPDATE reports SET deleted_at = NOW() WHERE dataset_id = ANY($1::text[]);', [ids]);
-  await pgQuery('DELETE FROM dashboards WHERE dataset_id = ANY($1::text[]);', [ids]);
-  await pgQuery('UPDATE analytics SET summary = jsonb_set(summary, $2, to_jsonb(NOW()::text), true) WHERE dataset_id = ANY($1::text[]);', [ids, '{deletedAt}']);
-  await pgQuery("UPDATE datasets SET deleted_at = NOW(), retention_until = NOW() + INTERVAL '30 days', cleanup_status = 'archived' WHERE id = ANY($1::text[]);", [ids]);
-  return dataset;
+  const ids = [dataset.id];
+  if (!dataset.originalDatasetId) {
+    const related = await pgQuery(
+      'SELECT id FROM datasets WHERE original_dataset_id = $1 AND deleted_at IS NULL;',
+      [dataset.id]
+    );
+    related.rows.forEach((row) => ids.push(row.id));
+  }
+
+  await withTransaction(async (client) => {
+    await client.query('UPDATE cleanup_jobs SET deleted_at = NOW(), status = $2, updated_at = NOW() WHERE original_dataset_id = ANY($1::text[]) OR cleaned_dataset_id = ANY($1::text[]);', [ids, 'archived']);
+    await client.query('UPDATE reports SET deleted_at = NOW() WHERE dataset_id = ANY($1::text[]);', [ids]);
+    await client.query('DELETE FROM dashboards WHERE dataset_id = ANY($1::text[]);', [ids]);
+    await client.query('UPDATE analytics SET summary = jsonb_set(summary, $2, to_jsonb(NOW()::text), true) WHERE dataset_id = ANY($1::text[]);', [ids, '{deletedAt}']);
+    await client.query('UPDATE datasets SET cleaned_dataset_id = NULL WHERE cleaned_dataset_id = ANY($1::text[]);', [ids]);
+    await client.query("UPDATE datasets SET deleted_at = NOW(), retention_until = NOW() + INTERVAL '30 days', cleanup_status = 'archived' WHERE id = ANY($1::text[]);", [ids]);
+  });
+  return { dataset, deletedIds: ids };
 }
 
 export async function saveCleanupJob(job) {
