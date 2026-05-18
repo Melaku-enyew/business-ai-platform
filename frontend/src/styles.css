@@ -2215,6 +2215,78 @@ th {
   margin-top: 18px;
 }
 
+.module-upload-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.dropzone {
+  position: relative;
+  display: grid;
+  place-items: center;
+  gap: 8px;
+  min-height: 150px;
+  border: 1.5px dashed rgba(24, 119, 242, 0.35);
+  border-radius: 8px;
+  background: rgba(24, 119, 242, 0.05);
+  color: #334155;
+  padding: 22px;
+  text-align: center;
+}
+
+.dropzone.active {
+  border-color: #1877f2;
+  background: rgba(24, 119, 242, 0.1);
+}
+
+.dropzone input {
+  max-width: 320px;
+}
+
+.progress-track {
+  height: 8px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(15, 23, 42, 0.08);
+}
+
+.progress-track span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1877f2, #16a34a);
+  transition: width 180ms ease;
+}
+
+.workflow-stages {
+  grid-template-columns: repeat(7, minmax(92px, 1fr));
+}
+
+.dataset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.dataset-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  padding: 12px;
+}
+
+.dataset-row > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.dataset-row span {
+  color: #64748b;
+  font-size: 13px;
+}
+
 @keyframes card-rise {
   from {
     opacity: 0;

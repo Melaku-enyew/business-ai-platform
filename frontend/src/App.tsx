@@ -1,4 +1,4 @@
-import { ChangeEvent, CSSProperties, DragEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, CSSProperties, Dispatch, DragEvent, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 type InsightResponse = {
@@ -653,39 +653,58 @@ export function App() {
     };
   }, [user?.id, authDisabled, sessionTimeoutMs, sessionWarningSeconds]);
 
-  function apiFetch(path: string, options: RequestInit = {}) {
+  async function refreshCsrfToken() {
+    const response = await fetch(apiUrl('/api/config'), { credentials: 'include' });
+    const config = await readJson<ConfigResponse>(response);
+    if (!response.ok || !config.csrfToken) {
+      throw new Error('Could not refresh secure request token.');
+    }
+    setCsrfToken(config.csrfToken);
+    return config.csrfToken;
+  }
+
+  async function apiFetch(path: string, options: RequestInit = {}) {
+    const method = String(options.method || 'GET').toUpperCase();
+    const isMutation = !['GET', 'HEAD'].includes(method);
+    const tokenForRequest = isMutation && !csrfToken ? await refreshCsrfToken() : csrfToken;
     const headers = new Headers(options.headers);
 
     if (token) {
       headers.set('Authorization', `Bearer ${token}`);
     }
-    if (csrfToken && !['GET', 'HEAD'].includes(String(options.method || 'GET').toUpperCase())) {
-      headers.set('X-CSRF-Token', csrfToken);
+    if (isMutation && tokenForRequest) {
+      headers.set('X-CSRF-Token', tokenForRequest);
     }
 
     const requestUrl = apiUrl(path);
     console.info('[Metenova API] request', { path, requestUrl });
 
-    return fetch(requestUrl, {
+    const requestInit = {
       ...options,
       headers,
       credentials: 'include'
-    }).then((response) => {
-      if (response.status === 401) {
-        return readJson<{ error?: string; code?: string }>(response).then((payload) => {
-          const message = payload.code === 'SESSION_EXPIRED'
-            ? 'Session expired. Please sign in again.'
-            : payload.error || 'Authentication required.';
-          logout(message);
-          throw new Error(message);
-        });
-      }
+    };
 
-      return response;
-    }).catch((error) => {
-      console.error('[Metenova API] request failed', { path, requestUrl, error });
-      throw error;
-    });
+    const response = await fetch(requestUrl, requestInit);
+    if (response.status === 403 && isMutation) {
+      const payload = await response.clone().json().catch(() => ({} as { code?: string }));
+      if (payload.code === 'CSRF_INVALID') {
+        const refreshed = await refreshCsrfToken();
+        headers.set('X-CSRF-Token', refreshed);
+        return fetch(requestUrl, requestInit);
+      }
+    }
+
+    if (response.status === 401) {
+      const payload = await readJson<{ error?: string; code?: string }>(response);
+      const message = payload.code === 'SESSION_EXPIRED'
+        ? 'Session expired. Please sign in again.'
+        : payload.error || 'Authentication required.';
+      logout(message);
+      throw new Error(message);
+    }
+
+    return response;
   }
 
   async function loadWorkspace() {
@@ -937,21 +956,22 @@ export function App() {
     [reports, selectedCompanyId]
   );
 
-  async function uploadDataset(file: File, worksheetName?: string) {
-    if (!selectedCompanyId) {
+  async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string) {
+    const targetCompanyId = companyIdOverride || selectedCompanyId;
+    if (!targetCompanyId) {
       setUploadState('Select a company before uploading a dataset.');
-      return;
+      return undefined;
     }
 
     const extension = file.name.split('.').pop()?.toLowerCase();
     if (!extension || !['csv', 'xlsx', 'xls', 'json'].includes(extension)) {
       setUploadState('Upload a .csv, .xlsx, .xls, or .json file.');
-      return;
+      return undefined;
     }
 
     const formData = new FormData();
     formData.append('file', file);
-    formData.append('companyId', selectedCompanyId);
+    formData.append('companyId', targetCompanyId);
     if (worksheetName) {
       formData.append('worksheetName', worksheetName);
     }
@@ -976,8 +996,10 @@ export function App() {
       const storageLabel = 'saved to your protected workspace';
       const warning = dataset.warnings?.[0] ? ` ${dataset.warnings[0]}` : '';
       setUploadState(`${(dataset.fileType ?? extension).toUpperCase()} analysis ready and ${storageLabel}.${warning}`);
+      return dataset;
     } catch (error) {
       setUploadState(error instanceof Error ? error.message : 'Upload failed.');
+      return undefined;
     }
   }
 
@@ -2115,15 +2137,23 @@ export function App() {
             companyFormOpen={companyFormOpen}
             companySaving={companySaving}
             dashboards={companyDashboards}
+            datasets={datasets}
             deleteAdminUser={deleteAdminUser}
             deleteCompanyWorkspace={deleteCompanyWorkspace}
+            deleteDatasetRecord={deleteDatasetRecord}
             downloadHistoricalReport={downloadHistoricalReport}
+            downloadDatasetExport={downloadDatasetExport}
             openCompanyAccess={openCompanyAccess}
             reports={companyReports}
             resetCompanyForm={resetCompanyForm}
             runCompanyAction={runCompanyAction}
             saveCompany={saveCompany}
             setCompanyFormOpen={setCompanyFormOpen}
+            selectedCompanyId={selectedCompanyId}
+            setActiveDataset={setActiveDataset}
+            setCleanupJobs={setCleanupJobs}
+            setDatasets={setDatasets}
+            setSelectedCompanyId={setSelectedCompanyId}
             loadCompanies={loadCompanies}
             systemStatus={systemStatus}
             updateCompanyName={updateCompanyName}
@@ -2131,6 +2161,7 @@ export function App() {
             updateCompanyForm={updateCompanyForm}
             users={adminUsers}
             user={user}
+            uploadDataset={uploadDataset}
             workspaceAction={workspaceAction}
           />
         ) : currentView === 'settings' ? (
@@ -3166,8 +3197,11 @@ function RoutedPages(props: {
   companyFormOpen: boolean;
   companySaving: boolean;
   dashboards: SavedDashboard[];
+  datasets: Dataset[];
   deleteAdminUser: (user: AdminUser) => void;
   deleteCompanyWorkspace: (company: Company) => void;
+  deleteDatasetRecord: (dataset: Dataset | null) => void;
+  downloadDatasetExport: (dataset: Dataset | null) => void;
   downloadHistoricalReport: (report: ReportHistoryItem) => void;
   openCompanyAccess: (user: AdminUser) => void;
   reports: ReportHistoryItem[];
@@ -3176,19 +3210,40 @@ function RoutedPages(props: {
   runCompanyAction: (company: Company, action: string) => void;
   saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   setCompanyFormOpen: (open: boolean) => void;
+  selectedCompanyId: string;
+  setActiveDataset: (dataset: Dataset | null) => void;
+  setCleanupJobs: Dispatch<SetStateAction<CleanupJob[]>>;
+  setDatasets: Dispatch<SetStateAction<Dataset[]>>;
+  setSelectedCompanyId: (companyId: string) => void;
   systemStatus: SystemStatus | null;
   updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
   updateCompanyName: (company: Company) => void;
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   users: AdminUser[];
   user: User | null;
+  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
   workspaceAction: string;
 }) {
   return (
     <Routes>
       {workspaceRoutes.map((route) => (
         <Route
-          element={<ModuleWorkspacePage apiFetch={props.apiFetch} route={route} />}
+          element={(
+            <ModuleWorkspacePage
+              apiFetch={props.apiFetch}
+              companies={props.companies}
+              datasets={props.datasets}
+              deleteDatasetRecord={props.deleteDatasetRecord}
+              downloadDatasetExport={props.downloadDatasetExport}
+              route={route}
+              selectedCompanyId={props.selectedCompanyId}
+              setActiveDataset={props.setActiveDataset}
+              setCleanupJobs={props.setCleanupJobs}
+              setDatasets={props.setDatasets}
+              setSelectedCompanyId={props.setSelectedCompanyId}
+              uploadDataset={props.uploadDataset}
+            />
+          )}
           key={route.path}
           path={route.path}
         />
@@ -3416,7 +3471,33 @@ function CompaniesWorkspace({
   );
 }
 
-function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, options?: RequestInit) => Promise<Response>; route: WorkspaceRoute }) {
+function ModuleWorkspacePage({
+  apiFetch,
+  companies,
+  datasets,
+  deleteDatasetRecord,
+  downloadDatasetExport,
+  route,
+  selectedCompanyId,
+  setActiveDataset,
+  setCleanupJobs,
+  setDatasets,
+  setSelectedCompanyId,
+  uploadDataset
+}: {
+  apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  companies: Company[];
+  datasets: Dataset[];
+  deleteDatasetRecord: (dataset: Dataset | null) => void;
+  downloadDatasetExport: (dataset: Dataset | null) => void;
+  route: WorkspaceRoute;
+  selectedCompanyId: string;
+  setActiveDataset: (dataset: Dataset | null) => void;
+  setCleanupJobs: Dispatch<SetStateAction<CleanupJob[]>>;
+  setDatasets: Dispatch<SetStateAction<Dataset[]>>;
+  setSelectedCompanyId: (companyId: string) => void;
+  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
+}) {
   const [records, setRecords] = useState<ModuleRecord[]>([]);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
@@ -3426,6 +3507,14 @@ function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, opt
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [workflowMessage, setWorkflowMessage] = useState('Upload a dataset to start the workflow.');
+  const [workflowStage, setWorkflowStage] = useState('Upload Dataset');
+  const [dragActive, setDragActive] = useState(false);
+  const moduleDatasets = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
+  const workflowStages = ['Upload Dataset', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
+  const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
 
   async function loadRecords() {
     setLoading(true);
@@ -3460,7 +3549,7 @@ function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, opt
       const response = await apiFetch(`/api/modules/${route.module}/records`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ title, amount, status, recordType: route.type, metadata: { workspacePath: route.path } })
+        body: JSON.stringify({ title, amount, status, recordType: route.type, companyId: selectedCompanyId, metadata: { workspacePath: route.path } })
       });
       const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
       if (!response.ok || !payload.record) {
@@ -3516,6 +3605,90 @@ function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, opt
     }
   }
 
+  async function handleModuleUpload(file: File) {
+    setUploading(true);
+    setUploadProgress(12);
+    setError('');
+    setWorkflowMessage(`Uploading ${file.name}...`);
+    setWorkflowStage('Upload Dataset');
+    try {
+      window.setTimeout(() => setUploadProgress(48), 120);
+      const dataset = await uploadDataset(file, undefined, selectedCompanyId);
+      if (!dataset) {
+        throw new Error('Upload failed.');
+      }
+      setUploadProgress(100);
+      setWorkflowStage('Validate');
+      setWorkflowMessage(`${dataset.fileName} uploaded. Validation is ready.`);
+      setActiveDataset(dataset);
+    } catch (uploadError) {
+      setWorkflowStage('Upload Dataset');
+      setWorkflowMessage(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
+      setError(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
+    } finally {
+      window.setTimeout(() => {
+        setUploading(false);
+        setUploadProgress(0);
+      }, 500);
+    }
+  }
+
+  function handleModuleFileChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) void handleModuleUpload(file);
+    event.target.value = '';
+  }
+
+  function handleDrop(event: DragEvent<HTMLDivElement>) {
+    event.preventDefault();
+    setDragActive(false);
+    const file = event.dataTransfer.files?.[0];
+    if (file) void handleModuleUpload(file);
+  }
+
+  async function cleanDatasetFromModule(dataset: Dataset) {
+    setWorkflowStage('Clean');
+    setWorkflowMessage(`Cleaning ${dataset.fileName}...`);
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}/cleanup`, { method: 'POST' });
+      const payload = await readJson<{ job?: CleanupJob; originalDataset?: Dataset; cleanedDataset?: Dataset; error?: string }>(response);
+      if (!response.ok || !payload.cleanedDataset || !payload.originalDataset) {
+        throw new Error(payload.error || 'Cleanup failed.');
+      }
+      setDatasets((current) => [
+        payload.cleanedDataset as Dataset,
+        payload.originalDataset as Dataset,
+        ...current.filter((entry) => entry.id !== payload.cleanedDataset?.id && entry.id !== payload.originalDataset?.id)
+      ]);
+      setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
+      setActiveDataset(payload.cleanedDataset);
+      setWorkflowStage('Approve');
+      setWorkflowMessage(`Cleanup completed. ${payload.job?.metrics?.totalCleanedRows ?? payload.cleanedDataset.rows} rows ready for approval.`);
+    } catch (cleanupError) {
+      setWorkflowStage('Clean');
+      setWorkflowMessage(cleanupError instanceof Error ? cleanupError.message : 'Cleanup failed.');
+      setError(cleanupError instanceof Error ? cleanupError.message : 'Cleanup failed.');
+    }
+  }
+
+  function validateDataset(dataset: Dataset) {
+    setActiveDataset(dataset);
+    setWorkflowStage('Detect Duplicates');
+    setWorkflowMessage(`${dataset.fileName} validated. ${dataset.rows.toLocaleString()} rows and ${dataset.columns.toLocaleString()} columns detected.`);
+  }
+
+  function normalizeDataset(dataset: Dataset) {
+    setActiveDataset(dataset);
+    setWorkflowStage('Normalize');
+    setWorkflowMessage(`${dataset.fileName} queued for normalization and value standardization.`);
+  }
+
+  function approveDataset(dataset: Dataset) {
+    setActiveDataset(dataset);
+    setWorkflowStage('Export');
+    setWorkflowMessage(`${dataset.fileName} approved for export and reporting.`);
+  }
+
   const filteredRecords = records
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
@@ -3523,6 +3696,71 @@ function ModuleWorkspacePage({ apiFetch, route }: { apiFetch: (path: string, opt
   return (
     <PageLayout>
       <PageHeader title={route.title} eyebrow={route.moduleLabel} copy={route.copy} />
+      <article className="panel module-upload-panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Dataset workflow</p>
+            <h2>Upload and process data</h2>
+          </div>
+          <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
+            {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+          </select>
+        </div>
+        <div
+          className={`dropzone ${dragActive ? 'active' : ''}`}
+          onDragLeave={() => setDragActive(false)}
+          onDragOver={(event) => {
+            event.preventDefault();
+            setDragActive(true);
+          }}
+          onDrop={handleDrop}
+        >
+          <strong>Upload CSV, XLSX, or JSON</strong>
+          <span>Drag a dataset here or choose a file to start validation, cleanup, approval, and export.</span>
+          <input accept=".csv,.xlsx,.xls,.json" type="file" onChange={handleModuleFileChange} />
+        </div>
+        {uploading && (
+          <div className="progress-track" aria-label="Upload progress">
+            <span style={{ width: `${uploadProgress}%` }} />
+          </div>
+        )}
+        <div className="pipeline-stages workflow-stages">
+          {workflowStages.map((stage, index) => (
+            <button className={index <= activeStageIndex ? 'active' : ''} key={stage} type="button" onClick={() => setWorkflowStage(stage)}>
+              <strong>{index + 1}</strong>
+              <span>{stage}</span>
+            </button>
+          ))}
+        </div>
+        <p className="persistence-note">{workflowMessage}</p>
+      </article>
+      <article className="panel">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">Uploaded datasets</p>
+            <h2>Company files</h2>
+          </div>
+        </div>
+        <div className="dataset-list">
+          {moduleDatasets.slice(0, 6).map((dataset) => (
+            <div className="dataset-row" key={dataset.id}>
+              <div>
+                <strong>{dataset.fileName}</strong>
+                <span>{dataset.rows.toLocaleString()} rows - {dataset.columns.toLocaleString()} columns - {dataset.cleanupStatus ?? 'original'}</span>
+              </div>
+              <div className="admin-actions">
+                <button className="ghost-button compact" type="button" onClick={() => validateDataset(dataset)}>Validate</button>
+                <button className="ghost-button compact" type="button" onClick={() => normalizeDataset(dataset)}>Normalize</button>
+                {!dataset.originalDatasetId && <button className="ghost-button compact" type="button" onClick={() => cleanDatasetFromModule(dataset)}>Clean</button>}
+                <button className="ghost-button compact" type="button" onClick={() => approveDataset(dataset)}>Approve</button>
+                <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(dataset)}>Export</button>
+                <button className="ghost-button compact danger" type="button" onClick={() => deleteDatasetRecord(dataset)}>Delete</button>
+              </div>
+            </div>
+          ))}
+          {!moduleDatasets.length && <EmptyState title="No datasets uploaded" copy="Upload a company dataset to run validation, cleanup, and export workflows." />}
+        </div>
+      </article>
       <article className="panel routed-workspace">
         <form className="module-form routed-form" onSubmit={createRecord}>
           <input placeholder={`${route.title} title`} value={title} onChange={(event) => setTitle(event.target.value)} />
