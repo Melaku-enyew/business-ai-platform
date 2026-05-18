@@ -73,6 +73,7 @@ type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
 type UserRole = 'owner' | 'admin' | 'manager' | 'employee' | 'viewer';
+type PreviewMode = 'upload' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history';
 type AppView =
   | 'dashboard'
   | 'assistant'
@@ -3009,6 +3010,127 @@ function roleLabel(role?: string) {
   return labels[role ?? ''] ?? 'Employee';
 }
 
+function getPreviewRows(dataset: Dataset, mode: PreviewMode) {
+  if (mode === 'cleanup' || mode === 'compare') {
+    return dataset.cleanupPreview?.after?.length ? dataset.cleanupPreview.after.slice(0, 25) : dataset.preview.slice(0, 25);
+  }
+  if (mode === 'normalization') {
+    return dataset.preview.slice(0, 25).map((row) => {
+      const normalized = normalizePreviewRow(row);
+      return Object.fromEntries(Object.keys(row).map((key) => [key, `${String(row[key] ?? '')} -> ${String(normalized[key] ?? '')}`]));
+    });
+  }
+  return dataset.preview.slice(0, 25);
+}
+
+function getPreviewHeaders(dataset: Dataset, rows: Record<string, string>[]) {
+  return dataset.headers.length ? dataset.headers : Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+}
+
+function inferColumnTypes(rows: Record<string, string>[], headers: string[]) {
+  return headers.reduce<Record<string, string>>((types, header) => {
+    const values = rows.map((row) => String(row[header] ?? '').trim()).filter(Boolean);
+    if (!values.length) {
+      types[header] = 'empty';
+    } else if (values.every((value) => Number.isFinite(Number(value.replace(/[$,%]/g, ''))))) {
+      types[header] = 'number';
+    } else if (values.every((value) => !Number.isNaN(Date.parse(value)))) {
+      types[header] = 'date';
+    } else if (values.every((value) => ['yes', 'no', 'true', 'false', 'y', 'n'].includes(value.toLowerCase()))) {
+      types[header] = 'boolean';
+    } else {
+      types[header] = 'text';
+    }
+    return types;
+  }, {});
+}
+
+function summarizeValidation(dataset: Dataset) {
+  const rows = dataset.preview ?? [];
+  let missingValues = 0;
+  let invalidTypes = 0;
+  const failedRows = new Set<number>();
+  rows.forEach((row, rowIndex) => {
+    dataset.headers.forEach((header) => {
+      const value = String(row[header] ?? '').trim();
+      if (!value || ['null', 'n/a', 'na', 'undefined'].includes(value.toLowerCase())) {
+        missingValues += 1;
+        failedRows.add(rowIndex);
+      }
+      if (/amount|total|price|cost|revenue|sales|qty|quantity|count|number|rate|percent|score|hours|balance/i.test(header) && value && !Number.isFinite(Number(value.replace(/[$,%]/g, '')))) {
+        invalidTypes += 1;
+        failedRows.add(rowIndex);
+      }
+    });
+  });
+  return { missingValues, invalidTypes, failedRows: failedRows.size };
+}
+
+function findDuplicateRows(rows: Record<string, string>[]) {
+  const seen = new Map<string, number>();
+  rows.forEach((row) => {
+    const key = JSON.stringify(row);
+    seen.set(key, (seen.get(key) ?? 0) + 1);
+  });
+  return [...seen.entries()]
+    .filter(([, count]) => count > 1)
+    .map(([key, count]) => ({ key, count, confidence: 98 }));
+}
+
+function normalizePreviewRow(row: Record<string, string>) {
+  return Object.fromEntries(Object.entries(row).map(([key, value]) => [standardizeColumnName(key), normalizePreviewValue(value)]));
+}
+
+function standardizeColumnName(key: string) {
+  return key.trim().replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_]/g, '').toLowerCase() || key;
+}
+
+function normalizePreviewValue(value: string) {
+  const compact = String(value ?? '').trim().replace(/\s+/g, ' ');
+  if (!compact || ['null', 'n/a', 'na', 'undefined', 'invalid'].includes(compact.toLowerCase())) return '';
+  const parsedDate = Date.parse(compact);
+  if (/^\d{1,4}[/-]\d{1,2}[/-]\d{1,4}$/.test(compact) && !Number.isNaN(parsedDate)) return new Date(parsedDate).toISOString().slice(0, 10);
+  const numeric = Number(compact.replace(/[$,%]/g, ''));
+  if (/^[($-]?\d/.test(compact) && Number.isFinite(numeric)) return String(numeric);
+  return compact.replace(/\b\w/g, (letter) => letter.toUpperCase());
+}
+
+function buildPreviewWarnings(dataset: Dataset, mode: PreviewMode, validation: { missingValues: number; invalidTypes: number; failedRows: number }, duplicates: Array<{ count: number }>) {
+  const warnings = [
+    `${validation.failedRows} failed preview rows detected.`,
+    `${validation.missingValues} missing values found in preview.`,
+    `${validation.invalidTypes} invalid column type values found.`,
+    `${duplicates.reduce((sum, duplicate) => sum + duplicate.count, 0)} duplicate preview rows detected.`
+  ];
+  if (dataset.cleanupMetrics?.duplicatesRemoved) warnings.push(`${dataset.cleanupMetrics.duplicatesRemoved} duplicates removed during cleanup.`);
+  if (dataset.cleanupMetrics?.rowsFixed) warnings.push(`${dataset.cleanupMetrics.rowsFixed} rows fixed during cleanup.`);
+  if (mode === 'export') warnings.push(`Export filename: ${dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '.csv')}`);
+  return warnings;
+}
+
+function getDatasetVersions(datasets: Dataset[], dataset: Dataset) {
+  const rootId = dataset.originalDatasetId ?? dataset.id;
+  return datasets
+    .filter((entry) => entry.id === rootId || entry.originalDatasetId === rootId || entry.cleanedDatasetId === dataset.id)
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+}
+
+function stageStatusForMode(mode: PreviewMode, dataset: Dataset) {
+  if (dataset.cleanupStatus === 'failed') return 'failed';
+  if (mode === 'upload' || mode === 'validation' || mode === 'duplicates' || mode === 'normalization') return 'completed';
+  if (mode === 'cleanup' && dataset.cleanupStatus !== 'completed') return 'running';
+  if (mode === 'export' || mode === 'approval' || mode === 'cleanup' || mode === 'compare') return 'completed';
+  return 'queued';
+}
+
+function cellClass(value: unknown, header: string) {
+  const text = String(value ?? '').trim();
+  if (!text || ['null', 'n/a', 'na', 'undefined'].includes(text.toLowerCase())) return 'cell-warning';
+  if (text.toLowerCase().includes('invalid')) return 'cell-error';
+  if (/amount|total|price|cost|revenue|sales|qty|quantity|count|number|rate|percent|score|hours|balance/i.test(header) && !Number.isFinite(Number(text.replace(/[$,%]/g, '')))) return 'cell-error';
+  return '';
+}
+
 function AssignedCompaniesList({ assignments }: { assignments: CompanyAssignment[] }) {
   if (!assignments.length) {
     return <span className="muted">No company access</span>;
@@ -3512,6 +3634,7 @@ function ModuleWorkspacePage({
   const [workflowMessage, setWorkflowMessage] = useState('Upload a dataset to start the workflow.');
   const [workflowStage, setWorkflowStage] = useState('Upload Dataset');
   const [dragActive, setDragActive] = useState(false);
+  const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
   const moduleDatasets = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
   const workflowStages = ['Upload Dataset', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
@@ -3621,6 +3744,7 @@ function ModuleWorkspacePage({
       setWorkflowStage('Validate');
       setWorkflowMessage(`${dataset.fileName} uploaded. Validation is ready.`);
       setActiveDataset(dataset);
+      setPreviewState({ dataset, mode: 'upload' });
     } catch (uploadError) {
       setWorkflowStage('Upload Dataset');
       setWorkflowMessage(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
@@ -3675,18 +3799,21 @@ function ModuleWorkspacePage({
     setActiveDataset(dataset);
     setWorkflowStage('Detect Duplicates');
     setWorkflowMessage(`${dataset.fileName} validated. ${dataset.rows.toLocaleString()} rows and ${dataset.columns.toLocaleString()} columns detected.`);
+    setPreviewState({ dataset, mode: 'validation' });
   }
 
   function normalizeDataset(dataset: Dataset) {
     setActiveDataset(dataset);
     setWorkflowStage('Normalize');
     setWorkflowMessage(`${dataset.fileName} queued for normalization and value standardization.`);
+    setPreviewState({ dataset, mode: 'normalization' });
   }
 
   function approveDataset(dataset: Dataset) {
     setActiveDataset(dataset);
     setWorkflowStage('Export');
     setWorkflowMessage(`${dataset.fileName} approved for export and reporting.`);
+    setPreviewState({ dataset, mode: 'approval' });
   }
 
   const filteredRecords = records
@@ -3696,6 +3823,23 @@ function ModuleWorkspacePage({
   return (
     <PageLayout>
       <PageHeader title={route.title} eyebrow={route.moduleLabel} copy={route.copy} />
+      {previewState && (
+        <DatasetPreviewModal
+          allDatasets={datasets}
+          company={companies.find((company) => company.id === previewState.dataset.companyId)}
+          dataset={previewState.dataset}
+          mode={previewState.mode}
+          onApprove={approveDataset}
+          onClose={() => setPreviewState(null)}
+          onDownload={downloadDatasetExport}
+          onReprocess={cleanDatasetFromModule}
+          onRestore={(dataset) => {
+            setActiveDataset(dataset);
+            setPreviewState({ dataset, mode: 'upload' });
+            setWorkflowMessage(`${dataset.fileName} restored as active preview version.`);
+          }}
+        />
+      )}
       <article className="panel module-upload-panel">
         <div className="panel-header">
           <div>
@@ -3749,11 +3893,15 @@ function ModuleWorkspacePage({
                 <span>{dataset.rows.toLocaleString()} rows - {dataset.columns.toLocaleString()} columns - {dataset.cleanupStatus ?? 'original'}</span>
               </div>
               <div className="admin-actions">
+                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'upload' })}>Preview</button>
                 <button className="ghost-button compact" type="button" onClick={() => validateDataset(dataset)}>Validate</button>
+                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'duplicates' })}>View Results</button>
                 <button className="ghost-button compact" type="button" onClick={() => normalizeDataset(dataset)}>Normalize</button>
                 {!dataset.originalDatasetId && <button className="ghost-button compact" type="button" onClick={() => cleanDatasetFromModule(dataset)}>Clean</button>}
+                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'compare' })}>Compare</button>
                 <button className="ghost-button compact" type="button" onClick={() => approveDataset(dataset)}>Approve</button>
-                <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(dataset)}>Export</button>
+                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'export' })}>Export</button>
+                <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(dataset)}>Download</button>
                 <button className="ghost-button compact danger" type="button" onClick={() => deleteDatasetRecord(dataset)}>Delete</button>
               </div>
             </div>
@@ -3785,6 +3933,188 @@ function ModuleWorkspacePage({
         {loading ? <LoadingCard /> : <RecordTable records={filteredRecords} onDelete={deleteRecord} onEdit={editRecord} />}
       </article>
     </PageLayout>
+  );
+}
+
+function DatasetPreviewModal({
+  allDatasets,
+  company,
+  dataset,
+  mode,
+  onApprove,
+  onClose,
+  onDownload,
+  onReprocess,
+  onRestore
+}: {
+  allDatasets: Dataset[];
+  company?: Company;
+  dataset: Dataset;
+  mode: PreviewMode;
+  onApprove: (dataset: Dataset) => void;
+  onClose: () => void;
+  onDownload: (dataset: Dataset | null) => void;
+  onReprocess: (dataset: Dataset) => void;
+  onRestore: (dataset: Dataset) => void;
+}) {
+  const [page, setPage] = useState(1);
+  const [filter, setFilter] = useState('');
+  const [sortColumn, setSortColumn] = useState(dataset.headers[0] ?? '');
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const pageSize = 10;
+  const previewRows = getPreviewRows(dataset, mode);
+  const headers = getPreviewHeaders(dataset, previewRows);
+  const columnTypes = inferColumnTypes(dataset.preview, dataset.headers);
+  const validation = summarizeValidation(dataset);
+  const duplicates = findDuplicateRows(dataset.preview);
+  const versionHistory = getDatasetVersions(allDatasets, dataset);
+  const filteredRows = previewRows
+    .filter((row) => !filter.trim() || Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(filter.toLowerCase())))
+    .sort((a, b) => {
+      const left = String(a[sortColumn] ?? '');
+      const right = String(b[sortColumn] ?? '');
+      return sortDirection === 'asc' ? left.localeCompare(right) : right.localeCompare(left);
+    });
+  const pageCount = Math.max(Math.ceil(filteredRows.length / pageSize), 1);
+  const pagedRows = filteredRows.slice((page - 1) * pageSize, page * pageSize);
+  const modeTitle = {
+    upload: 'Upload Preview',
+    validation: 'Validation Preview',
+    duplicates: 'Duplicate Detection',
+    normalization: 'Normalization Preview',
+    cleanup: 'Cleanup Preview',
+    approval: 'Approval Preview',
+    export: 'Export Preview',
+    compare: 'Before / After Compare',
+    history: 'Version History'
+  }[mode];
+
+  function sortBy(header: string) {
+    setSortDirection((current) => sortColumn === header && current === 'asc' ? 'desc' : 'asc');
+    setSortColumn(header);
+    setPage(1);
+  }
+
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <section className="preview-modal" aria-modal="true" role="dialog" aria-label={modeTitle}>
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">{modeTitle}</p>
+            <h2>{dataset.fileName}</h2>
+            <p className="muted">{company?.name ?? 'Company workspace'} - {dataset.fileType?.toUpperCase() ?? 'DATA'} - uploaded {new Date(dataset.uploadedAt).toLocaleString()}</p>
+          </div>
+          <button className="ghost-button compact" type="button" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="preview-summary-grid">
+          <div><strong>{dataset.rows.toLocaleString()}</strong><span>Rows</span></div>
+          <div><strong>{dataset.columns.toLocaleString()}</strong><span>Columns</span></div>
+          <div><strong>{validation.missingValues}</strong><span>Missing values</span></div>
+          <div><strong>{duplicates.length}</strong><span>Duplicates</span></div>
+          <div><strong>{dataset.cleanupMetrics?.failedRows ?? validation.failedRows}</strong><span>Failed rows</span></div>
+          <div><strong>{dataset.cleanupStatus ?? 'pending'}</strong><span>Status</span></div>
+        </div>
+
+        <div className="preview-status-row">
+          {['queued', 'running', 'completed', 'failed'].map((state) => (
+            <span className={`pipeline-state ${state} ${state === stageStatusForMode(mode, dataset) ? 'current' : ''}`} key={state}>{state}</span>
+          ))}
+        </div>
+
+        <div className="preview-panels">
+          <article>
+            <h3>Column Types</h3>
+            <div className="column-type-list">
+              {Object.entries(columnTypes).map(([column, type]) => <span key={column}>{column}: {type}</span>)}
+            </div>
+          </article>
+          <article>
+            <h3>Warnings</h3>
+            <ul className="preview-warnings">
+              {buildPreviewWarnings(dataset, mode, validation, duplicates).map((warning) => <li key={warning}>{warning}</li>)}
+            </ul>
+          </article>
+        </div>
+
+        {(mode === 'normalization' || mode === 'cleanup' || mode === 'compare') && (
+          <BeforeAfterPreview dataset={dataset} />
+        )}
+
+        {mode === 'duplicates' && (
+          <div className="duplicate-list">
+            {duplicates.slice(0, 5).map((duplicate) => (
+              <div key={duplicate.key}>
+                <strong>Duplicate confidence {duplicate.confidence}%</strong>
+                <span>{duplicate.count} matching rows. Recommendation: merge duplicate records after source-system review.</span>
+              </div>
+            ))}
+            {!duplicates.length && <p className="muted">No duplicate rows found in the available preview window.</p>}
+          </div>
+        )}
+
+        <div className="record-toolbar preview-toolbar">
+          <input placeholder="Filter preview rows" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }} />
+          <button className="ghost-button compact" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
+          <span>Page {page} of {pageCount}</span>
+          <button className="ghost-button compact" type="button" disabled={page >= pageCount} onClick={() => setPage((current) => Math.min(current + 1, pageCount))}>Next</button>
+        </div>
+
+        <div className="table-wrap preview-table-wrap">
+          <table className="preview-table">
+            <thead>
+              <tr>{headers.map((header) => <th key={header}><button type="button" onClick={() => sortBy(header)}>{header}{sortColumn === header ? ` ${sortDirection === 'asc' ? 'up' : 'down'}` : ''}</button></th>)}</tr>
+            </thead>
+            <tbody>
+              {pagedRows.map((row, rowIndex) => (
+                <tr key={`${rowIndex}-${page}`}>{headers.map((header) => <td className={cellClass(row[header], header)} key={header}>{String(row[header] ?? '')}</td>)}</tr>
+              ))}
+              {!pagedRows.length && <tr><td colSpan={headers.length || 1}>No preview rows match this filter.</td></tr>}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="version-history">
+          <h3>Version History</h3>
+          {versionHistory.map((version) => (
+            <button className={version.id === dataset.id ? 'active' : ''} key={version.id} type="button" onClick={() => onRestore(version)}>
+              {version.fileName} - {version.cleanupStatus ?? 'original'} - {new Date(version.uploadedAt).toLocaleDateString()}
+            </button>
+          ))}
+        </div>
+
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={() => onReprocess(dataset.originalDatasetId ? allDatasets.find((entry) => entry.id === dataset.originalDatasetId) ?? dataset : dataset)}>Reprocess</button>
+          <button className="ghost-button" type="button" onClick={() => onApprove(dataset)}>Approve</button>
+          <button type="button" onClick={() => onDownload(dataset)}>Download</button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BeforeAfterPreview({ dataset }: { dataset: Dataset }) {
+  const before = dataset.cleanupPreview?.before ?? dataset.preview.slice(0, 5);
+  const after = dataset.cleanupPreview?.after ?? before.map(normalizePreviewRow);
+  const headers = Array.from(new Set([...Object.keys(before[0] ?? {}), ...Object.keys(after[0] ?? {})]));
+  return (
+    <div className="before-after-grid">
+      {(['Before', 'After'] as const).map((label) => (
+        <article key={label}>
+          <h3>{label}</h3>
+          <div className="mini-table-wrap">
+            <table>
+              <thead><tr>{headers.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+              <tbody>
+                {(label === 'Before' ? before : after).slice(0, 5).map((row, index) => (
+                  <tr key={`${label}-${index}`}>{headers.map((header) => <td className={cellClass(row[header], header)} key={header}>{String(row[header] ?? '')}</td>)}</tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </article>
+      ))}
+    </div>
   );
 }
 

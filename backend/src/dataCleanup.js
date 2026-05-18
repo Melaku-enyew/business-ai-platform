@@ -83,8 +83,8 @@ export function cleanDataset(dataset) {
     metrics,
     logs: [...new Set(logs)],
     preview: {
-      before: (dataset.preview ?? dataset.records ?? []).slice(0, 5),
-      after: cleanedRecords.slice(0, 5)
+      before: (dataset.preview ?? dataset.records ?? []).slice(0, 25),
+      after: cleanedRecords.slice(0, 25)
     },
     operations: [
       'duplicate_removal',
