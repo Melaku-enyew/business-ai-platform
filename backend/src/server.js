@@ -30,7 +30,9 @@ import {
   findInvitationByToken,
   findEmailLog,
   getDatabaseRuntimeStatus,
+  getAccessibleCompanyIds,
   hasRole,
+  canAccessCompany,
   findSessionById,
   getDevUser,
   getDataset,
@@ -530,6 +532,7 @@ async function verifyPassword(password, passwordHash) {
 async function requireAuth(req, res, next) {
   if (authDisabled) {
     req.user = getDevUser();
+    req.user.accessibleCompanyIds = await getAccessibleCompanyIds(req.user);
     next();
     return;
   }
@@ -563,6 +566,7 @@ async function requireAuth(req, res, next) {
     }
 
     req.user = user;
+    req.user.accessibleCompanyIds = await getAccessibleCompanyIds(user);
     req.session = session;
     next();
   } catch {
@@ -597,11 +601,20 @@ function requireRole(role) {
 }
 
 function canManageCompany(user, companyId) {
-  return hasRole(user, 'owner') || (hasRole(user, 'manager') && user.companyId === companyId);
+  return hasRole(user, 'admin') || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(companyId));
 }
 
 function canManageDataset(user, dataset) {
-  return hasRole(user, 'owner') || (hasRole(user, 'manager') && user.companyId === dataset.companyId);
+  return hasRole(user, 'admin') || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(dataset.companyId));
+}
+
+async function requireCompanyAccess(req, res, companyId) {
+  if (!companyId) return true;
+  if (!(await canAccessCompany(req.user, companyId))) {
+    res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+    return false;
+  }
+  return true;
 }
 
 function hashToken(token) {
@@ -1633,15 +1646,15 @@ app.get('/api/profile', (req, res) => {
   res.json({ user: publicUser(req.user) });
 });
 
-app.get('/api/companies', async (_req, res, next) => {
+app.get('/api/companies', async (req, res, next) => {
   try {
-    res.json({ companies: await listCompanies() });
+    res.json({ companies: await listCompanies(req.user) });
   } catch (error) {
     next(error);
   }
 });
 
-app.post('/api/companies', requireDurableStorage, async (req, res, next) => {
+app.post('/api/companies', requireRole('owner'), requireDurableStorage, async (req, res, next) => {
   try {
     const companyInput = validateCompanyInput(req.body);
     const company = await createCompany({
@@ -1951,6 +1964,9 @@ async function handleDatasetUpload(req, res) {
     res.status(400).json({ error: 'Select a company before uploading a dataset.' });
     return;
   }
+  if (!(await requireCompanyAccess(req, res, companyId))) {
+    return;
+  }
   if (!(await companyExists(companyId))) {
     res.status(400).json({ error: 'Selected company workspace was not found.' });
     return;
@@ -2021,7 +2037,9 @@ app.post('/api/csv/upload', requireDurableStorage, upload.single('file'), (req, 
 
 app.get('/api/datasets', async (req, res, next) => {
   try {
-    const datasets = await listDatasets(req.user, requestedCompanyId(req));
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    const datasets = await listDatasets(req.user, companyId);
     res.json({ datasets: datasets.map(publicDataset) });
   } catch (error) {
     next(error);
@@ -2058,7 +2076,9 @@ app.get('/api/datasets/:id/cleanup-jobs', async (req, res, next) => {
 
 app.get('/api/cleanup-jobs', async (req, res, next) => {
   try {
-    res.json({ cleanupJobs: await listCleanupJobs(req.user, req.query?.datasetId) });
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ cleanupJobs: await listCleanupJobs(req.user, req.query?.datasetId, companyId) });
   } catch (error) {
     next(error);
   }
@@ -2311,7 +2331,9 @@ app.post('/api/datasets/:id/chat', async (req, res, next) => {
 
 app.get('/api/dashboards', async (req, res, next) => {
   try {
-    res.json({ dashboards: await listDashboards(req.user, requestedCompanyId(req)) });
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ dashboards: await listDashboards(req.user, companyId) });
   } catch (error) {
     next(error);
   }
@@ -2346,7 +2368,9 @@ app.post('/api/dashboards', requireDurableStorage, async (req, res, next) => {
 
 app.get('/api/reports', async (req, res, next) => {
   try {
-    res.json({ reports: await listReports(req.user, requestedCompanyId(req)) });
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ reports: await listReports(req.user, companyId) });
   } catch (error) {
     next(error);
   }
@@ -2408,7 +2432,9 @@ app.post('/api/reports', requireDurableStorage, async (req, res, next) => {
 
 app.get('/api/notifications', async (req, res, next) => {
   try {
-    res.json({ notifications: await listNotifications(req.user, requestedCompanyId(req)) });
+    const companyId = requestedCompanyId(req);
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ notifications: await listNotifications(req.user, companyId) });
   } catch (error) {
     next(error);
   }

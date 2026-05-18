@@ -190,6 +190,14 @@ export async function initDatabase() {
       revoked_at TIMESTAMPTZ
     );
 
+    CREATE TABLE IF NOT EXISTS user_company_assignments (
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      role TEXT NOT NULL DEFAULT 'member',
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, company_id)
+    );
+
     CREATE TABLE IF NOT EXISTS datasets (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -377,6 +385,7 @@ export async function initDatabase() {
     );
 
     CREATE INDEX IF NOT EXISTS idx_sessions_user_expires_at ON sessions (user_id, expires_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_user_company_assignments_company ON user_company_assignments (company_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_companies_updated_at ON companies (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_company_uploaded_at ON datasets (company_id, uploaded_at DESC);
@@ -410,6 +419,14 @@ export async function initDatabase() {
   if (Number(companyCount.rows[0]?.count ?? 0) === 0) {
     await Promise.all(sampleCompanies.map((company) => createCompany(company)));
   }
+
+  await pgQuery(`
+    INSERT INTO user_company_assignments (user_id, company_id, role)
+    SELECT id, company_id, role
+    FROM users
+    WHERE company_id IS NOT NULL
+    ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;
+  `);
 
   await pgQuery(`
     DO $$
@@ -471,13 +488,57 @@ export function getDatabaseRuntimeStatus() {
   };
 }
 
-export async function listCompanies() {
+export async function getAccessibleCompanyIds(user) {
+  if (hasGlobalCompanyAccess(user)) return null;
+  const assigned = new Set();
+
   if (!usingPostgres) {
     const store = await loadDevStore();
+    (store.userCompanyAssignments ?? [])
+      .filter((assignment) => assignment.userId === user?.id)
+      .forEach((assignment) => assigned.add(assignment.companyId));
+    if (user?.companyId && user.companyId !== defaultCompanyId) assigned.add(user.companyId);
+    return [...assigned];
+  }
+
+  const result = await pgQuery(
+    `SELECT company_id FROM user_company_assignments WHERE user_id = $1
+     UNION
+     SELECT company_id FROM users WHERE id = $1 AND company_id <> $2;`,
+    [user?.id, defaultCompanyId]
+  );
+  return result.rows.map((row) => row.company_id);
+}
+
+export async function canAccessCompany(user, companyId) {
+  const normalizedCompanyId = String(companyId || '').trim();
+  if (!normalizedCompanyId) return false;
+  if (hasGlobalCompanyAccess(user)) return normalizedCompanyId !== defaultCompanyId || isOwner(user);
+  const assigned = await getAccessibleCompanyIds(user);
+  return assigned.includes(normalizedCompanyId);
+}
+
+export async function listCompanies(user) {
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const assignedCompanyIds = await getAccessibleCompanyIds(user);
     return (store.companies ?? [])
       .filter((company) => company.id !== defaultCompanyId)
+      .filter((company) => assignedCompanyIds === null || assignedCompanyIds.includes(company.id))
       .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
       .map(rowToCompany);
+  }
+
+  if (!hasGlobalCompanyAccess(user)) {
+    const assignedCompanyIds = await getAccessibleCompanyIds(user);
+    if (!assignedCompanyIds.length) return [];
+    const result = await pgQuery(
+      `SELECT * FROM companies
+       WHERE id = ANY($1::text[]) AND id <> $2
+       ORDER BY updated_at DESC, created_at DESC;`,
+      [assignedCompanyIds, defaultCompanyId]
+    );
+    return result.rows.map(rowToCompany);
   }
 
   const result = await pgQuery(
@@ -583,6 +644,7 @@ export async function deleteCompany(id) {
     store.notifications = (store.notifications ?? []).filter((notification) => notification.companyId !== companyId);
     store.analytics = (store.analytics ?? []).filter((entry) => entry.companyId !== companyId);
     store.pipelines = (store.pipelines ?? []).filter((entry) => entry.companyId !== companyId);
+    store.userCompanyAssignments = (store.userCompanyAssignments ?? []).filter((assignment) => assignment.companyId !== companyId);
     await saveDevStore(store);
     return (store.companies?.length ?? 0) < before;
   }
@@ -637,6 +699,10 @@ export async function createUser(user) {
   if (!usingPostgres) {
     const store = await loadDevStore();
     store.users = [savedUser, ...store.users.filter((entry) => entry.email !== savedUser.email)];
+    store.userCompanyAssignments = [
+      { userId: savedUser.id, companyId: savedUser.companyId, role: savedUser.role, assignedAt: new Date().toISOString() },
+      ...(store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== savedUser.id || assignment.companyId !== savedUser.companyId)
+    ];
     await saveDevStore(store);
     return rowToUser(savedUser);
   }
@@ -672,6 +738,12 @@ export async function createUser(user) {
       savedUser.twoFactorEnabled,
       savedUser.passwordHash
     ]
+  );
+  await pgQuery(
+    `INSERT INTO user_company_assignments (user_id, company_id, role)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;`,
+    [savedUser.id, savedUser.companyId, savedUser.role]
   );
   return rowToUser(result.rows[0]);
 }
@@ -741,6 +813,10 @@ export async function updateUser(id, updates) {
       updated = { ...user, ...next };
       return updated;
     });
+    store.userCompanyAssignments = [
+      { userId: id, companyId: next.companyId ?? defaultCompanyId, role: next.role, assignedAt: new Date().toISOString() },
+      ...(store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== id || assignment.companyId !== (next.companyId ?? defaultCompanyId))
+    ];
     await saveDevStore(store);
     return updated ? rowToUser(updated) : undefined;
   }
@@ -771,6 +847,12 @@ export async function updateUser(id, updates) {
       next.twoFactorEnabled
     ]
   );
+  await pgQuery(
+    `INSERT INTO user_company_assignments (user_id, company_id, role)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;`,
+    [id, next.companyId ?? defaultCompanyId, next.role]
+  );
   return result.rows[0] ? rowToUser(result.rows[0]) : undefined;
 }
 
@@ -786,6 +868,7 @@ export async function deleteUser(id) {
     store.dashboards = store.dashboards.filter((dashboard) => dashboard.userId !== id);
     store.reports = store.reports.filter((report) => report.userId !== id);
     store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.userId !== id);
+    store.userCompanyAssignments = (store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== id);
     await saveDevStore(store);
     return;
   }
@@ -1104,13 +1187,14 @@ export async function saveDataset(dataset) {
 
 export async function listDatasets(user, companyId) {
   const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return store.datasets
       .filter((dataset) => {
         if (dataset.deletedAt) return false;
-        if (!requestedCompanyId) return isOwner(user) || dataset.companyId === getCompanyId(user) || dataset.userId === user.id;
-        return dataset.companyId === requestedCompanyId && (isOwner(user) || dataset.userId === user.id || dataset.companyId === getCompanyId(user));
+        if (!requestedCompanyId) return assignedCompanyIds === null || assignedCompanyIds.includes(dataset.companyId);
+        return dataset.companyId === requestedCompanyId && (assignedCompanyIds === null || assignedCompanyIds.includes(dataset.companyId));
       })
       .slice(0, 50)
       .map(rowToDataset);
@@ -1119,15 +1203,16 @@ export async function listDatasets(user, companyId) {
   let where = '';
   if (requestedCompanyId) {
     params.push(requestedCompanyId);
-    if (isOwner(user)) {
+    if (assignedCompanyIds === null) {
       where = 'WHERE company_id = $1';
     } else {
-      params.push(user.id, getCompanyId(user));
-      where = 'WHERE company_id = $1 AND (user_id = $2 OR company_id = $3)';
+      params.push(assignedCompanyIds);
+      where = 'WHERE company_id = $1 AND company_id = ANY($2::text[])';
     }
-  } else if (!isOwner(user)) {
-    params.push(getCompanyId(user), user.id);
-    where = 'WHERE (company_id = $1 OR user_id = $2)';
+  } else if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    where = 'WHERE company_id = ANY($1::text[])';
   }
   const activeWhere = where ? `${where} AND deleted_at IS NULL` : 'WHERE deleted_at IS NULL';
   const result = await pgQuery(`SELECT * FROM datasets ${activeWhere} ORDER BY uploaded_at DESC LIMIT 50;`, params);
@@ -1135,14 +1220,15 @@ export async function listDatasets(user, companyId) {
 }
 
 export async function getDataset(id, user) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
-    const dataset = store.datasets.find((entry) => !entry.deletedAt && entry.id === id && (isOwner(user) || entry.companyId === getCompanyId(user) || entry.userId === user.id));
+    const dataset = store.datasets.find((entry) => !entry.deletedAt && entry.id === id && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)));
     return dataset ? rowToDataset(dataset) : undefined;
   }
   const params = [id];
-  const accessFilter = isOwner(user) ? '' : 'AND (company_id = $2 OR user_id = $3)';
-  if (!isOwner(user)) params.push(getCompanyId(user), user.id);
+  const accessFilter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($2::text[])';
+  if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
   const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 AND deleted_at IS NULL ${accessFilter} LIMIT 1;`, params);
   return result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
 }
@@ -1228,13 +1314,15 @@ export async function saveCleanupJob(job) {
   return rowToCleanupJob(result.rows[0]);
 }
 
-export async function listCleanupJobs(user, datasetId) {
+export async function listCleanupJobs(user, datasetId, companyId) {
   const requestedDatasetId = String(datasetId || '').trim();
+  const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
 
   if (!usingPostgres) {
     const store = await loadDevStore();
     return (store.cleanupJobs ?? [])
-      .filter((job) => !job.deletedAt && (!requestedDatasetId || job.originalDatasetId === requestedDatasetId || job.cleanedDatasetId === requestedDatasetId) && canAccessCompanyRecord(user, job))
+      .filter((job) => !job.deletedAt && (!requestedCompanyId || job.companyId === requestedCompanyId) && (!requestedDatasetId || job.originalDatasetId === requestedDatasetId || job.cleanedDatasetId === requestedDatasetId) && (assignedCompanyIds === null || assignedCompanyIds.includes(job.companyId)))
       .slice(0, 50)
       .map(rowToCleanupJob);
   }
@@ -1245,9 +1333,14 @@ export async function listCleanupJobs(user, datasetId) {
     params.push(requestedDatasetId);
     filters.push(`(original_dataset_id = $${params.length} OR cleaned_dataset_id = $${params.length})`);
   }
-  if (!isOwner(user)) {
-    params.push(getCompanyId(user));
+  if (requestedCompanyId) {
+    params.push(requestedCompanyId);
     filters.push(`company_id = $${params.length}`);
+  }
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    filters.push(`company_id = ANY($${params.length}::text[])`);
   }
   filters.push('deleted_at IS NULL');
   const where = `WHERE ${filters.join(' AND ')}`;
@@ -1256,17 +1349,18 @@ export async function listCleanupJobs(user, datasetId) {
 }
 
 export async function deleteCleanupJob(user, id) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     const deletedAt = new Date().toISOString();
-    const job = (store.cleanupJobs ?? []).find((entry) => entry.id === id && !entry.deletedAt && canAccessCompanyRecord(user, entry));
-    store.cleanupJobs = (store.cleanupJobs ?? []).map((entry) => entry.id === id && canAccessCompanyRecord(user, entry) ? { ...entry, deletedAt, status: 'archived' } : entry);
+    const job = (store.cleanupJobs ?? []).find((entry) => entry.id === id && !entry.deletedAt && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)));
+    store.cleanupJobs = (store.cleanupJobs ?? []).map((entry) => entry.id === id && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)) ? { ...entry, deletedAt, status: 'archived' } : entry);
     await saveDevStore(store);
     return job ? rowToCleanupJob(job) : undefined;
   }
   const params = [id];
-  const filter = isOwner(user) ? '' : 'AND company_id = $2';
-  if (!isOwner(user)) params.push(getCompanyId(user));
+  const filter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($2::text[])';
+  if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
   const result = await pgQuery(`UPDATE cleanup_jobs SET deleted_at = NOW(), status = 'archived', updated_at = NOW() WHERE id = $1 ${filter} RETURNING *;`, params);
   return result.rows[0] ? rowToCleanupJob(result.rows[0]) : undefined;
 }
@@ -1315,12 +1409,13 @@ export async function saveDashboard(dashboard) {
 
 export async function listDashboards(user, companyId) {
   const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return store.dashboards
       .filter((dashboard) => {
-        if (!requestedCompanyId) return isOwner(user) || dashboard.companyId === getCompanyId(user) || dashboard.userId === user.id;
-        return dashboard.companyId === requestedCompanyId && (isOwner(user) || dashboard.userId === user.id || dashboard.companyId === getCompanyId(user));
+        if (!requestedCompanyId) return assignedCompanyIds === null || assignedCompanyIds.includes(dashboard.companyId);
+        return dashboard.companyId === requestedCompanyId && (assignedCompanyIds === null || assignedCompanyIds.includes(dashboard.companyId));
       })
       .slice(0, 50)
       .map((dashboard) => {
@@ -1332,15 +1427,16 @@ export async function listDashboards(user, companyId) {
   let companyFilter = '';
   if (requestedCompanyId) {
     params.push(requestedCompanyId);
-    if (isOwner(user)) {
+    if (assignedCompanyIds === null) {
       companyFilter = 'WHERE dashboards.company_id = $1';
     } else {
-      params.push(user.id, getCompanyId(user));
-      companyFilter = 'WHERE dashboards.company_id = $1 AND (dashboards.user_id = $2 OR dashboards.company_id = $3)';
+      params.push(assignedCompanyIds);
+      companyFilter = 'WHERE dashboards.company_id = $1 AND dashboards.company_id = ANY($2::text[])';
     }
-  } else if (!isOwner(user)) {
-    params.push(getCompanyId(user), user.id);
-    companyFilter = 'WHERE (dashboards.company_id = $1 OR dashboards.user_id = $2)';
+  } else if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    companyFilter = 'WHERE dashboards.company_id = ANY($1::text[])';
   }
   const result = await pgQuery(
     `SELECT dashboards.*, datasets.file_name AS dataset_name, users.name AS owner_name, users.email AS owner_email
@@ -1392,13 +1488,14 @@ export async function saveReport(report) {
 
 export async function listReports(user, companyId) {
   const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return store.reports
       .filter((report) => {
         if (report.deletedAt) return false;
-        if (!requestedCompanyId) return isOwner(user) || report.companyId === getCompanyId(user) || report.userId === user.id;
-        return report.companyId === requestedCompanyId && (isOwner(user) || report.userId === user.id || report.companyId === getCompanyId(user));
+        if (!requestedCompanyId) return assignedCompanyIds === null || assignedCompanyIds.includes(report.companyId);
+        return report.companyId === requestedCompanyId && (assignedCompanyIds === null || assignedCompanyIds.includes(report.companyId));
       })
       .slice(0, 50)
       .map((report) => {
@@ -1410,15 +1507,16 @@ export async function listReports(user, companyId) {
   let companyFilter = '';
   if (requestedCompanyId) {
     params.push(requestedCompanyId);
-    if (isOwner(user)) {
+    if (assignedCompanyIds === null) {
       companyFilter = 'WHERE reports.company_id = $1 AND reports.deleted_at IS NULL';
     } else {
-      params.push(user.id, getCompanyId(user));
-      companyFilter = 'WHERE reports.company_id = $1 AND (reports.user_id = $2 OR reports.company_id = $3) AND reports.deleted_at IS NULL';
+      params.push(assignedCompanyIds);
+      companyFilter = 'WHERE reports.company_id = $1 AND reports.company_id = ANY($2::text[]) AND reports.deleted_at IS NULL';
     }
-  } else if (!isOwner(user)) {
-    params.push(getCompanyId(user), user.id);
-    companyFilter = 'WHERE (reports.company_id = $1 OR reports.user_id = $2) AND reports.deleted_at IS NULL';
+  } else if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    companyFilter = 'WHERE reports.company_id = ANY($1::text[]) AND reports.deleted_at IS NULL';
   } else {
     companyFilter = 'WHERE reports.deleted_at IS NULL';
   }
@@ -1436,17 +1534,18 @@ export async function listReports(user, companyId) {
 }
 
 export async function deleteReport(user, id) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     const deletedAt = new Date().toISOString();
-    const report = (store.reports ?? []).find((entry) => entry.id === id && !entry.deletedAt && canAccessCompanyRecord(user, entry));
-    store.reports = (store.reports ?? []).map((entry) => entry.id === id && canAccessCompanyRecord(user, entry) ? { ...entry, deletedAt } : entry);
+    const report = (store.reports ?? []).find((entry) => entry.id === id && !entry.deletedAt && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)));
+    store.reports = (store.reports ?? []).map((entry) => entry.id === id && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)) ? { ...entry, deletedAt } : entry);
     await saveDevStore(store);
     return report ? rowToReport(report) : undefined;
   }
   const params = [id];
-  const filter = isOwner(user) ? '' : 'AND company_id = $2';
-  if (!isOwner(user)) params.push(getCompanyId(user));
+  const filter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($2::text[])';
+  if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
   const result = await pgQuery(`UPDATE reports SET deleted_at = NOW() WHERE id = $1 ${filter} RETURNING *;`, params);
   return result.rows[0] ? rowToReport(result.rows[0]) : undefined;
 }
@@ -1480,10 +1579,11 @@ export async function saveNotification(notification) {
 
 export async function listNotifications(user, companyId) {
   const requestedCompanyId = String(companyId || '').trim();
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
     return (store.notifications ?? [])
-      .filter((notification) => !notification.archivedAt && (!requestedCompanyId || notification.companyId === requestedCompanyId) && canAccessCompanyRecord(user, notification))
+      .filter((notification) => !notification.archivedAt && (!requestedCompanyId || notification.companyId === requestedCompanyId) && (assignedCompanyIds === null || assignedCompanyIds.includes(notification.companyId)))
       .slice(0, 50)
       .map(rowToNotification);
   }
@@ -1493,9 +1593,10 @@ export async function listNotifications(user, companyId) {
     params.push(requestedCompanyId);
     filters.push(`company_id = $${params.length}`);
   }
-  if (!isOwner(user)) {
-    params.push(getCompanyId(user));
-    filters.push(`company_id = $${params.length}`);
+  if (assignedCompanyIds !== null) {
+    if (!assignedCompanyIds.length) return [];
+    params.push(assignedCompanyIds);
+    filters.push(`company_id = ANY($${params.length}::text[])`);
   }
   filters.push('archived_at IS NULL');
   const where = `WHERE ${filters.join(' AND ')}`;
@@ -1504,6 +1605,7 @@ export async function listNotifications(user, companyId) {
 }
 
 export async function updateNotification(user, id, updates) {
+  const assignedCompanyIds = await getAccessibleCompanyIds(user);
   const status = updates.status != null ? String(updates.status) : null;
   const archive = updates.archive === true;
 
@@ -1511,7 +1613,7 @@ export async function updateNotification(user, id, updates) {
     const store = await loadDevStore();
     let updated;
     store.notifications = (store.notifications ?? []).map((notification) => {
-      if (notification.id !== id || !canAccessCompanyRecord(user, notification)) return notification;
+      if (notification.id !== id || !(assignedCompanyIds === null || assignedCompanyIds.includes(notification.companyId))) return notification;
       updated = {
         ...notification,
         ...(status ? { status } : {}),
@@ -1524,8 +1626,8 @@ export async function updateNotification(user, id, updates) {
   }
 
   const params = [id, status, archive];
-  const filter = isOwner(user) ? '' : 'AND company_id = $4';
-  if (!isOwner(user)) params.push(getCompanyId(user));
+  const filter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($4::text[])';
+  if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
   const result = await pgQuery(
     `UPDATE notifications SET
        status = COALESCE($2, status),
@@ -2069,7 +2171,9 @@ function getCompanyId(user) {
 }
 
 function canAccessCompanyRecord(user, record) {
-  return isOwner(user) || (record.companyId ?? defaultCompanyId) === getCompanyId(user);
+  if (hasGlobalCompanyAccess(user)) return true;
+  if (Array.isArray(user?.accessibleCompanyIds)) return user.accessibleCompanyIds.includes(record.companyId ?? defaultCompanyId);
+  return (record.companyId ?? defaultCompanyId) === getCompanyId(user) && getCompanyId(user) !== defaultCompanyId;
 }
 
 export function hasRole(user, requiredRole) {
@@ -2079,6 +2183,11 @@ export function hasRole(user, requiredRole) {
 
 export function isOwner(user) {
   return Boolean(user && typeof user === 'object' && roleForUser(user.email, user.role) === 'owner');
+}
+
+export function hasGlobalCompanyAccess(user) {
+  const role = user && typeof user === 'object' ? roleForUser(user.email, user.role) : '';
+  return role === 'owner' || role === 'admin';
 }
 
 function protectOwnerUpdates(existingUser, updates) {
@@ -2173,7 +2282,8 @@ async function loadDevStore() {
       cleanupJobs: [],
       notifications: [],
       analytics: [],
-      pipelines: []
+      pipelines: [],
+      userCompanyAssignments: []
     };
   }
 
@@ -2193,7 +2303,8 @@ async function loadDevStore() {
     cleanupJobs: store.cleanupJobs ?? [],
     notifications: store.notifications ?? [],
     analytics: store.analytics ?? [],
-    pipelines: store.pipelines ?? []
+    pipelines: store.pipelines ?? [],
+    userCompanyAssignments: store.userCompanyAssignments ?? []
   };
 }
 

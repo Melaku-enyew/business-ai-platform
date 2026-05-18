@@ -2051,6 +2051,7 @@ export function App() {
             updateAdminUser={updateAdminUser}
             updateCompanyForm={updateCompanyForm}
             users={adminUsers}
+            user={user}
             workspaceAction={workspaceAction}
           />
         ) : currentView === 'settings' ? (
@@ -3011,6 +3012,7 @@ function RoutedPages(props: {
   updateCompanyName: (company: Company) => void;
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   users: AdminUser[];
+  user: User | null;
   workspaceAction: string;
 }) {
   return (
@@ -3040,6 +3042,7 @@ function RoutedPages(props: {
             deleteCompanyWorkspace={props.deleteCompanyWorkspace}
             updateCompanyName={props.updateCompanyName}
             updateCompanyForm={props.updateCompanyForm}
+            user={props.user}
             workspaceAction={props.workspaceAction}
           />
         )}
@@ -3069,6 +3072,7 @@ function CompaniesWorkspace({
   updateCompanyForm,
   updateCompanyName,
   deleteCompanyWorkspace,
+  user,
   workspaceAction
 }: {
   companies: Company[];
@@ -3085,12 +3089,24 @@ function CompaniesWorkspace({
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   updateCompanyName: (company: Company) => void;
   deleteCompanyWorkspace: (company: Company) => void;
+  user: User | null;
   workspaceAction: string;
 }) {
   const closeForm = () => {
     resetCompanyForm();
     setFormOpen(false);
   };
+  const canCreateCompanies = user?.role === 'owner';
+  const canManageCompanyOps = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const canViewPipelines = canManageCompanyOps || user?.role === 'employee';
+  const visibleActions = [
+    ...(canManageCompanyOps ? ['Upload Data', 'Clean Data'] : []),
+    'View Dashboard',
+    'Reports',
+    'Analytics',
+    ...(canViewPipelines ? ['Pipelines'] : []),
+    ...(canManageCompanyOps ? ['Export Data', 'Delete Dataset', 'Delete Cleanup Job'] : [])
+  ];
 
   return (
     <section className="routed-page companies-page">
@@ -3106,9 +3122,11 @@ function CompaniesWorkspace({
             <p className="eyebrow">Workspace setup</p>
             <h2>Company workspaces</h2>
           </div>
-          <button className="ghost-button" type="button" onClick={() => setFormOpen(true)}>
-            Create Company
-          </button>
+          {canCreateCompanies && (
+            <button className="ghost-button" type="button" onClick={() => setFormOpen(true)}>
+              Create Company
+            </button>
+          )}
           <button className="ghost-button compact" type="button" disabled={loading} onClick={loadCompanies}>
             {loading ? 'Refreshing' : 'Refresh'}
           </button>
@@ -3201,7 +3219,7 @@ function CompaniesWorkspace({
                   <td>{new Date(company.createdAt).toLocaleDateString()}</td>
                   <td>
                     <div className="company-actions">
-                      {['Upload Data', 'Clean Data', 'View Dashboard', 'Reports', 'Analytics', 'Pipelines', 'Export Data', 'Delete Dataset', 'Delete Cleanup Job'].map((action) => (
+                      {visibleActions.map((action) => (
                         <button
                           className={action.startsWith('Delete') ? 'danger-action' : ''}
                           disabled={Boolean(workspaceAction)}
@@ -3212,8 +3230,8 @@ function CompaniesWorkspace({
                           {workspaceAction.includes(company.name) && workspaceAction.startsWith(action) ? 'Working...' : action}
                         </button>
                       ))}
-                      <button type="button" disabled={Boolean(workspaceAction)} onClick={() => updateCompanyName(company)}>Rename</button>
-                      <button className="danger-action" type="button" disabled={Boolean(workspaceAction)} onClick={() => deleteCompanyWorkspace(company)}>Delete Company</button>
+                      {canManageCompanyOps && <button type="button" disabled={Boolean(workspaceAction)} onClick={() => updateCompanyName(company)}>Rename</button>}
+                      {user?.role === 'owner' && <button className="danger-action" type="button" disabled={Boolean(workspaceAction)} onClick={() => deleteCompanyWorkspace(company)}>Delete Company</button>}
                     </div>
                   </td>
                 </tr>
