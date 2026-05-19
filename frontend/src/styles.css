@@ -2013,8 +2013,20 @@ th {
   .faq-grid,
   .admin-insights,
   .admin-ops-grid,
-  .pipeline-stages {
+  .pipeline-stages,
+  .command-center-grid,
+  .approval-queue,
+  .dataset-detail-grid {
     grid-template-columns: 1fr;
+  }
+
+  .dataset-row-summary {
+    grid-template-columns: 1fr;
+  }
+
+  .dataset-row-footer {
+    align-items: stretch;
+    flex-direction: column;
   }
 
   .cleanup-history {
@@ -2270,7 +2282,62 @@ th {
 }
 
 .workflow-stages {
-  grid-template-columns: repeat(7, minmax(92px, 1fr));
+  position: relative;
+  grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
+}
+
+.sticky-workflow-header {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  padding: 8px;
+  backdrop-filter: blur(14px);
+}
+
+.workflow-stages button small {
+  color: #64748b;
+  font-size: 10px;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.workflow-stages button.stage-completed {
+  border-color: rgba(22, 163, 74, 0.35);
+  background: rgba(22, 163, 74, 0.08);
+}
+
+.workflow-stages button.stage-running {
+  border-color: rgba(24, 119, 242, 0.35);
+  background: rgba(24, 119, 242, 0.1);
+}
+
+.workflow-stages button.stage-waiting_approval {
+  border-color: rgba(217, 119, 6, 0.35);
+  background: rgba(217, 119, 6, 0.1);
+}
+
+.workflow-stages button.stage-failed,
+.workflow-stages button.stage-blocked {
+  border-color: rgba(220, 38, 38, 0.35);
+  background: rgba(220, 38, 38, 0.08);
+}
+
+.workflow-rule-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 8px;
+}
+
+.workflow-rule-grid span {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.86);
+  color: #475569;
+  font-size: 12px;
+  font-weight: 700;
+  padding: 9px 10px;
 }
 
 .dataset-list {
@@ -2296,6 +2363,240 @@ th {
 .dataset-row span {
   color: #64748b;
   font-size: 13px;
+}
+
+.dataset-count {
+  border-radius: 999px;
+  background: rgba(24, 119, 242, 0.1);
+  color: #1d4ed8;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 10px;
+}
+
+.enterprise-dataset-list {
+  display: grid;
+  gap: 10px;
+}
+
+.enterprise-dataset-row {
+  overflow: visible;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.enterprise-dataset-row.expanded {
+  border-color: rgba(24, 119, 242, 0.3);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.08);
+}
+
+.dataset-row-summary {
+  display: grid;
+  grid-template-columns: minmax(210px, 1.5fr) minmax(130px, 0.9fr) minmax(92px, 0.55fr) minmax(160px, 1fr) minmax(120px, 0.8fr);
+  gap: 12px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  padding: 14px;
+  text-align: left;
+}
+
+.dataset-row-summary:hover {
+  background: rgba(24, 119, 242, 0.05);
+}
+
+.dataset-row-summary span {
+  min-width: 0;
+  color: #334155;
+  font-size: 13px;
+}
+
+.dataset-row-summary strong,
+.dataset-row-summary small {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dataset-row-summary small {
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dataset-row-details {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 14px;
+}
+
+.dataset-detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.dataset-detail-grid div {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.86);
+  padding: 10px;
+}
+
+.dataset-detail-grid span,
+.workflow-history-strip span,
+.dataset-preview-strip span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dataset-preview-strip,
+.workflow-history-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.dataset-preview-strip span,
+.workflow-history-strip span {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.03);
+  padding: 8px 10px;
+}
+
+.dataset-row-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.dataset-action-menu {
+  position: relative;
+}
+
+.dataset-action-menu summary {
+  cursor: pointer;
+  list-style: none;
+  border: 1px solid rgba(24, 119, 242, 0.28);
+  border-radius: 8px;
+  background: rgba(24, 119, 242, 0.08);
+  color: #1d4ed8;
+  font-size: 13px;
+  font-weight: 800;
+  padding: 9px 12px;
+}
+
+.dataset-action-menu summary::-webkit-details-marker {
+  display: none;
+}
+
+.dataset-action-menu[open] {
+  z-index: 20;
+}
+
+.dataset-action-menu[open] summary {
+  background: #1877f2;
+  color: #ffffff;
+}
+
+.dataset-action-menu[open]::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+}
+
+.dataset-action-menu button {
+  display: block;
+  width: 180px;
+  border: 0;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: #ffffff;
+  color: #0f172a;
+  font-weight: 700;
+  padding: 10px 12px;
+  text-align: left;
+}
+
+.dataset-action-menu button:hover {
+  background: rgba(24, 119, 242, 0.07);
+}
+
+.dataset-action-menu[open] button:first-of-type {
+  margin-top: 6px;
+}
+
+.dataset-action-menu[open] button {
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
+}
+
+.dataset-action-menu[open] button {
+  position: relative;
+}
+
+.dataset-action-menu[open] button:first-of-type {
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
+.dataset-action-menu[open] button:last-of-type {
+  border-bottom: 0;
+  border-bottom-left-radius: 8px;
+  border-bottom-right-radius: 8px;
+}
+
+.ops-command-center {
+  display: grid;
+  gap: 16px;
+  margin-bottom: 18px;
+}
+
+.command-center-grid,
+.approval-queue {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 12px;
+}
+
+.command-center-grid button,
+.approval-queue div {
+  display: grid;
+  gap: 6px;
+  min-height: 112px;
+  border: 1px solid rgba(15, 23, 42, 0.09);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.86);
+  color: #0f172a;
+  padding: 14px;
+  text-align: left;
+}
+
+.command-center-grid button:hover {
+  border-color: rgba(24, 119, 242, 0.35);
+  transform: translateY(-1px);
+}
+
+.command-center-grid strong {
+  font-size: 24px;
+}
+
+.command-center-grid span,
+.approval-queue strong {
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.command-center-grid small,
+.approval-queue span {
+  color: #64748b;
 }
 
 .preview-modal {

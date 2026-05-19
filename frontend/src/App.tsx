@@ -42,6 +42,8 @@ type Dataset = {
   } | null;
   cleanupOperations?: string[];
   futureAiReady?: boolean;
+  ownerName?: string;
+  ownerEmail?: string;
 };
 
 type CleanupMetrics = {
@@ -258,6 +260,16 @@ type WorkspaceRoute = ModuleAction & {
   module: string;
   moduleLabel: string;
 };
+type PipelineStageState = 'queued' | 'running' | 'blocked' | 'waiting_approval' | 'completed' | 'failed' | 'archived';
+type ModulePipelineConfig = {
+  uploadTitle: string;
+  uploadCopy: string;
+  stages: string[];
+  rules: string[];
+  qualitySignals: string[];
+  exportLabel: string;
+  emptyState: string;
+};
 
 type AuthResponse = {
   token: string;
@@ -396,6 +408,65 @@ const moduleLabels: Record<string, string> = {
 const workspaceRoutes: WorkspaceRoute[] = Object.entries(moduleCards).flatMap(([module, cards]) =>
   cards.map((card) => ({ ...card, module, moduleLabel: moduleLabels[module] ?? module }))
 );
+
+const defaultPipelineStages = ['Upload', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Approval', 'Export'];
+
+const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
+  accounting: {
+    uploadTitle: 'Upload invoice files here',
+    uploadCopy: 'CSV, XLSX, or JSON invoice files are checked for required invoice fields, vendor matching, tax readiness, payment status, and ERP export quality.',
+    stages: ['Upload', 'Validate Invoices', 'Detect Duplicates', 'Match Vendor', 'Tax Validation', 'Payment Validation', 'Approval', 'Export ERP File'],
+    rules: [
+      'invoice_number is required',
+      'vendor_name is required',
+      'amount must be numeric and cannot be negative',
+      'duplicate invoice detection runs before approval',
+      'tax, currency, payment status, aging, and missing PO checks are reviewed'
+    ],
+    qualitySignals: ['Duplicate invoice risk', 'Tax validation', 'Payment aging', 'Currency normalization'],
+    exportLabel: 'Export ERP File',
+    emptyState: 'Upload invoice, vendor payment, or expense files to start the Accounting pipeline.'
+  },
+  engineering: {
+    uploadTitle: 'Upload project schedules, resources, or engineering files',
+    uploadCopy: 'Project files are validated as an operational dependency chain with milestone, owner, sequencing, resource, and schedule consistency checks.',
+    stages: ['Upload', 'Validate Project Structure', 'Validate Dependencies', 'Resource Conflict Detection', 'Schedule Analysis', 'Risk Detection', 'Approval', 'Export Project Report'],
+    rules: [
+      'project_id is required',
+      'milestone dependencies must be valid',
+      'predecessor and successor sequencing is checked',
+      'resource conflicts and missing owners are flagged',
+      'schedule overlaps and project status consistency are reviewed'
+    ],
+    qualitySignals: ['Dependency health', 'Resource conflicts', 'Schedule overlap', 'Delivery risk'],
+    exportLabel: 'Export Project Report',
+    emptyState: 'Upload schedules, resources, milestones, or engineering files to start the project lifecycle pipeline.'
+  },
+  dataProcessing: {
+    uploadTitle: 'Upload datasets for business-ready cleanup',
+    uploadCopy: 'General data workflows validate schema, isolate failed rows, detect duplicates, normalize values, calculate quality scores, and export clean datasets.',
+    stages: ['Upload', 'Schema Validation', 'Duplicate Detection', 'Normalize', 'Data Cleanup', 'Data Quality Scoring', 'Approval', 'Export Clean Dataset'],
+    rules: [
+      'required columns must exist',
+      'schema drift is detected before cleanup',
+      'duplicate records are isolated',
+      'failed rows and anomalies are separated for review',
+      'data quality score is calculated before approval'
+    ],
+    qualitySignals: ['Data quality score', 'Anomaly score', 'Failed row isolation', 'Schema drift'],
+    exportLabel: 'Export Clean Dataset',
+    emptyState: 'Upload business datasets to run schema validation, cleanup, quality scoring, approval, and export.'
+  },
+  default: {
+    uploadTitle: 'Upload company workflow files',
+    uploadCopy: 'CSV, XLSX, or JSON files are validated, processed, approved, and exported inside this company workspace.',
+    stages: defaultPipelineStages,
+    rules: ['company_id access is enforced', 'records are validated before approval', 'exports stay scoped to the selected company'],
+    qualitySignals: ['Workflow status', 'Validation output', 'Approval readiness', 'Export history'],
+    exportLabel: 'Export',
+    emptyState: 'Upload a company file to start this workflow.'
+  }
+};
 
 export function App() {
   const navigate = useNavigate();
@@ -957,6 +1028,22 @@ export function App() {
     () => selectedCompanyId ? reports.filter((report) => report.companyId === selectedCompanyId) : reports,
     [reports, selectedCompanyId]
   );
+  const companyCleanupJobs = useMemo(
+    () => selectedCompanyId ? cleanupJobs.filter((job) => job.companyId === selectedCompanyId) : cleanupJobs,
+    [cleanupJobs, selectedCompanyId]
+  );
+  const datasetHealthScore = useMemo(() => {
+    if (!companyDatasets.length) return 100;
+    const issues = companyDatasets.reduce((total, dataset) => total
+      + (dataset.cleanupMetrics?.invalidValuesDetected ?? 0)
+      + (dataset.cleanupMetrics?.failedRows ?? 0)
+      + (dataset.cleanupMetrics?.duplicatesRemoved ?? 0), 0);
+    return Math.max(40, Math.round(100 - issues / Math.max(companyDatasets.length, 1)));
+  }, [companyDatasets]);
+  const failedRecordCount = useMemo(
+    () => companyDatasets.reduce((total, dataset) => total + (dataset.cleanupMetrics?.failedRows ?? 0), 0),
+    [companyDatasets]
+  );
 
   async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string) {
     const targetCompanyId = companyIdOverride || selectedCompanyId;
@@ -1000,7 +1087,14 @@ export function App() {
       setUploadState(`${(dataset.fileType ?? extension).toUpperCase()} analysis ready and ${storageLabel}.${warning}`);
       return dataset;
     } catch (error) {
-      setUploadState(error instanceof Error ? error.message : 'Upload failed.');
+      const message = error instanceof Error ? error.message : 'Upload failed.';
+      console.error('[Metenova Upload] Upload failed', {
+        companyId: targetCompanyId,
+        fileName: file.name,
+        fileType: file.type || extension,
+        message
+      });
+      setUploadState(`${message} Confirm company access, file type, and pipeline readiness before retrying.`);
       return undefined;
     }
   }
@@ -2160,6 +2254,7 @@ export function App() {
             companySaving={companySaving}
             dashboards={companyDashboards}
             datasets={datasets}
+            archiveDatasetRecord={archiveDatasetRecord}
             deleteAdminUser={deleteAdminUser}
             deleteCompanyWorkspace={deleteCompanyWorkspace}
             deleteDatasetRecord={deleteDatasetRecord}
@@ -2546,6 +2641,51 @@ export function App() {
           </section>
         ) : (
           <>
+            <section className="panel ops-command-center">
+              <div className="panel-header">
+                <div>
+                  <p className="eyebrow">Interactive operations command center</p>
+                  <h2>{selectedCompany?.name ?? 'Company'} workspace</h2>
+                </div>
+                <span className="status-pill active">{roleLabel(user?.role)} visibility</span>
+              </div>
+              <div className="command-center-grid">
+                <button type="button" onClick={() => openView('companies')}>
+                  <span>Company dashboard</span>
+                  <strong>{canManageUsers(user) ? `${companies.length} companies` : selectedCompany?.name ?? 'Assigned workspace'}</strong>
+                  <small>{canManageUsers(user) ? 'Owner/Admin global view' : 'Scoped to assigned company data'}</small>
+                </button>
+                <button type="button" onClick={() => navigate('/data-processing/cleanup')}>
+                  <span>Pipeline progress</span>
+                  <strong>{companyCleanupJobs.filter((job) => job.status === 'completed').length}/{companyCleanupJobs.length}</strong>
+                  <small>Completed cleanup jobs</small>
+                </button>
+                <button type="button" onClick={() => openView('reports')}>
+                  <span>Approval and export queue</span>
+                  <strong>{companyReports.length}</strong>
+                  <small>Reports and export-ready outputs</small>
+                </button>
+                <button type="button" onClick={() => openView('analytics')}>
+                  <span>Dataset health score</span>
+                  <strong>{datasetHealthScore}%</strong>
+                  <small>{failedRecordCount.toLocaleString()} failed records isolated</small>
+                </button>
+              </div>
+              <div className="approval-queue">
+                <div>
+                  <strong>Workflow status</strong>
+                  <span>{companyCleanupJobs.filter((job) => job.status === 'processing' || job.status === 'pending').length} active or queued jobs</span>
+                </div>
+                <div>
+                  <strong>Export history</strong>
+                  <span>{companyReports.length + companyDashboards.length} saved reports and dashboards</span>
+                </div>
+                <div>
+                  <strong>Notifications</strong>
+                  <span>{notifications.filter((notification) => notification.status !== 'read').length} unread alerts</span>
+                </div>
+              </div>
+            </section>
             <section className="metrics-grid" aria-label="Performance metrics">
               {insights.metrics.map((metric) => (
                 <article className="metric-card" key={metric.label}>
@@ -3332,6 +3472,7 @@ function RecordTable({
 
 function RoutedPages(props: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  archiveDatasetRecord: (dataset: Dataset | null) => void;
   auditLogs: AuditLog[];
   canManage: boolean;
   companies: Company[];
@@ -3376,6 +3517,7 @@ function RoutedPages(props: {
           element={(
             <ModuleWorkspacePage
               apiFetch={props.apiFetch}
+              archiveDatasetRecord={props.archiveDatasetRecord}
               companies={props.companies}
               datasets={props.datasets}
               deleteDatasetRecord={props.deleteDatasetRecord}
@@ -3619,6 +3761,7 @@ function CompaniesWorkspace({
 
 function ModuleWorkspacePage({
   apiFetch,
+  archiveDatasetRecord,
   companies,
   datasets,
   deleteDatasetRecord,
@@ -3633,6 +3776,7 @@ function ModuleWorkspacePage({
   uploadDataset
 }: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  archiveDatasetRecord: (dataset: Dataset | null) => void;
   companies: Company[];
   datasets: Dataset[];
   deleteDatasetRecord: (dataset: Dataset | null) => void;
@@ -3657,13 +3801,23 @@ function ModuleWorkspacePage({
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const [workflowMessage, setWorkflowMessage] = useState('Upload a dataset to start the workflow.');
-  const [workflowStage, setWorkflowStage] = useState('Upload Dataset');
+  const pipelineConfig = modulePipelineConfigs[route.module] ?? modulePipelineConfigs.default;
+  const [workflowMessage, setWorkflowMessage] = useState(pipelineConfig.emptyState);
+  const [workflowStage, setWorkflowStage] = useState(pipelineConfig.stages[0]);
   const [dragActive, setDragActive] = useState(false);
   const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
+  const [expandedDatasetId, setExpandedDatasetId] = useState('');
+  const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
   const moduleDatasets = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
-  const workflowStages = ['Upload Dataset', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
+  const workflowStages = pipelineConfig.stages;
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
+  const selectedCompanyName = companies.find((company) => company.id === selectedCompanyId)?.name ?? 'Selected company';
+
+  useEffect(() => {
+    setWorkflowStage(pipelineConfig.stages[0]);
+    setWorkflowMessage(pipelineConfig.emptyState);
+    setExpandedDatasetId('');
+  }, [route.module, route.path]);
 
   async function loadRecords() {
     setLoading(true);
@@ -3758,23 +3912,34 @@ function ModuleWorkspacePage({
     setUploading(true);
     setUploadProgress(12);
     setError('');
+    setLastModuleFile(file);
     setWorkflowMessage(`Uploading ${file.name}...`);
-    setWorkflowStage('Upload Dataset');
+    setWorkflowStage(workflowStages[0]);
     try {
       window.setTimeout(() => setUploadProgress(48), 120);
       const dataset = await uploadDataset(file, undefined, selectedCompanyId);
       if (!dataset) {
-        throw new Error('Upload failed.');
+        throw new Error(`Upload failed for ${file.name}. Check company assignment, MIME type, and retry.`);
       }
       setUploadProgress(100);
-      setWorkflowStage('Validate');
-      setWorkflowMessage(`${dataset.fileName} uploaded. Validation is ready.`);
+      setWorkflowStage(workflowStages[1] ?? workflowStages[0]);
+      setWorkflowMessage(`${dataset.fileName} uploaded to ${selectedCompanyName}. ${workflowStages[1] ?? 'Validation'} is ready.`);
       setActiveDataset(dataset);
+      setExpandedDatasetId(dataset.id);
       setPreviewState({ dataset, mode: 'upload' });
     } catch (uploadError) {
-      setWorkflowStage('Upload Dataset');
-      setWorkflowMessage(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
-      setError(uploadError instanceof Error ? uploadError.message : 'Upload failed.');
+      const message = uploadError instanceof Error ? uploadError.message : 'Upload failed.';
+      console.error('[Metenova Module Upload] Workflow upload failed', {
+        module: route.module,
+        path: route.path,
+        companyId: selectedCompanyId,
+        fileName: file.name,
+        mimeType: file.type,
+        message
+      });
+      setWorkflowStage(workflowStages[0]);
+      setWorkflowMessage(message);
+      setError(`${message} The file was not added to this workflow.`);
     } finally {
       window.setTimeout(() => {
         setUploading(false);
@@ -3797,7 +3962,7 @@ function ModuleWorkspacePage({
   }
 
   async function cleanDatasetFromModule(dataset: Dataset) {
-    setWorkflowStage('Clean');
+    setWorkflowStage(workflowStages.find((stage) => /clean|cleanup/i.test(stage)) ?? workflowStages[4] ?? workflowStages[0]);
     setWorkflowMessage(`Cleaning ${dataset.fileName}...`);
     try {
       const response = await apiFetch(`/api/datasets/${dataset.id}/cleanup`, { method: 'POST' });
@@ -3812,10 +3977,10 @@ function ModuleWorkspacePage({
       ]);
       setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
       setActiveDataset(payload.cleanedDataset);
-      setWorkflowStage('Approve');
+      setWorkflowStage(workflowStages.find((stage) => /approval|approve/i.test(stage)) ?? workflowStages.at(-2) ?? workflowStages[0]);
       setWorkflowMessage(`Cleanup completed. ${payload.job?.metrics?.totalCleanedRows ?? payload.cleanedDataset.rows} rows ready for approval.`);
     } catch (cleanupError) {
-      setWorkflowStage('Clean');
+      setWorkflowStage(workflowStages.find((stage) => /clean|cleanup/i.test(stage)) ?? workflowStages[4] ?? workflowStages[0]);
       setWorkflowMessage(cleanupError instanceof Error ? cleanupError.message : 'Cleanup failed.');
       setError(cleanupError instanceof Error ? cleanupError.message : 'Cleanup failed.');
     }
@@ -3823,21 +3988,24 @@ function ModuleWorkspacePage({
 
   function validateDataset(dataset: Dataset) {
     setActiveDataset(dataset);
-    setWorkflowStage('Detect Duplicates');
+    setExpandedDatasetId(dataset.id);
+    setWorkflowStage(workflowStages.find((stage) => /duplicate|dependencies|project structure|invoice/i.test(stage)) ?? workflowStages[2] ?? workflowStages[0]);
     setWorkflowMessage(`${dataset.fileName} validated. ${dataset.rows.toLocaleString()} rows and ${dataset.columns.toLocaleString()} columns detected.`);
     setPreviewState({ dataset, mode: 'validation' });
   }
 
   function normalizeDataset(dataset: Dataset) {
     setActiveDataset(dataset);
-    setWorkflowStage('Normalize');
+    setExpandedDatasetId(dataset.id);
+    setWorkflowStage(workflowStages.find((stage) => /normalize|schedule|resource|vendor/i.test(stage)) ?? workflowStages[3] ?? workflowStages[0]);
     setWorkflowMessage(`${dataset.fileName} queued for normalization and value standardization.`);
     setPreviewState({ dataset, mode: 'normalization' });
   }
 
   function approveDataset(dataset: Dataset) {
     setActiveDataset(dataset);
-    setWorkflowStage('Export');
+    setExpandedDatasetId(dataset.id);
+    setWorkflowStage(workflowStages.find((stage) => /export/i.test(stage)) ?? workflowStages.at(-1) ?? workflowStages[0]);
     setWorkflowMessage(`${dataset.fileName} approved for export and reporting.`);
     setPreviewState({ dataset, mode: 'approval' });
   }
@@ -3845,6 +4013,32 @@ function ModuleWorkspacePage({
   const filteredRecords = records
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
+
+  function runDatasetAction(dataset: Dataset, action: string) {
+    setError('');
+    setExpandedDatasetId(dataset.id);
+    if (action === 'preview') setPreviewState({ dataset, mode: 'upload' });
+    if (action === 'validate') validateDataset(dataset);
+    if (action === 'results') setPreviewState({ dataset, mode: 'duplicates' });
+    if (action === 'normalize') normalizeDataset(dataset);
+    if (action === 'clean') void cleanDatasetFromModule(dataset);
+    if (action === 'compare') setPreviewState({ dataset, mode: 'compare' });
+    if (action === 'approve') approveDataset(dataset);
+    if (action === 'export') setPreviewState({ dataset, mode: 'export' });
+    if (action === 'download') downloadDatasetExport(dataset);
+    if (action === 'reprocess') void cleanDatasetFromModule(dataset.originalDatasetId ? datasets.find((item) => item.id === dataset.originalDatasetId) ?? dataset : dataset);
+    if (action === 'archive') archiveDatasetRecord(dataset);
+    if (action === 'delete') deleteDatasetRecord(dataset);
+  }
+
+  function stageState(stage: string, index: number): PipelineStageState {
+    if (/approval/i.test(stage) && index === activeStageIndex) return 'waiting_approval';
+    if (/blocked/i.test(workflowMessage) && index === activeStageIndex) return 'blocked';
+    if (/failed|could not|error/i.test(workflowMessage) && index === activeStageIndex) return 'failed';
+    if (index < activeStageIndex) return 'completed';
+    if (index === activeStageIndex) return 'running';
+    return 'queued';
+  }
 
   return (
     <PageLayout>
@@ -3869,8 +4063,8 @@ function ModuleWorkspacePage({
       <article className="panel module-upload-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Dataset workflow</p>
-            <h2>Upload and process data</h2>
+            <p className="eyebrow">{route.moduleLabel} workflow</p>
+            <h2>{pipelineConfig.uploadTitle}</h2>
           </div>
           <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
             {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
@@ -3885,8 +4079,8 @@ function ModuleWorkspacePage({
           }}
           onDrop={handleDrop}
         >
-          <strong>Upload CSV, XLSX, or JSON</strong>
-          <span>Drag a dataset here or choose a file to start validation, cleanup, approval, and export.</span>
+          <strong>{pipelineConfig.uploadTitle}</strong>
+          <span>{pipelineConfig.uploadCopy}</span>
           <input accept=".csv,.xlsx,.xls,.json" type="file" onChange={handleModuleFileChange} />
         </div>
         {uploading && (
@@ -3894,15 +4088,24 @@ function ModuleWorkspacePage({
             <span style={{ width: `${uploadProgress}%` }} />
           </div>
         )}
-        <div className="pipeline-stages workflow-stages">
+        <div className="workflow-rule-grid" aria-label="Pipeline rules">
+          {pipelineConfig.rules.map((rule) => <span key={rule}>{rule}</span>)}
+        </div>
+        <div className="pipeline-stages workflow-stages sticky-workflow-header">
           {workflowStages.map((stage, index) => (
-            <button className={index <= activeStageIndex ? 'active' : ''} key={stage} type="button" onClick={() => setWorkflowStage(stage)}>
+            <button className={`stage-${stageState(stage, index)} ${index <= activeStageIndex ? 'active' : ''}`} key={stage} type="button" onClick={() => setWorkflowStage(stage)}>
               <strong>{index + 1}</strong>
               <span>{stage}</span>
+              <small>{stageState(stage, index).replace('_', ' ')}</small>
             </button>
           ))}
         </div>
         <p className="persistence-note">{workflowMessage}</p>
+        {error && lastModuleFile && (
+          <button className="ghost-button compact" type="button" onClick={() => void handleModuleUpload(lastModuleFile)}>
+            Retry upload
+          </button>
+        )}
       </article>
       <article className="panel">
         <div className="panel-header">
@@ -3910,31 +4113,72 @@ function ModuleWorkspacePage({
             <p className="eyebrow">Uploaded datasets</p>
             <h2>Company files</h2>
           </div>
+          <span className="dataset-count">{moduleDatasets.length.toLocaleString()} active</span>
         </div>
-        <div className="dataset-list">
-          {moduleDatasets.slice(0, 6).map((dataset) => (
-            <div className="dataset-row" key={dataset.id}>
-              <div>
-                <strong>{dataset.fileName}</strong>
-                <span>{dataset.rows.toLocaleString()} rows - {dataset.columns.toLocaleString()} columns - {dataset.cleanupStatus ?? 'original'}</span>
-              </div>
-              <div className="admin-actions">
-                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'upload' })}>Preview</button>
-                <button className="ghost-button compact" type="button" onClick={() => validateDataset(dataset)}>Validate</button>
-                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'duplicates' })}>View Results</button>
-                <button className="ghost-button compact" type="button" onClick={() => normalizeDataset(dataset)}>Normalize</button>
-                {!dataset.originalDatasetId && <button className="ghost-button compact" type="button" onClick={() => cleanDatasetFromModule(dataset)}>Clean</button>}
-                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'compare' })}>Compare</button>
-                <button className="ghost-button compact" type="button" onClick={() => approveDataset(dataset)}>Approve</button>
-                <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'export' })}>Export</button>
-                <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(dataset)}>Download</button>
-                <button className="ghost-button compact danger" type="button" disabled={deletingDatasetId === dataset.id} onClick={() => deleteDatasetRecord(dataset)}>
-                  {deletingDatasetId === dataset.id ? 'Deleting...' : 'Delete'}
-                </button>
-              </div>
-            </div>
+        <div className="enterprise-dataset-list">
+          {moduleDatasets.map((dataset) => (
+            <article className={`enterprise-dataset-row ${expandedDatasetId === dataset.id ? 'expanded' : ''}`} key={dataset.id}>
+              <button className="dataset-row-summary" type="button" onClick={() => setExpandedDatasetId(expandedDatasetId === dataset.id ? '' : dataset.id)}>
+                <span>
+                  <strong>{dataset.fileName}</strong>
+                  <small>{new Date(dataset.uploadedAt).toLocaleString()} | {dataset.cleanupStatus ?? 'original'}</small>
+                </span>
+                <span>{workflowStage}</span>
+                <span>{dataset.rows.toLocaleString()} rows</span>
+                <span>{companies.find((company) => company.id === dataset.companyId)?.name ?? selectedCompanyName}</span>
+                <span>{dataset.ownerName ?? dataset.ownerEmail ?? 'Workspace user'}</span>
+              </button>
+              {expandedDatasetId === dataset.id && (
+                <div className="dataset-row-details">
+                  <div className="dataset-detail-grid">
+                    <div>
+                      <span>Status</span>
+                      <strong>{dataset.cleanupStatus ?? 'original'}</strong>
+                    </div>
+                    <div>
+                      <span>Columns</span>
+                      <strong>{dataset.columns.toLocaleString()}</strong>
+                    </div>
+                    <div>
+                      <span>Quality score</span>
+                      <strong>{Math.max(45, 100 - ((dataset.cleanupMetrics?.invalidValuesDetected ?? 0) + (dataset.cleanupMetrics?.failedRows ?? 0))).toLocaleString()}%</strong>
+                    </div>
+                    <div>
+                      <span>Anomaly score</span>
+                      <strong>{dataset.cleanupMetrics?.anomaliesDetected ?? summarizeValidation(dataset).warnings.length}</strong>
+                    </div>
+                  </div>
+                  <div className="dataset-preview-strip">
+                    {getPreviewRows(dataset, 'upload').slice(0, 3).map((row, index) => (
+                      <span key={`${dataset.id}-preview-${index}`}>{getPreviewHeaders(dataset).slice(0, 3).map((header) => row[header] || 'null').join(' | ')}</span>
+                    ))}
+                  </div>
+                  <div className="workflow-history-strip">
+                    {(dataset.cleanupLogs?.length ? dataset.cleanupLogs : ['Uploaded', ...pipelineConfig.qualitySignals]).slice(0, 5).map((entry) => <span key={entry}>{entry}</span>)}
+                  </div>
+                  <div className="dataset-row-footer">
+                    <details className="dataset-action-menu">
+                      <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Actions'}</summary>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'validate')}>Validate</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'normalize')}>Normalize</button>
+                      {!dataset.originalDatasetId && <button type="button" onClick={() => runDatasetAction(dataset, 'clean')}>Clean</button>}
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'approve')}>Approve</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>{pipelineConfig.exportLabel}</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'download')}>Download</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'archive')}>Archive</button>
+                      <button className="danger-action" disabled={deletingDatasetId === dataset.id} type="button" onClick={() => runDatasetAction(dataset, 'delete')}>Delete</button>
+                    </details>
+                    <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'history' })}>Version history</button>
+                  </div>
+                </div>
+              )}
+            </article>
           ))}
-          {!moduleDatasets.length && <EmptyState title="No datasets uploaded" copy="Upload a company dataset to run validation, cleanup, and export workflows." />}
+          {!moduleDatasets.length && <EmptyState title="No datasets uploaded" copy={pipelineConfig.emptyState} />}
         </div>
       </article>
       <article className="panel routed-workspace">

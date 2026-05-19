@@ -294,6 +294,37 @@ export async function initDatabase() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS pipeline_rules (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      module TEXT NOT NULL,
+      rule_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_stage_runs (
+      id TEXT PRIMARY KEY,
+      pipeline_id TEXT REFERENCES pipelines(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      module TEXT NOT NULL,
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      stage_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      operator_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      logs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      validation_output JSONB NOT NULL DEFAULT '{}'::jsonb,
+      metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS analytics (
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
@@ -419,6 +450,9 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_cleanup_jobs_original_dataset ON cleanup_jobs (original_dataset_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pipelines_company_department ON pipelines (company_id, department, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pipeline_runs_company_status ON pipeline_runs (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_rules_company_module ON pipeline_rules (company_id, module, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_stage_runs_company_status ON pipeline_stage_runs (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_stage_runs_dataset ON pipeline_stage_runs (dataset_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_analytics_company_created_at ON analytics (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_notifications_company_created_at ON notifications (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_user_updated_at ON dashboards (user_id, updated_at DESC);
@@ -479,6 +513,14 @@ export async function initDatabase() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_runs_company') THEN
         ALTER TABLE pipeline_runs
           ADD CONSTRAINT fk_pipeline_runs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_rules_company') THEN
+        ALTER TABLE pipeline_rules
+          ADD CONSTRAINT fk_pipeline_rules_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_stage_runs_company') THEN
+        ALTER TABLE pipeline_stage_runs
+          ADD CONSTRAINT fk_pipeline_stage_runs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_analytics_company') THEN
         ALTER TABLE analytics
