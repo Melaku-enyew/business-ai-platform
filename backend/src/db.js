@@ -325,6 +325,95 @@ export async function initDatabase() {
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS enterprise_connectors (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      connector_type TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'not_configured',
+      health_status TEXT NOT NULL DEFAULT 'unknown',
+      permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      schedule JSONB NOT NULL DEFAULT '{}'::jsonb,
+      encrypted_credentials TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      last_sync_at TIMESTAMPTZ,
+      next_sync_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_sync_logs (
+      id TEXT PRIMARY KEY,
+      connector_id TEXT REFERENCES enterprise_connectors(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      status TEXT NOT NULL DEFAULT 'queued',
+      records_processed INTEGER NOT NULL DEFAULT 0,
+      failed_rows INTEGER NOT NULL DEFAULT 0,
+      retries INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS pipeline_schedules (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      pipeline_id TEXT REFERENCES pipelines(id) ON DELETE CASCADE,
+      name TEXT NOT NULL,
+      schedule_type TEXT NOT NULL DEFAULT 'cron',
+      cron_expression TEXT,
+      event_trigger TEXT,
+      priority INTEGER NOT NULL DEFAULT 5,
+      sla_minutes INTEGER NOT NULL DEFAULT 60,
+      retry_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+      dependencies JSONB NOT NULL DEFAULT '[]'::jsonb,
+      status TEXT NOT NULL DEFAULT 'queued',
+      next_run_at TIMESTAMPTZ,
+      last_run_at TIMESTAMPTZ,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_intelligence (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      module TEXT NOT NULL,
+      insight_type TEXT NOT NULL,
+      severity TEXT NOT NULL DEFAULT 'info',
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      confidence NUMERIC(5,2) NOT NULL DEFAULT 0,
+      recommendations JSONB NOT NULL DEFAULT '[]'::jsonb,
+      explainability JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS access_requests (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      requester_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      target_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      department TEXT,
+      requested_role TEXT NOT NULL DEFAULT 'viewer',
+      reason TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      expires_at TIMESTAMPTZ,
+      approved_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      approved_at TIMESTAMPTZ,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS analytics (
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
@@ -453,6 +542,11 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_pipeline_rules_company_module ON pipeline_rules (company_id, module, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pipeline_stage_runs_company_status ON pipeline_stage_runs (company_id, status, updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pipeline_stage_runs_dataset ON pipeline_stage_runs (dataset_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_enterprise_connectors_company_status ON enterprise_connectors (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_connector_sync_logs_company_created ON connector_sync_logs (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_company_status ON pipeline_schedules (company_id, status, next_run_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_intelligence_company_module ON workflow_intelligence (company_id, module, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_access_requests_company_status ON access_requests (company_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_analytics_company_created_at ON analytics (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_notifications_company_created_at ON notifications (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_dashboards_user_updated_at ON dashboards (user_id, updated_at DESC);
@@ -521,6 +615,26 @@ export async function initDatabase() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_stage_runs_company') THEN
         ALTER TABLE pipeline_stage_runs
           ADD CONSTRAINT fk_pipeline_stage_runs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_enterprise_connectors_company') THEN
+        ALTER TABLE enterprise_connectors
+          ADD CONSTRAINT fk_enterprise_connectors_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_connector_sync_logs_company') THEN
+        ALTER TABLE connector_sync_logs
+          ADD CONSTRAINT fk_connector_sync_logs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_pipeline_schedules_company') THEN
+        ALTER TABLE pipeline_schedules
+          ADD CONSTRAINT fk_pipeline_schedules_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflow_intelligence_company') THEN
+        ALTER TABLE workflow_intelligence
+          ADD CONSTRAINT fk_workflow_intelligence_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_access_requests_company') THEN
+        ALTER TABLE access_requests
+          ADD CONSTRAINT fk_access_requests_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_analytics_company') THEN
         ALTER TABLE analytics
@@ -789,6 +903,11 @@ export async function deleteCompany(id) {
     store.notifications = (store.notifications ?? []).filter((notification) => notification.companyId !== companyId);
     store.analytics = (store.analytics ?? []).filter((entry) => entry.companyId !== companyId);
     store.pipelines = (store.pipelines ?? []).filter((entry) => entry.companyId !== companyId);
+    store.enterpriseConnectors = (store.enterpriseConnectors ?? []).filter((entry) => entry.companyId !== companyId);
+    store.connectorSyncLogs = (store.connectorSyncLogs ?? []).filter((entry) => entry.companyId !== companyId);
+    store.pipelineSchedules = (store.pipelineSchedules ?? []).filter((entry) => entry.companyId !== companyId);
+    store.workflowIntelligence = (store.workflowIntelligence ?? []).filter((entry) => entry.companyId !== companyId);
+    store.accessRequests = (store.accessRequests ?? []).filter((entry) => entry.companyId !== companyId);
     store.userCompanyAssignments = (store.userCompanyAssignments ?? []).filter((assignment) => assignment.companyId !== companyId);
     await saveDevStore(store);
     return (store.companies?.length ?? 0) < before;
@@ -799,6 +918,11 @@ export async function deleteCompany(id) {
   await pgQuery('DELETE FROM dashboards WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM analytics WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM notifications WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM connector_sync_logs WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM enterprise_connectors WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM pipeline_schedules WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM workflow_intelligence WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM access_requests WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM pipelines WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM module_records WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM invitations WHERE company_id = $1;', [companyId]);
@@ -1931,6 +2055,401 @@ export async function deletePipeline(id, user) {
   return result.rowCount > 0;
 }
 
+const defaultConnectorTemplates = [
+  ['sql_server', 'SQL Server'],
+  ['postgresql', 'PostgreSQL'],
+  ['mysql', 'MySQL'],
+  ['sharepoint', 'SharePoint'],
+  ['onedrive', 'OneDrive'],
+  ['google_drive', 'Google Drive'],
+  ['excel_online', 'Excel Online'],
+  ['csv_watch_folder', 'CSV watch folders'],
+  ['sftp', 'SFTP'],
+  ['rest_api', 'REST APIs'],
+  ['email_attachment', 'Email attachment ingestion'],
+  ['webhook', 'Webhook ingestion']
+];
+
+function enterpriseSeed(companyId, userId) {
+  const now = new Date();
+  const connectors = defaultConnectorTemplates.map(([type, name], index) => ({
+    id: `${companyId}-${type}`,
+    companyId,
+    userId,
+    name,
+    connectorType: type,
+    status: index < 3 ? 'ready' : 'not_configured',
+    healthStatus: index < 3 ? 'healthy' : 'unknown',
+    permissions: { roles: ['owner', 'admin', 'manager'], departmentScoped: true },
+    schedule: index === 0 ? { mode: 'nightly', cron: '0 2 * * *' } : index === 1 ? { mode: 'hourly', cron: '0 * * * *' } : {},
+    metadata: { incrementalSync: true, credentialEncrypted: false, retryEnabled: true },
+    lastSyncAt: index < 3 ? new Date(now.getTime() - (index + 1) * 3600000).toISOString() : null,
+    nextSyncAt: index < 3 ? new Date(now.getTime() + (index + 1) * 3600000).toISOString() : null,
+    createdAt: now.toISOString(),
+    updatedAt: now.toISOString()
+  }));
+  const schedules = [
+    {
+      id: `${companyId}-nightly-invoice-cleanup`,
+      companyId,
+      pipelineId: null,
+      name: 'Nightly invoice cleanup',
+      scheduleType: 'cron',
+      cronExpression: '0 2 * * *',
+      eventTrigger: '',
+      priority: 2,
+      slaMinutes: 45,
+      retryPolicy: { attempts: 3, backoffMinutes: 15 },
+      dependencies: ['connector:sql_server', 'stage:validate_invoices'],
+      status: 'queued',
+      nextRunAt: new Date(now.getTime() + 8 * 3600000).toISOString(),
+      lastRunAt: null,
+      metadata: { module: 'accounting', approvalRequired: true },
+      createdBy: userId,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    },
+    {
+      id: `${companyId}-friday-export`,
+      companyId,
+      pipelineId: null,
+      name: 'Friday approved dataset export',
+      scheduleType: 'cron',
+      cronExpression: '0 17 * * 5',
+      eventTrigger: '',
+      priority: 5,
+      slaMinutes: 90,
+      retryPolicy: { attempts: 2, backoffMinutes: 30 },
+      dependencies: ['stage:approval'],
+      status: 'waiting',
+      nextRunAt: new Date(now.getTime() + 48 * 3600000).toISOString(),
+      lastRunAt: null,
+      metadata: { module: 'dataProcessing', exportFormat: 'csv' },
+      createdBy: userId,
+      createdAt: now.toISOString(),
+      updatedAt: now.toISOString()
+    }
+  ];
+  const intelligence = [
+    {
+      id: `${companyId}-invoice-risk`,
+      companyId,
+      datasetId: null,
+      module: 'accounting',
+      insightType: 'invoice_risk_analysis',
+      severity: 'warning',
+      title: 'Invoice risk analysis ready',
+      summary: 'AI scoring will flag duplicate payment risk, vendor anomalies, negative amounts, and missing PO patterns.',
+      confidence: 0.86,
+      recommendations: ['Review invoices with repeated vendor and amount pairs', 'Require PO validation before ERP export'],
+      explainability: { signals: ['duplicate invoice number', 'vendor variance', 'tax mismatch'] },
+      status: 'active',
+      createdBy: userId,
+      createdAt: now.toISOString()
+    },
+    {
+      id: `${companyId}-project-risk`,
+      companyId,
+      datasetId: null,
+      module: 'engineering',
+      insightType: 'project_risk_forecast',
+      severity: 'info',
+      title: 'Project dependency risk forecast',
+      summary: 'Workflow intelligence is prepared to forecast schedule delay, resource conflict, and dependency risk.',
+      confidence: 0.78,
+      recommendations: ['Validate predecessor/successor chains', 'Review milestones with missing owners'],
+      explainability: { signals: ['schedule overlap', 'resource load', 'blocked dependency'] },
+      status: 'active',
+      createdBy: userId,
+      createdAt: now.toISOString()
+    },
+    {
+      id: `${companyId}-schema-drift`,
+      companyId,
+      datasetId: null,
+      module: 'dataProcessing',
+      insightType: 'schema_drift_prediction',
+      severity: 'info',
+      title: 'Schema drift monitoring enabled',
+      summary: 'Quality scoring can compare incoming uploads against approved schema versions and isolate failed rows.',
+      confidence: 0.82,
+      recommendations: ['Define required columns per workflow', 'Route schema drift to approval before cleanup'],
+      explainability: { signals: ['missing columns', 'type mismatch', 'new unexpected fields'] },
+      status: 'active',
+      createdBy: userId,
+      createdAt: now.toISOString()
+    }
+  ];
+  return { connectors, syncLogs: [], schedules, intelligence, accessRequests: [] };
+}
+
+export async function listEnterpriseOperations(user, companyId) {
+  const requestedCompanyId = String(companyId || '').trim() || getCompanyId(user);
+  if (!(await canAccessCompany(user, requestedCompanyId))) {
+    return { connectors: [], syncLogs: [], schedules: [], intelligence: [], accessRequests: [] };
+  }
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    if (!(store.enterpriseConnectors ?? []).some((entry) => entry.companyId === requestedCompanyId)) {
+      const seeded = enterpriseSeed(requestedCompanyId, user?.id);
+      store.enterpriseConnectors = [...(store.enterpriseConnectors ?? []), ...seeded.connectors];
+      store.pipelineSchedules = [...(store.pipelineSchedules ?? []), ...seeded.schedules];
+      store.workflowIntelligence = [...(store.workflowIntelligence ?? []), ...seeded.intelligence];
+      store.connectorSyncLogs = store.connectorSyncLogs ?? [];
+      store.accessRequests = store.accessRequests ?? [];
+      await saveDevStore(store);
+    }
+    return {
+      connectors: (store.enterpriseConnectors ?? []).filter((entry) => entry.companyId === requestedCompanyId).map(rowToEnterpriseConnector),
+      syncLogs: (store.connectorSyncLogs ?? []).filter((entry) => entry.companyId === requestedCompanyId).slice(0, 50).map(rowToConnectorSyncLog),
+      schedules: (store.pipelineSchedules ?? []).filter((entry) => entry.companyId === requestedCompanyId).map(rowToPipelineSchedule),
+      intelligence: (store.workflowIntelligence ?? []).filter((entry) => entry.companyId === requestedCompanyId).map(rowToWorkflowIntelligence),
+      accessRequests: (store.accessRequests ?? []).filter((entry) => entry.companyId === requestedCompanyId).map(rowToAccessRequest)
+    };
+  }
+
+  const connectorCount = await pgQuery('SELECT COUNT(*)::int AS count FROM enterprise_connectors WHERE company_id = $1;', [requestedCompanyId]);
+  if (Number(connectorCount.rows[0]?.count ?? 0) === 0) {
+    const seeded = enterpriseSeed(requestedCompanyId, user?.id);
+    for (const connector of seeded.connectors) await saveEnterpriseConnector(connector);
+    for (const schedule of seeded.schedules) await savePipelineSchedule(schedule);
+    for (const insight of seeded.intelligence) await saveWorkflowIntelligence(insight);
+  }
+
+  const [connectors, syncLogs, schedules, intelligence, accessRequests] = await Promise.all([
+    pgQuery('SELECT * FROM enterprise_connectors WHERE company_id = $1 ORDER BY updated_at DESC;', [requestedCompanyId]),
+    pgQuery('SELECT * FROM connector_sync_logs WHERE company_id = $1 ORDER BY created_at DESC LIMIT 50;', [requestedCompanyId]),
+    pgQuery('SELECT * FROM pipeline_schedules WHERE company_id = $1 ORDER BY next_run_at NULLS LAST, updated_at DESC;', [requestedCompanyId]),
+    pgQuery('SELECT * FROM workflow_intelligence WHERE company_id = $1 ORDER BY created_at DESC LIMIT 50;', [requestedCompanyId]),
+    pgQuery('SELECT * FROM access_requests WHERE company_id = $1 ORDER BY created_at DESC LIMIT 50;', [requestedCompanyId])
+  ]);
+  return {
+    connectors: connectors.rows.map(rowToEnterpriseConnector),
+    syncLogs: syncLogs.rows.map(rowToConnectorSyncLog),
+    schedules: schedules.rows.map(rowToPipelineSchedule),
+    intelligence: intelligence.rows.map(rowToWorkflowIntelligence),
+    accessRequests: accessRequests.rows.map(rowToAccessRequest)
+  };
+}
+
+export async function saveEnterpriseConnector(connector) {
+  const saved = {
+    id: connector.id,
+    companyId: connector.companyId ?? defaultCompanyId,
+    userId: connector.userId,
+    name: String(connector.name || '').trim(),
+    connectorType: String(connector.connectorType || connector.connector_type || '').trim(),
+    status: connector.status ?? 'ready',
+    healthStatus: connector.healthStatus ?? connector.health_status ?? 'healthy',
+    permissions: connector.permissions ?? {},
+    schedule: connector.schedule ?? {},
+    encryptedCredentials: connector.encryptedCredentials ?? connector.encrypted_credentials ?? null,
+    metadata: connector.metadata ?? {},
+    lastSyncAt: connector.lastSyncAt ?? null,
+    nextSyncAt: connector.nextSyncAt ?? null,
+    createdAt: connector.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.enterpriseConnectors = [saved, ...(store.enterpriseConnectors ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToEnterpriseConnector(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO enterprise_connectors (id, company_id, user_id, name, connector_type, status, health_status, permissions, schedule, encrypted_credentials, metadata, last_sync_at, next_sync_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       status = EXCLUDED.status,
+       health_status = EXCLUDED.health_status,
+       permissions = EXCLUDED.permissions,
+       schedule = EXCLUDED.schedule,
+       encrypted_credentials = COALESCE(EXCLUDED.encrypted_credentials, enterprise_connectors.encrypted_credentials),
+       metadata = EXCLUDED.metadata,
+       last_sync_at = EXCLUDED.last_sync_at,
+       next_sync_at = EXCLUDED.next_sync_at,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.userId, saved.name, saved.connectorType, saved.status, saved.healthStatus, JSON.stringify(saved.permissions), JSON.stringify(saved.schedule), saved.encryptedCredentials, JSON.stringify(saved.metadata), saved.lastSyncAt, saved.nextSyncAt]
+  );
+  return rowToEnterpriseConnector(result.rows[0]);
+}
+
+export async function saveConnectorSyncLog(log) {
+  const saved = {
+    id: log.id,
+    connectorId: log.connectorId,
+    companyId: log.companyId ?? defaultCompanyId,
+    status: log.status ?? 'completed',
+    recordsProcessed: Number(log.recordsProcessed ?? 0),
+    failedRows: Number(log.failedRows ?? 0),
+    retries: Number(log.retries ?? 0),
+    durationMs: Number(log.durationMs ?? 0),
+    error: log.error ?? null,
+    metadata: log.metadata ?? {},
+    startedAt: log.startedAt ?? new Date().toISOString(),
+    completedAt: log.completedAt ?? new Date().toISOString(),
+    createdAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.connectorSyncLogs = [saved, ...(store.connectorSyncLogs ?? [])].slice(0, 500);
+    store.enterpriseConnectors = (store.enterpriseConnectors ?? []).map((connector) => connector.id === saved.connectorId ? {
+      ...connector,
+      status: saved.status === 'failed' ? 'failed' : 'ready',
+      healthStatus: saved.status === 'failed' ? 'degraded' : 'healthy',
+      lastSyncAt: saved.completedAt,
+      updatedAt: new Date().toISOString()
+    } : connector);
+    await saveDevStore(store);
+    return rowToConnectorSyncLog(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO connector_sync_logs (id, connector_id, company_id, status, records_processed, failed_rows, retries, duration_ms, error, metadata, started_at, completed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     RETURNING *;`,
+    [saved.id, saved.connectorId, saved.companyId, saved.status, saved.recordsProcessed, saved.failedRows, saved.retries, saved.durationMs, saved.error, JSON.stringify(saved.metadata), saved.startedAt, saved.completedAt]
+  );
+  await pgQuery(
+    `UPDATE enterprise_connectors
+        SET status = $2, health_status = $3, last_sync_at = $4, updated_at = NOW()
+      WHERE id = $1 AND company_id = $5;`,
+    [saved.connectorId, saved.status === 'failed' ? 'failed' : 'ready', saved.status === 'failed' ? 'degraded' : 'healthy', saved.completedAt, saved.companyId]
+  );
+  return rowToConnectorSyncLog(result.rows[0]);
+}
+
+export async function savePipelineSchedule(schedule) {
+  const saved = {
+    id: schedule.id,
+    companyId: schedule.companyId ?? defaultCompanyId,
+    pipelineId: schedule.pipelineId ?? null,
+    name: String(schedule.name || '').trim(),
+    scheduleType: schedule.scheduleType ?? 'cron',
+    cronExpression: schedule.cronExpression ?? '',
+    eventTrigger: schedule.eventTrigger ?? '',
+    priority: Number(schedule.priority ?? 5),
+    slaMinutes: Number(schedule.slaMinutes ?? 60),
+    retryPolicy: schedule.retryPolicy ?? {},
+    dependencies: schedule.dependencies ?? [],
+    status: schedule.status ?? 'queued',
+    nextRunAt: schedule.nextRunAt ?? null,
+    lastRunAt: schedule.lastRunAt ?? null,
+    metadata: schedule.metadata ?? {},
+    createdBy: schedule.createdBy ?? null,
+    createdAt: schedule.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.pipelineSchedules = [saved, ...(store.pipelineSchedules ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToPipelineSchedule(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO pipeline_schedules (id, company_id, pipeline_id, name, schedule_type, cron_expression, event_trigger, priority, sla_minutes, retry_policy, dependencies, status, next_run_at, last_run_at, metadata, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)
+     ON CONFLICT (id) DO UPDATE SET
+       name = EXCLUDED.name,
+       schedule_type = EXCLUDED.schedule_type,
+       cron_expression = EXCLUDED.cron_expression,
+       event_trigger = EXCLUDED.event_trigger,
+       priority = EXCLUDED.priority,
+       sla_minutes = EXCLUDED.sla_minutes,
+       retry_policy = EXCLUDED.retry_policy,
+       dependencies = EXCLUDED.dependencies,
+       status = EXCLUDED.status,
+       next_run_at = EXCLUDED.next_run_at,
+       last_run_at = EXCLUDED.last_run_at,
+       metadata = EXCLUDED.metadata,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.pipelineId, saved.name, saved.scheduleType, saved.cronExpression, saved.eventTrigger, saved.priority, saved.slaMinutes, JSON.stringify(saved.retryPolicy), JSON.stringify(saved.dependencies), saved.status, saved.nextRunAt, saved.lastRunAt, JSON.stringify(saved.metadata), saved.createdBy]
+  );
+  return rowToPipelineSchedule(result.rows[0]);
+}
+
+export async function saveWorkflowIntelligence(insight) {
+  const saved = {
+    id: insight.id,
+    companyId: insight.companyId ?? defaultCompanyId,
+    datasetId: insight.datasetId ?? null,
+    module: insight.module ?? 'operations',
+    insightType: insight.insightType ?? 'workflow_recommendation',
+    severity: insight.severity ?? 'info',
+    title: String(insight.title || '').trim(),
+    summary: String(insight.summary || '').trim(),
+    confidence: Number(insight.confidence ?? 0),
+    recommendations: insight.recommendations ?? [],
+    explainability: insight.explainability ?? {},
+    status: insight.status ?? 'active',
+    createdBy: insight.createdBy ?? null,
+    createdAt: insight.createdAt ?? new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.workflowIntelligence = [saved, ...(store.workflowIntelligence ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToWorkflowIntelligence(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO workflow_intelligence (id, company_id, dataset_id, module, insight_type, severity, title, summary, confidence, recommendations, explainability, status, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (id) DO UPDATE SET
+       severity = EXCLUDED.severity,
+       title = EXCLUDED.title,
+       summary = EXCLUDED.summary,
+       confidence = EXCLUDED.confidence,
+       recommendations = EXCLUDED.recommendations,
+       explainability = EXCLUDED.explainability,
+       status = EXCLUDED.status
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.datasetId, saved.module, saved.insightType, saved.severity, saved.title, saved.summary, saved.confidence, JSON.stringify(saved.recommendations), JSON.stringify(saved.explainability), saved.status, saved.createdBy]
+  );
+  return rowToWorkflowIntelligence(result.rows[0]);
+}
+
+export async function saveAccessRequest(request) {
+  const saved = {
+    id: request.id,
+    companyId: request.companyId ?? defaultCompanyId,
+    requesterUserId: request.requesterUserId,
+    targetUserId: request.targetUserId ?? null,
+    department: request.department ?? '',
+    requestedRole: normalizeRole(request.requestedRole),
+    reason: String(request.reason || '').trim(),
+    status: request.status ?? 'pending',
+    expiresAt: request.expiresAt ?? null,
+    approvedBy: request.approvedBy ?? null,
+    approvedAt: request.approvedAt ?? null,
+    metadata: request.metadata ?? {},
+    createdAt: request.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.accessRequests = [saved, ...(store.accessRequests ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToAccessRequest(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO access_requests (id, company_id, requester_user_id, target_user_id, department, requested_role, reason, status, expires_at, approved_by, approved_at, metadata)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     ON CONFLICT (id) DO UPDATE SET
+       status = EXCLUDED.status,
+       expires_at = EXCLUDED.expires_at,
+       approved_by = EXCLUDED.approved_by,
+       approved_at = EXCLUDED.approved_at,
+       metadata = EXCLUDED.metadata,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.requesterUserId, saved.targetUserId, saved.department, saved.requestedRole, saved.reason, saved.status, saved.expiresAt, saved.approvedBy, saved.approvedAt, JSON.stringify(saved.metadata)]
+  );
+  return rowToAccessRequest(result.rows[0]);
+}
+
 export async function createModuleRecord(record) {
   const saved = {
     ...record,
@@ -2393,6 +2912,105 @@ function rowToPipeline(row) {
   };
 }
 
+function rowToEnterpriseConnector(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    userId: row.user_id ?? row.userId,
+    name: row.name,
+    connectorType: row.connector_type ?? row.connectorType,
+    status: row.status ?? 'not_configured',
+    healthStatus: row.health_status ?? row.healthStatus ?? 'unknown',
+    permissions: parseJson(row.permissions, {}),
+    schedule: parseJson(row.schedule, {}),
+    metadata: parseJson(row.metadata, {}),
+    credentialEncrypted: Boolean(row.encrypted_credentials ?? row.encryptedCredentials),
+    lastSyncAt: toIso(row.last_sync_at ?? row.lastSyncAt),
+    nextSyncAt: toIso(row.next_sync_at ?? row.nextSyncAt),
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
+function rowToConnectorSyncLog(row) {
+  return {
+    id: row.id,
+    connectorId: row.connector_id ?? row.connectorId,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    status: row.status,
+    recordsProcessed: row.records_processed ?? row.recordsProcessed ?? 0,
+    failedRows: row.failed_rows ?? row.failedRows ?? 0,
+    retries: row.retries ?? 0,
+    durationMs: row.duration_ms ?? row.durationMs ?? 0,
+    error: row.error,
+    metadata: parseJson(row.metadata, {}),
+    startedAt: toIso(row.started_at ?? row.startedAt),
+    completedAt: toIso(row.completed_at ?? row.completedAt),
+    createdAt: toIso(row.created_at ?? row.createdAt)
+  };
+}
+
+function rowToPipelineSchedule(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    pipelineId: row.pipeline_id ?? row.pipelineId,
+    name: row.name,
+    scheduleType: row.schedule_type ?? row.scheduleType,
+    cronExpression: row.cron_expression ?? row.cronExpression,
+    eventTrigger: row.event_trigger ?? row.eventTrigger,
+    priority: row.priority ?? 5,
+    slaMinutes: row.sla_minutes ?? row.slaMinutes ?? 60,
+    retryPolicy: parseJson(row.retry_policy ?? row.retryPolicy, {}),
+    dependencies: parseJson(row.dependencies, []),
+    status: row.status,
+    nextRunAt: toIso(row.next_run_at ?? row.nextRunAt),
+    lastRunAt: toIso(row.last_run_at ?? row.lastRunAt),
+    metadata: parseJson(row.metadata, {}),
+    createdBy: row.created_by ?? row.createdBy,
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
+function rowToWorkflowIntelligence(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    datasetId: row.dataset_id ?? row.datasetId,
+    module: row.module,
+    insightType: row.insight_type ?? row.insightType,
+    severity: row.severity,
+    title: row.title,
+    summary: row.summary,
+    confidence: Number(row.confidence ?? 0),
+    recommendations: parseJson(row.recommendations, []),
+    explainability: parseJson(row.explainability, {}),
+    status: row.status,
+    createdBy: row.created_by ?? row.createdBy,
+    createdAt: toIso(row.created_at ?? row.createdAt)
+  };
+}
+
+function rowToAccessRequest(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    requesterUserId: row.requester_user_id ?? row.requesterUserId,
+    targetUserId: row.target_user_id ?? row.targetUserId,
+    department: row.department,
+    requestedRole: normalizeRole(row.requested_role ?? row.requestedRole),
+    reason: row.reason,
+    status: row.status,
+    expiresAt: toIso(row.expires_at ?? row.expiresAt),
+    approvedBy: row.approved_by ?? row.approvedBy,
+    approvedAt: toIso(row.approved_at ?? row.approvedAt),
+    metadata: parseJson(row.metadata, {}),
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
 function rowToUser(row, includePassword = false) {
   const email = row.email?.toLowerCase();
   return {
@@ -2615,6 +3233,11 @@ async function loadDevStore() {
       notifications: [],
       analytics: [],
       pipelines: [],
+      enterpriseConnectors: [],
+      connectorSyncLogs: [],
+      pipelineSchedules: [],
+      workflowIntelligence: [],
+      accessRequests: [],
       userCompanyAssignments: []
     };
   }
@@ -2636,6 +3259,11 @@ async function loadDevStore() {
     notifications: store.notifications ?? [],
     analytics: store.analytics ?? [],
     pipelines: store.pipelines ?? [],
+    enterpriseConnectors: store.enterpriseConnectors ?? [],
+    connectorSyncLogs: store.connectorSyncLogs ?? [],
+    pipelineSchedules: store.pipelineSchedules ?? [],
+    workflowIntelligence: store.workflowIntelligence ?? [],
+    accessRequests: store.accessRequests ?? [],
     userCompanyAssignments: store.userCompanyAssignments ?? []
   };
 }

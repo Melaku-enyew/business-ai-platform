@@ -229,6 +229,86 @@ type NotificationItem = {
   createdAt: string;
 };
 
+type EnterpriseConnector = {
+  id: string;
+  companyId?: string;
+  name: string;
+  connectorType: string;
+  status: string;
+  healthStatus: string;
+  schedule?: Record<string, string | boolean | number>;
+  metadata?: Record<string, string | boolean | number>;
+  credentialEncrypted?: boolean;
+  lastSyncAt?: string | null;
+  nextSyncAt?: string | null;
+  updatedAt?: string;
+};
+
+type ConnectorSyncLog = {
+  id: string;
+  connectorId: string;
+  companyId?: string;
+  status: string;
+  recordsProcessed: number;
+  failedRows: number;
+  retries: number;
+  durationMs: number;
+  error?: string;
+  createdAt: string;
+};
+
+type PipelineSchedule = {
+  id: string;
+  companyId?: string;
+  name: string;
+  scheduleType: string;
+  cronExpression?: string;
+  eventTrigger?: string;
+  priority: number;
+  slaMinutes: number;
+  retryPolicy?: Record<string, string | number | boolean>;
+  dependencies?: string[];
+  status: string;
+  nextRunAt?: string | null;
+  lastRunAt?: string | null;
+  metadata?: Record<string, string | number | boolean>;
+};
+
+type WorkflowInsight = {
+  id: string;
+  companyId?: string;
+  datasetId?: string | null;
+  module: string;
+  insightType: string;
+  severity: string;
+  title: string;
+  summary: string;
+  confidence: number;
+  recommendations: string[];
+  explainability?: Record<string, unknown>;
+  status: string;
+  createdAt: string;
+};
+
+type AccessRequest = {
+  id: string;
+  companyId?: string;
+  department?: string;
+  requestedRole: UserRole;
+  reason: string;
+  status: string;
+  expiresAt?: string | null;
+  createdAt: string;
+};
+
+type EnterpriseOperations = {
+  connectors: EnterpriseConnector[];
+  syncLogs: ConnectorSyncLog[];
+  schedules: PipelineSchedule[];
+  intelligence: WorkflowInsight[];
+  accessRequests: AccessRequest[];
+};
+
 type Company = {
   id: string;
   name: string;
@@ -468,6 +548,14 @@ const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
   }
 };
 
+const emptyEnterpriseOperations: EnterpriseOperations = {
+  connectors: [],
+  syncLogs: [],
+  schedules: [],
+  intelligence: [],
+  accessRequests: []
+};
+
 export function App() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -531,6 +619,9 @@ export function App() {
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
+  const [enterpriseOps, setEnterpriseOps] = useState<EnterpriseOperations>(emptyEnterpriseOperations);
+  const [enterpriseOpsMessage, setEnterpriseOpsMessage] = useState('Enterprise operations fabric ready.');
+  const [syncingConnectorId, setSyncingConnectorId] = useState('');
   const [companies, setCompanies] = useState<Company[]>(sampleCompanies);
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState('');
@@ -789,7 +880,8 @@ export function App() {
         datasetsResponse,
         dashboardsResponse,
         reportsResponse,
-        moduleMetricsResponse
+        moduleMetricsResponse,
+        enterpriseOpsResponse
       ] = await Promise.all([
         apiFetch('/api/auth/me'),
         apiFetch('/api/insights'),
@@ -797,7 +889,8 @@ export function App() {
         apiFetch('/api/datasets'),
         apiFetch('/api/dashboards'),
         apiFetch('/api/reports'),
-        apiFetch('/api/modules/metrics')
+        apiFetch('/api/modules/metrics'),
+        apiFetch('/api/enterprise-operations')
       ]);
 
       const mePayload = await readJson<{ user: User }>(meResponse);
@@ -807,6 +900,7 @@ export function App() {
       const dashboardsPayload = await readJson<{ dashboards: SavedDashboard[] }>(dashboardsResponse);
       const reportsPayload = await readJson<{ reports: ReportHistoryItem[] }>(reportsResponse);
       const moduleMetricsPayload = await readJson<{ metrics: ModuleMetrics }>(moduleMetricsResponse);
+      const enterpriseOpsPayload = await readJson<EnterpriseOperations>(enterpriseOpsResponse);
 
       const savedDatasets = datasetsPayload.datasets ?? [];
       const savedDashboards = dashboardsPayload.dashboards ?? [];
@@ -823,6 +917,7 @@ export function App() {
       setDashboards(savedDashboards);
       setReports(reportsPayload.reports ?? []);
       setModuleMetrics(moduleMetricsPayload.metrics ?? {});
+      setEnterpriseOps(enterpriseOpsPayload ?? emptyEnterpriseOperations);
       setStatus('Live');
       void loadCompanies();
 
@@ -848,6 +943,7 @@ export function App() {
     setDashboards([]);
     setReports([]);
     setNotifications([]);
+    setEnterpriseOps(emptyEnterpriseOperations);
     setAdminUsers([]);
     setCurrentView('dashboard');
     setAccountOpen(false);
@@ -1044,6 +1140,11 @@ export function App() {
     () => companyDatasets.reduce((total, dataset) => total + (dataset.cleanupMetrics?.failedRows ?? 0), 0),
     [companyDatasets]
   );
+  const connectorHealth = useMemo(() => {
+    const total = enterpriseOps.connectors.length;
+    const healthy = enterpriseOps.connectors.filter((connector) => ['healthy', 'ready'].includes(connector.healthStatus) || connector.status === 'ready').length;
+    return { total, healthy, failed: enterpriseOps.connectors.filter((connector) => connector.status === 'failed').length };
+  }, [enterpriseOps.connectors]);
 
   async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string) {
     const targetCompanyId = companyIdOverride || selectedCompanyId;
@@ -1290,6 +1391,85 @@ export function App() {
         : current.map((entry) => entry.id === notification.id ? payload.notification as NotificationItem : entry));
     } catch (error) {
       setPersistenceState(error instanceof Error ? error.message : 'Notification update failed.');
+    }
+  }
+
+  async function syncEnterpriseConnector(connector: EnterpriseConnector) {
+    if (!selectedCompanyId) return;
+    setSyncingConnectorId(connector.id);
+    setEnterpriseOpsMessage(`Syncing ${connector.name}...`);
+    try {
+      const response = await apiFetch(`/api/connectors/${connector.id}/sync`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ companyId: selectedCompanyId, recordsProcessed: Math.max(companyDatasets.length * 125, 250) })
+      });
+      const payload = await readJson<{ syncLog?: ConnectorSyncLog; error?: string }>(response);
+      if (!response.ok || !payload.syncLog) throw new Error(payload.error || 'Connector sync failed.');
+      setEnterpriseOps((current) => ({
+        ...current,
+        syncLogs: [payload.syncLog as ConnectorSyncLog, ...current.syncLogs],
+        connectors: current.connectors.map((entry) => entry.id === connector.id ? {
+          ...entry,
+          status: payload.syncLog?.status === 'failed' ? 'failed' : 'ready',
+          healthStatus: payload.syncLog?.status === 'failed' ? 'degraded' : 'healthy',
+          lastSyncAt: payload.syncLog?.createdAt ?? new Date().toISOString()
+        } : entry)
+      }));
+      setEnterpriseOpsMessage(`${connector.name} sync completed. ${payload.syncLog.recordsProcessed.toLocaleString()} records processed.`);
+    } catch (error) {
+      setEnterpriseOpsMessage(error instanceof Error ? error.message : 'Connector sync failed.');
+    } finally {
+      setSyncingConnectorId('');
+    }
+  }
+
+  async function createNightlySchedule() {
+    if (!selectedCompanyId) return;
+    try {
+      const response = await apiFetch('/api/pipeline-schedules', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: selectedCompanyId,
+          name: 'Nightly data operations run',
+          scheduleType: 'cron',
+          cronExpression: '0 2 * * *',
+          priority: 2,
+          slaMinutes: 60,
+          retryPolicy: { attempts: 3, backoffMinutes: 15 },
+          dependencies: ['connector:ready', 'approval:not_required'],
+          metadata: { module: currentView, eventDriven: false }
+        })
+      });
+      const payload = await readJson<{ schedule?: PipelineSchedule; error?: string }>(response);
+      if (!response.ok || !payload.schedule) throw new Error(payload.error || 'Schedule could not be created.');
+      setEnterpriseOps((current) => ({ ...current, schedules: [payload.schedule as PipelineSchedule, ...current.schedules] }));
+      setEnterpriseOpsMessage('Nightly operations schedule created with retry and SLA tracking.');
+    } catch (error) {
+      setEnterpriseOpsMessage(error instanceof Error ? error.message : 'Schedule could not be created.');
+    }
+  }
+
+  async function requestWorkflowAccess() {
+    if (!selectedCompanyId) return;
+    try {
+      const response = await apiFetch('/api/access-requests', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          companyId: selectedCompanyId,
+          department: currentView,
+          requestedRole: 'manager',
+          reason: 'Temporary access requested for enterprise workflow operations.'
+        })
+      });
+      const payload = await readJson<{ accessRequest?: AccessRequest; error?: string }>(response);
+      if (!response.ok || !payload.accessRequest) throw new Error(payload.error || 'Access request failed.');
+      setEnterpriseOps((current) => ({ ...current, accessRequests: [payload.accessRequest as AccessRequest, ...current.accessRequests] }));
+      setEnterpriseOpsMessage('Access request routed for approval.');
+    } catch (error) {
+      setEnterpriseOpsMessage(error instanceof Error ? error.message : 'Access request failed.');
     }
   }
 
@@ -1717,27 +1897,37 @@ export function App() {
 
     try {
       const query = buildCompanyQuery(companyId);
-      const [datasetsResponse, dashboardsResponse, reportsResponse, notificationsResponse] = await Promise.all([
+      const [datasetsResponse, dashboardsResponse, reportsResponse, notificationsResponse, enterpriseOpsResponse] = await Promise.all([
         apiFetch(`/api/datasets${query}`),
         apiFetch(`/api/dashboards${query}`),
         apiFetch(`/api/reports${query}`),
-        apiFetch(`/api/notifications${query}`)
+        apiFetch(`/api/notifications${query}`),
+        apiFetch(`/api/enterprise-operations${query}`)
       ]);
       const datasetsPayload = await readJson<{ datasets?: Dataset[]; error?: string }>(datasetsResponse);
       const dashboardsPayload = await readJson<{ dashboards?: SavedDashboard[]; error?: string }>(dashboardsResponse);
       const reportsPayload = await readJson<{ reports?: ReportHistoryItem[]; error?: string }>(reportsResponse);
       const notificationsPayload = await readJson<{ notifications?: NotificationItem[]; error?: string }>(notificationsResponse);
+      const enterpriseOpsPayload = await readJson<EnterpriseOperations & { error?: string }>(enterpriseOpsResponse);
 
       if (!datasetsResponse.ok) throw new Error(datasetsPayload.error || 'Could not load company datasets.');
       if (!dashboardsResponse.ok) throw new Error(dashboardsPayload.error || 'Could not load company dashboards.');
       if (!reportsResponse.ok) throw new Error(reportsPayload.error || 'Could not load company reports.');
       if (!notificationsResponse.ok) throw new Error(notificationsPayload.error || 'Could not load notifications.');
+      if (!enterpriseOpsResponse.ok) throw new Error(enterpriseOpsPayload.error || 'Could not load enterprise operations.');
 
       const nextDatasets = datasetsPayload.datasets ?? [];
       setDatasets(nextDatasets);
       setDashboards(dashboardsPayload.dashboards ?? []);
       setReports(reportsPayload.reports ?? []);
       setNotifications(notificationsPayload.notifications ?? []);
+      setEnterpriseOps({
+        connectors: enterpriseOpsPayload.connectors ?? [],
+        syncLogs: enterpriseOpsPayload.syncLogs ?? [],
+        schedules: enterpriseOpsPayload.schedules ?? [],
+        intelligence: enterpriseOpsPayload.intelligence ?? [],
+        accessRequests: enterpriseOpsPayload.accessRequests ?? []
+      });
       setActiveDataset((current) => current?.companyId === companyId ? current : nextDatasets[0] ?? null);
       setPersistenceState(nextDatasets.length ? 'Company workspace data loaded.' : 'No datasets uploaded for this company yet.');
     } catch (error) {
@@ -2670,6 +2860,16 @@ export function App() {
                   <strong>{datasetHealthScore}%</strong>
                   <small>{failedRecordCount.toLocaleString()} failed records isolated</small>
                 </button>
+                <button type="button" onClick={createNightlySchedule}>
+                  <span>Enterprise scheduling</span>
+                  <strong>{enterpriseOps.schedules.length}</strong>
+                  <small>Nightly, hourly, event, SLA, and retry orchestration</small>
+                </button>
+                <button type="button" onClick={requestWorkflowAccess}>
+                  <span>Access governance</span>
+                  <strong>{enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length}</strong>
+                  <small>Approval routing, temporary access, and security logs</small>
+                </button>
               </div>
               <div className="approval-queue">
                 <div>
@@ -2684,6 +2884,97 @@ export function App() {
                   <strong>Notifications</strong>
                   <span>{notifications.filter((notification) => notification.status !== 'read').length} unread alerts</span>
                 </div>
+                <div>
+                  <strong>Connector health</strong>
+                  <span>{connectorHealth.healthy}/{connectorHealth.total} healthy, {connectorHealth.failed} failed</span>
+                </div>
+              </div>
+              <p className="persistence-note">{enterpriseOpsMessage}</p>
+              <div className="enterprise-ops-grid">
+                <article>
+                  <div className="panel-header compact-header">
+                    <div>
+                      <p className="eyebrow">Enterprise connectors</p>
+                      <h3>Automatic data ingestion</h3>
+                    </div>
+                    <span className="status-pill active">{connectorHealth.total} sources</span>
+                  </div>
+                  <div className="connector-list">
+                    {enterpriseOps.connectors.slice(0, 12).map((connector) => (
+                      <div className="connector-row" key={connector.id}>
+                        <div>
+                          <strong>{connector.name}</strong>
+                          <span>{connector.connectorType.replaceAll('_', ' ')} | {connector.credentialEncrypted ? 'encrypted credentials' : 'credential setup pending'}</span>
+                          <small>Last sync: {connector.lastSyncAt ? new Date(connector.lastSyncAt).toLocaleString() : 'Not synced'} | Next: {connector.nextSyncAt ? new Date(connector.nextSyncAt).toLocaleString() : 'Unscheduled'}</small>
+                        </div>
+                        <div>
+                          <span className={`status-pill ${connector.healthStatus === 'healthy' ? 'active' : 'disabled'}`}>{connector.healthStatus}</span>
+                          <button className="ghost-button compact" type="button" disabled={syncingConnectorId === connector.id} onClick={() => syncEnterpriseConnector(connector)}>
+                            {syncingConnectorId === connector.id ? 'Syncing' : 'Sync'}
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+                <article>
+                  <div className="panel-header compact-header">
+                    <div>
+                      <p className="eyebrow">Workflow intelligence</p>
+                      <h3>AI operations layer</h3>
+                    </div>
+                    <span className="status-pill active">{enterpriseOps.intelligence.length} insights</span>
+                  </div>
+                  <div className="insight-list">
+                    {enterpriseOps.intelligence.slice(0, 5).map((insight) => (
+                      <div className="insight-row" key={insight.id}>
+                        <div>
+                          <strong>{insight.title}</strong>
+                          <span>{insight.summary}</span>
+                        </div>
+                        <small>{Math.round(insight.confidence * 100)}% confidence | {insight.module}</small>
+                      </div>
+                    ))}
+                    {!enterpriseOps.intelligence.length && <p className="muted">AI recommendations, anomaly scoring, fraud detection, and risk forecasting will appear here.</p>}
+                  </div>
+                </article>
+                <article>
+                  <div className="panel-header compact-header">
+                    <div>
+                      <p className="eyebrow">Scheduled pipelines</p>
+                      <h3>Orchestration engine</h3>
+                    </div>
+                    <button className="ghost-button compact" type="button" onClick={createNightlySchedule}>Add nightly</button>
+                  </div>
+                  <div className="schedule-list">
+                    {enterpriseOps.schedules.slice(0, 5).map((schedule) => (
+                      <div className="schedule-row" key={schedule.id}>
+                        <strong>{schedule.name}</strong>
+                        <span>{schedule.scheduleType} {schedule.cronExpression || schedule.eventTrigger || 'manual'} | SLA {schedule.slaMinutes}m | priority {schedule.priority}</span>
+                        <small>{schedule.status} | next run {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : 'not scheduled'}</small>
+                      </div>
+                    ))}
+                  </div>
+                </article>
+                <article>
+                  <div className="panel-header compact-header">
+                    <div>
+                      <p className="eyebrow">Sync logs</p>
+                      <h3>Connector observability</h3>
+                    </div>
+                    <span className="status-pill active">{enterpriseOps.syncLogs.length} events</span>
+                  </div>
+                  <div className="sync-log-list">
+                    {enterpriseOps.syncLogs.slice(0, 6).map((log) => (
+                      <div className="sync-log-row" key={log.id}>
+                        <strong>{log.status}</strong>
+                        <span>{log.recordsProcessed.toLocaleString()} processed | {log.failedRows.toLocaleString()} failed | {log.retries} retries</span>
+                        <small>{(log.durationMs / 1000).toFixed(1)}s | {new Date(log.createdAt).toLocaleString()}</small>
+                      </div>
+                    ))}
+                    {!enterpriseOps.syncLogs.length && <p className="muted">Sync duration, failed rows, retry attempts, and incremental sync logs will appear here.</p>}
+                  </div>
+                </article>
               </div>
             </section>
             <section className="metrics-grid" aria-label="Performance metrics">
