@@ -51,6 +51,8 @@ import {
   listModuleRecords,
   listNotifications,
   listPipelines,
+  listPipelineRules,
+  listPipelineStageRuns,
   listReports,
   listSessions,
   listUserCompanyAssignments,
@@ -75,6 +77,8 @@ import {
   savePipeline,
   saveReport,
   saveAuditLog,
+  savePipelineRule,
+  savePipelineStageRun,
   revokeSession,
   revokeUserSessions,
   roles,
@@ -194,9 +198,7 @@ function parseJsonDataset(text) {
   try {
     payload = JSON.parse(text);
   } catch {
-    const error = new Error('Upload a valid JSON file.');
-    error.statusCode = 400;
-    throw error;
+    throw uploadError('Parser failure: upload a valid JSON file.', 'UPLOAD_PARSER_FAILURE', 'json_parser');
   }
 
   const records = Array.isArray(payload)
@@ -208,9 +210,7 @@ function parseJsonDataset(text) {
         : [];
 
   if (!records.length || records.some((record) => record == null || typeof record !== 'object' || Array.isArray(record))) {
-    const error = new Error('JSON uploads must contain an array of objects.');
-    error.statusCode = 400;
-    throw error;
+    throw uploadError('Invalid schema: JSON uploads must contain an array of objects.', 'UPLOAD_INVALID_SCHEMA', 'json_schema');
   }
 
   const columns = [...new Set(records.flatMap((record) => Object.keys(record)))];
@@ -255,6 +255,32 @@ function getFileExtension(fileName) {
   return String(fileName || '').split('.').pop()?.toLowerCase() || '';
 }
 
+function uploadError(message, code, stage, statusCode = 400, details = {}) {
+  const error = new Error(message);
+  error.code = code;
+  error.uploadStage = stage;
+  error.statusCode = statusCode;
+  error.details = details;
+  return error;
+}
+
+function logUploadStage(req, stage, details = {}) {
+  console.info('[Metenova Upload]', {
+    requestId: req.requestId,
+    user: req.user?.email,
+    company: details.companyId ?? req.body?.companyId ?? req.user?.companyId,
+    module: req.body?.module ?? details.module,
+    filename: req.file?.originalname,
+    mimeType: req.file?.mimetype,
+    uploadStage: stage,
+    parserStage: details.parserStage,
+    workflowStage: details.workflowStage,
+    validationResult: details.validationResult,
+    retryCount: details.retryCount ?? req.headers['x-retry-count'] ?? 0,
+    ...details
+  });
+}
+
 function validateUploadMetadata(file) {
   const extension = getFileExtension(file.originalname);
   const allowedExtensions = ['csv', 'xlsx', 'xls', 'json'];
@@ -262,14 +288,19 @@ function validateUploadMetadata(file) {
     'text/csv',
     'application/csv',
     'application/json',
+    'text/json',
     'application/vnd.ms-excel',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     'application/octet-stream'
   ]);
   if (!allowedExtensions.includes(extension) || (file.mimetype && !allowedMimeTypes.has(file.mimetype))) {
-    const error = new Error('Upload a supported CSV, XLSX, XLS, or JSON file.');
-    error.statusCode = 400;
-    throw error;
+    throw uploadError(
+      `Invalid MIME or extension. Received ${file.mimetype || 'unknown MIME'} for .${extension || 'unknown'}; upload CSV, XLS, XLSX, or JSON.`,
+      'UPLOAD_INVALID_MIME',
+      'mime_validation',
+      400,
+      { extension, mimeType: file.mimetype }
+    );
   }
 }
 
@@ -277,13 +308,16 @@ function parseUploadedFile(file, requestedWorksheetName) {
   const extension = getFileExtension(file.originalname);
 
   if (!['csv', 'xlsx', 'xls', 'json'].includes(extension)) {
-    const error = new Error('Upload a .csv, .xlsx, .xls, or .json file.');
-    error.statusCode = 400;
-    throw error;
+    throw uploadError('Unsupported file extension. Upload CSV, XLS, XLSX, or JSON.', 'UPLOAD_INVALID_MIME', 'extension_validation');
   }
 
   if (extension === 'csv') {
-    const parsed = parseCsv(file.buffer.toString('utf8'));
+    let parsed;
+    try {
+      parsed = parseCsv(file.buffer.toString('utf8'));
+    } catch (error) {
+      throw uploadError(error instanceof Error ? error.message : 'CSV parser failure.', 'UPLOAD_PARSER_FAILURE', 'csv_parser', 400);
+    }
     return {
       ...parsed,
       fileType: 'csv',
@@ -293,7 +327,13 @@ function parseUploadedFile(file, requestedWorksheetName) {
   }
 
   if (extension === 'json') {
-    const parsed = parseJsonDataset(file.buffer.toString('utf8'));
+    let parsed;
+    try {
+      parsed = parseJsonDataset(file.buffer.toString('utf8'));
+    } catch (error) {
+      if (error.statusCode) throw error;
+      throw uploadError(error instanceof Error ? error.message : 'JSON parser failure.', 'UPLOAD_PARSER_FAILURE', 'json_parser', 400);
+    }
     return {
       ...parsed,
       fileType: 'json',
@@ -302,17 +342,20 @@ function parseUploadedFile(file, requestedWorksheetName) {
     };
   }
 
-  const workbook = XLSX.read(file.buffer, {
-    type: 'buffer',
-    cellDates: true,
-    sheetRows: maxSpreadsheetRows + 1
-  });
+  let workbook;
+  try {
+    workbook = XLSX.read(file.buffer, {
+      type: 'buffer',
+      cellDates: true,
+      sheetRows: maxSpreadsheetRows + 1
+    });
+  } catch (error) {
+    throw uploadError(error instanceof Error ? error.message : 'Spreadsheet parser failure.', 'UPLOAD_PARSER_FAILURE', 'xlsx_parser', 400);
+  }
   const worksheets = workbook.SheetNames ?? [];
 
   if (!worksheets.length) {
-    const error = new Error('This workbook does not contain any worksheets.');
-    error.statusCode = 400;
-    throw error;
+    throw uploadError('This workbook does not contain any worksheets.', 'UPLOAD_INVALID_SCHEMA', 'xlsx_parser');
   }
 
   const worksheetName = worksheets.includes(requestedWorksheetName) ? requestedWorksheetName : worksheets[0];
@@ -421,6 +464,39 @@ function dashboardSnapshot(dataset, chartType) {
     insights: dataset.insights,
     numericSummary: dataset.numericSummary
   };
+}
+
+function validateModuleUpload(parsed, moduleName) {
+  const normalizedHeaders = new Set((parsed.columns ?? []).map((column) => String(column).trim().toLowerCase().replace(/\s+/g, '_')));
+  const hasAny = (names) => names.some((name) => normalizedHeaders.has(name));
+  if (moduleName === 'accounting') {
+    const missing = [];
+    if (!hasAny(['invoice_number', 'invoice', 'invoice_id'])) missing.push('invoice_number');
+    if (!hasAny(['vendor', 'vendor_name', 'supplier'])) missing.push('vendor');
+    if (!hasAny(['amount', 'invoice_amount', 'total'])) missing.push('amount');
+    return {
+      stage: 'Validate Invoices',
+      result: missing.length ? `warnings: missing ${missing.join(', ')}` : 'passed',
+      missing
+    };
+  }
+  if (moduleName === 'engineering') {
+    const missing = [];
+    if (!hasAny(['project_id', 'project', 'project_number'])) missing.push('project_id');
+    return {
+      stage: 'Validate Project Structure',
+      result: missing.length ? `warnings: missing ${missing.join(', ')}` : 'passed',
+      missing
+    };
+  }
+  if (moduleName === 'dataProcessing') {
+    return {
+      stage: 'Schema Validation',
+      result: parsed.columns?.length ? 'passed' : 'missing required columns',
+      missing: parsed.columns?.length ? [] : ['headers']
+    };
+  }
+  return { stage: 'Schema Validation', result: 'passed', missing: [] };
 }
 
 function reportLines(dataset) {
@@ -2048,6 +2124,51 @@ app.post('/api/pipeline-schedules', requireRole('manager'), requireDurableStorag
   }
 });
 
+app.get('/api/pipeline-stage-runs', async (req, res, next) => {
+  try {
+    const companyId = String(req.query.companyId || req.user.companyId || '').trim();
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ stageRuns: await listPipelineStageRuns(req.user, companyId, req.query.datasetId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/pipeline-rules', async (req, res, next) => {
+  try {
+    const companyId = String(req.query.companyId || req.user.companyId || '').trim();
+    if (!(await requireCompanyAccess(req, res, companyId))) return;
+    res.json({ rules: await listPipelineRules(req.user, companyId, req.query.module) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/pipeline-rules', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
+  try {
+    const companyId = String(req.body?.companyId || req.user.companyId || '').trim();
+    if (!companyId || !(await requireCompanyAccess(req, res, companyId))) return;
+    if (!canManageCompany(req.user, companyId)) {
+      res.status(403).json({ error: 'Insufficient rule configuration permissions.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+      return;
+    }
+    const rule = await savePipelineRule({
+      id: req.body?.id || randomUUID(),
+      companyId,
+      module: req.body?.module ?? 'dataProcessing',
+      ruleKey: req.body?.ruleKey ?? String(req.body?.label || 'workflow_rule').toLowerCase().replace(/\W+/g, '_'),
+      label: req.body?.label ?? 'Workflow rule',
+      config: req.body?.config ?? {},
+      enabled: req.body?.enabled !== false,
+      createdBy: req.user.id
+    });
+    await audit(req, 'pipeline_rule.saved', 'pipeline_rule', rule.id, { companyId, module: rule.module });
+    res.status(201).json({ rule });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post('/api/workflow-intelligence', requireRole('manager'), requireDurableStorage, async (req, res, next) => {
   try {
     const companyId = String(req.body?.companyId || req.user.companyId || '').trim();
@@ -2331,33 +2452,46 @@ app.get('/api/workflows', async (_req, res, next) => {
 });
 
 async function handleDatasetUpload(req, res) {
+  const startedAt = Date.now();
+  logUploadStage(req, 'request_received', { workflowStage: 'Upload' });
   if (!req.file) {
-    res.status(400).json({ error: 'A .csv, .xlsx, .xls, or .json file is required.' });
+    res.status(400).json({ error: 'A .csv, .xlsx, .xls, or .json file is required.', code: 'UPLOAD_FILE_MISSING', requestId: req.requestId, uploadStage: 'multipart_form_data' });
     return;
   }
+  logUploadStage(req, 'multipart_received', { fileSize: req.file.size });
   validateUploadMetadata(req.file);
+  logUploadStage(req, 'mime_validated', { validationResult: 'passed' });
 
   const requestedWorksheetName = String(req.body?.worksheetName || '').trim();
   const companyId = requestedCompanyId(req);
   if (!companyId) {
-    res.status(400).json({ error: 'Select a company before uploading a dataset.' });
+    logUploadStage(req, 'company_validation_failed', { validationResult: 'missing_company' });
+    res.status(400).json({ error: 'Unauthorized company: select a company before uploading a dataset.', code: 'UPLOAD_COMPANY_REQUIRED', requestId: req.requestId, uploadStage: 'company_assignment' });
     return;
   }
   if (!(await requireCompanyAccess(req, res, companyId))) {
+    logUploadStage(req, 'company_authorization_failed', { companyId, validationResult: 'forbidden' });
     return;
   }
   if (!(await companyExists(companyId))) {
-    res.status(400).json({ error: 'Selected company workspace was not found.' });
+    logUploadStage(req, 'company_validation_failed', { companyId, validationResult: 'not_found' });
+    res.status(400).json({ error: 'Unauthorized company: selected company workspace was not found.', code: 'UPLOAD_COMPANY_NOT_FOUND', requestId: req.requestId, uploadStage: 'company_assignment' });
     return;
   }
 
+  logUploadStage(req, 'parser_started', { companyId, parserStage: getFileExtension(req.file.originalname) });
   const parsed = parseUploadedFile(req.file, requestedWorksheetName);
+  logUploadStage(req, 'parser_completed', { companyId, parserStage: parsed.fileType, validationResult: `${parsed.records.length} rows` });
 
   if (!parsed.columns.length || !parsed.records.length) {
-    res.status(400).json({ error: 'The uploaded file does not contain tabular data with headers and rows.' });
+    logUploadStage(req, 'schema_validation_failed', { companyId, validationResult: 'missing_headers_or_rows' });
+    res.status(400).json({ error: 'Invalid schema: the uploaded file does not contain tabular data with headers and rows.', code: 'UPLOAD_INVALID_SCHEMA', requestId: req.requestId, uploadStage: 'schema_validation' });
     return;
   }
 
+  const moduleName = String(req.body?.module || '').trim();
+  const moduleValidation = validateModuleUpload(parsed, moduleName);
+  logUploadStage(req, 'module_workflow_initialized', { companyId, module: moduleName || 'general', workflowStage: moduleValidation.stage, validationResult: moduleValidation.result });
   const summary = summarizeCsv(parsed.columns, parsed.records);
   const dataset = {
     id: randomUUID(),
@@ -2384,7 +2518,12 @@ async function handleDatasetUpload(req, res) {
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
   };
-  await saveDataset(dataset);
+  try {
+    await saveDataset(dataset);
+  } catch (error) {
+    logUploadStage(req, 'database_persistence_failed', { companyId, stack: error instanceof Error ? error.stack : String(error) });
+    throw uploadError('Database persistence failure: dataset could not be saved.', 'UPLOAD_DATABASE_FAILURE', 'postgres_persistence', 500);
+  }
   await notifyWorkspace({
     companyId,
     userId: req.user.id,
@@ -2394,6 +2533,21 @@ async function handleDatasetUpload(req, res) {
     metadata: { datasetId: dataset.id }
   });
   await audit(req, 'dataset.uploaded', 'dataset', dataset.id, { companyId, fileName: dataset.fileName });
+  await savePipelineStageRun({
+    id: randomUUID(),
+    companyId,
+    module: moduleName || 'dataProcessing',
+    datasetId: dataset.id,
+    stageName: moduleValidation.stage,
+    status: 'completed',
+    operatorUserId: req.user.id,
+    logs: [`${dataset.fileName} uploaded and initialized for ${moduleName || 'dataProcessing'} workflow.`],
+    validationOutput: moduleValidation,
+    metrics: { rows: dataset.rows, columns: dataset.columns, durationMs: Date.now() - startedAt, retryCount: Number(req.headers['x-retry-count'] ?? 0) },
+    startedAt: new Date(startedAt).toISOString(),
+    completedAt: new Date().toISOString()
+  });
+  logUploadStage(req, 'upload_completed', { companyId, workflowStage: 'Workflow Ready', validationResult: 'success', durationMs: Date.now() - startedAt });
 
   res.json(publicDataset(dataset));
 }
@@ -2402,7 +2556,24 @@ app.post('/api/files/upload', requireDurableStorage, upload.single('file'), (req
   Promise.resolve().then(async () => {
     await handleDatasetUpload(req, res);
   }).catch((error) => {
-    res.status(error.statusCode || 500).json({ error: error.message || 'Upload failed.' });
+    console.error('[Metenova Upload] failed', {
+      requestId: req.requestId,
+      user: req.user?.email,
+      company: req.body?.companyId ?? req.user?.companyId,
+      module: req.body?.module,
+      filename: req.file?.originalname,
+      mimeType: req.file?.mimetype,
+      uploadStage: error.uploadStage,
+      code: error.code,
+      stack: error.stack
+    });
+    res.status(error.statusCode || 500).json({
+      error: error.message || 'Upload failed.',
+      code: error.code || 'UPLOAD_FAILED',
+      requestId: req.requestId,
+      uploadStage: error.uploadStage || 'unknown',
+      details: error.details ?? {}
+    });
   });
 });
 
@@ -2410,7 +2581,24 @@ app.post('/api/csv/upload', requireDurableStorage, upload.single('file'), (req, 
   Promise.resolve().then(async () => {
     await handleDatasetUpload(req, res);
   }).catch((error) => {
-    res.status(error.statusCode || 500).json({ error: error.message || 'Upload failed.' });
+    console.error('[Metenova Upload] failed', {
+      requestId: req.requestId,
+      user: req.user?.email,
+      company: req.body?.companyId ?? req.user?.companyId,
+      module: req.body?.module,
+      filename: req.file?.originalname,
+      mimeType: req.file?.mimetype,
+      uploadStage: error.uploadStage,
+      code: error.code,
+      stack: error.stack
+    });
+    res.status(error.statusCode || 500).json({
+      error: error.message || 'Upload failed.',
+      code: error.code || 'UPLOAD_FAILED',
+      requestId: req.requestId,
+      uploadStage: error.uploadStage || 'unknown',
+      details: error.details ?? {}
+    });
   });
 });
 

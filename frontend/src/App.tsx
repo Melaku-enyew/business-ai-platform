@@ -349,6 +349,7 @@ type ModulePipelineConfig = {
   qualitySignals: string[];
   exportLabel: string;
   emptyState: string;
+  module: string;
 };
 
 type AuthResponse = {
@@ -442,6 +443,24 @@ function buildCompanyQuery(companyId: string) {
   return companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
 }
 
+function formatUploadError(payload: { error?: string; code?: string; uploadStage?: string; requestId?: string }, status: number) {
+  const codeLabels: Record<string, string> = {
+    UPLOAD_INVALID_MIME: 'Invalid MIME',
+    UPLOAD_INVALID_SCHEMA: 'Invalid schema',
+    UPLOAD_COMPANY_REQUIRED: 'Unauthorized company',
+    UPLOAD_COMPANY_NOT_FOUND: 'Unauthorized company',
+    UPLOAD_PARSER_FAILURE: 'Parser failure',
+    UPLOAD_DATABASE_FAILURE: 'Database persistence failure',
+    UPLOAD_FILE_MISSING: 'Multipart/form-data handling failed',
+    CSRF_INVALID: 'CSRF/session failure',
+    SESSION_EXPIRED: 'CSRF/session failure'
+  };
+  const label = payload.code ? codeLabels[payload.code] ?? payload.code : status === 401 || status === 403 ? 'CSRF/session failure' : 'Upload failure';
+  const stage = payload.uploadStage ? ` Stage: ${payload.uploadStage}.` : '';
+  const request = payload.requestId ? ` Request ID: ${payload.requestId}.` : '';
+  return `${label}: ${payload.error || 'The dataset could not be uploaded.'}${stage}${request}`;
+}
+
 const moduleCards: Record<string, ModuleAction[]> = {
   accounting: [
     { title: 'Invoices', copy: 'Track billing status, aging, approvals, and payment readiness.', type: 'invoice', path: '/accounting/invoices' },
@@ -493,24 +512,26 @@ const defaultPipelineStages = ['Upload', 'Validate', 'Detect Duplicates', 'Norma
 
 const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
   accounting: {
+    module: 'accounting',
     uploadTitle: 'Upload invoice files here',
     uploadCopy: 'CSV, XLSX, or JSON invoice files are checked for required invoice fields, vendor matching, tax readiness, payment status, and ERP export quality.',
-    stages: ['Upload', 'Validate Invoices', 'Detect Duplicates', 'Match Vendor', 'Tax Validation', 'Payment Validation', 'Approval', 'Export ERP File'],
+    stages: ['Upload', 'Validate Invoices', 'Duplicate Detection', 'Vendor Matching', 'Tax Validation', 'Payment Validation', 'Approval', 'Export ERP File'],
     rules: [
       'invoice_number is required',
       'vendor_name is required',
       'amount must be numeric and cannot be negative',
       'duplicate invoice detection runs before approval',
-      'tax, currency, payment status, aging, and missing PO checks are reviewed'
+      'payment status, tax, currency, aging, PO matching, and invoice date checks are reviewed'
     ],
     qualitySignals: ['Duplicate invoice risk', 'Tax validation', 'Payment aging', 'Currency normalization'],
     exportLabel: 'Export ERP File',
     emptyState: 'Upload invoice, vendor payment, or expense files to start the Accounting pipeline.'
   },
   engineering: {
-    uploadTitle: 'Upload project schedules, resources, or engineering files',
+    module: 'engineering',
+    uploadTitle: 'Upload project schedules, engineering plans, or resource files',
     uploadCopy: 'Project files are validated as an operational dependency chain with milestone, owner, sequencing, resource, and schedule consistency checks.',
-    stages: ['Upload', 'Validate Project Structure', 'Validate Dependencies', 'Resource Conflict Detection', 'Schedule Analysis', 'Risk Detection', 'Approval', 'Export Project Report'],
+    stages: ['Upload', 'Validate Project Structure', 'Dependency Analysis', 'Resource Conflict Detection', 'Schedule Analysis', 'Risk Detection', 'Approval', 'Export Project Report'],
     rules: [
       'project_id is required',
       'milestone dependencies must be valid',
@@ -523,9 +544,10 @@ const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
     emptyState: 'Upload schedules, resources, milestones, or engineering files to start the project lifecycle pipeline.'
   },
   dataProcessing: {
+    module: 'dataProcessing',
     uploadTitle: 'Upload datasets for business-ready cleanup',
     uploadCopy: 'General data workflows validate schema, isolate failed rows, detect duplicates, normalize values, calculate quality scores, and export clean datasets.',
-    stages: ['Upload', 'Schema Validation', 'Duplicate Detection', 'Normalize', 'Data Cleanup', 'Data Quality Scoring', 'Approval', 'Export Clean Dataset'],
+    stages: ['Upload', 'Schema Validation', 'Duplicate Detection', 'Normalize', 'Data Cleanup', 'Quality Scoring', 'Approval', 'Export Clean Dataset'],
     rules: [
       'required columns must exist',
       'schema drift is detected before cleanup',
@@ -538,6 +560,7 @@ const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
     emptyState: 'Upload business datasets to run schema validation, cleanup, quality scoring, approval, and export.'
   },
   default: {
+    module: 'operations',
     uploadTitle: 'Upload company workflow files',
     uploadCopy: 'CSV, XLSX, or JSON files are validated, processed, approved, and exported inside this company workspace.',
     stages: defaultPipelineStages,
@@ -1162,6 +1185,7 @@ export function App() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('companyId', targetCompanyId);
+    formData.append('module', currentView);
     if (worksheetName) {
       formData.append('worksheetName', worksheetName);
     }
@@ -1173,10 +1197,10 @@ export function App() {
         body: formData
       });
 
-      const dataset = await readJson<Dataset & { error?: string }>(response);
+      const dataset = await readJson<Dataset & { error?: string; code?: string; uploadStage?: string; requestId?: string }>(response);
 
       if (!response.ok) {
-        throw new Error(dataset.error || 'Upload failed.');
+        throw new Error(formatUploadError(dataset, response.status));
       }
 
       setLastUploadedFile(file);
@@ -1195,7 +1219,7 @@ export function App() {
         fileType: file.type || extension,
         message
       });
-      setUploadState(`${message} Confirm company access, file type, and pipeline readiness before retrying.`);
+      setUploadState(message);
       return undefined;
     }
   }
@@ -4210,7 +4234,7 @@ function ModuleWorkspacePage({
       window.setTimeout(() => setUploadProgress(48), 120);
       const dataset = await uploadDataset(file, undefined, selectedCompanyId);
       if (!dataset) {
-        throw new Error(`Upload failed for ${file.name}. Check company assignment, MIME type, and retry.`);
+        throw new Error(`Upload failed for ${file.name}. Review the upload status above for the exact validation, parser, authorization, CSRF/session, or persistence error.`);
       }
       setUploadProgress(100);
       setWorkflowStage(workflowStages[1] ?? workflowStages[0]);

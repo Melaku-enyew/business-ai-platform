@@ -2411,6 +2411,114 @@ export async function saveWorkflowIntelligence(insight) {
   return rowToWorkflowIntelligence(result.rows[0]);
 }
 
+export async function savePipelineStageRun(stageRun) {
+  const saved = {
+    id: stageRun.id,
+    pipelineId: stageRun.pipelineId ?? null,
+    companyId: stageRun.companyId ?? defaultCompanyId,
+    module: stageRun.module ?? 'dataProcessing',
+    datasetId: stageRun.datasetId ?? null,
+    stageName: stageRun.stageName,
+    status: stageRun.status ?? 'queued',
+    operatorUserId: stageRun.operatorUserId ?? null,
+    logs: stageRun.logs ?? [],
+    validationOutput: stageRun.validationOutput ?? {},
+    metrics: stageRun.metrics ?? {},
+    startedAt: stageRun.startedAt ?? null,
+    completedAt: stageRun.completedAt ?? null,
+    createdAt: stageRun.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.pipelineStageRuns = [saved, ...(store.pipelineStageRuns ?? []).filter((entry) => entry.id !== saved.id)].slice(0, 1000);
+    await saveDevStore(store);
+    return rowToPipelineStageRun(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO pipeline_stage_runs (id, pipeline_id, company_id, module, dataset_id, stage_name, status, operator_user_id, logs, validation_output, metrics, started_at, completed_at)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     ON CONFLICT (id) DO UPDATE SET
+       status = EXCLUDED.status,
+       logs = EXCLUDED.logs,
+       validation_output = EXCLUDED.validation_output,
+       metrics = EXCLUDED.metrics,
+       started_at = COALESCE(EXCLUDED.started_at, pipeline_stage_runs.started_at),
+       completed_at = EXCLUDED.completed_at,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.pipelineId, saved.companyId, saved.module, saved.datasetId, saved.stageName, saved.status, saved.operatorUserId, JSON.stringify(saved.logs), JSON.stringify(saved.validationOutput), JSON.stringify(saved.metrics), saved.startedAt, saved.completedAt]
+  );
+  return rowToPipelineStageRun(result.rows[0]);
+}
+
+export async function listPipelineStageRuns(user, companyId, datasetId) {
+  const requestedCompanyId = String(companyId || '').trim();
+  if (!(await canAccessCompany(user, requestedCompanyId))) return [];
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.pipelineStageRuns ?? [])
+      .filter((entry) => entry.companyId === requestedCompanyId)
+      .filter((entry) => !datasetId || entry.datasetId === datasetId)
+      .map(rowToPipelineStageRun);
+  }
+  const params = [requestedCompanyId];
+  const datasetFilter = datasetId ? 'AND dataset_id = $2' : '';
+  if (datasetId) params.push(datasetId);
+  const result = await pgQuery(`SELECT * FROM pipeline_stage_runs WHERE company_id = $1 ${datasetFilter} ORDER BY created_at DESC LIMIT 100;`, params);
+  return result.rows.map(rowToPipelineStageRun);
+}
+
+export async function savePipelineRule(rule) {
+  const saved = {
+    id: rule.id,
+    companyId: rule.companyId ?? defaultCompanyId,
+    module: rule.module ?? 'dataProcessing',
+    ruleKey: rule.ruleKey,
+    label: rule.label,
+    config: rule.config ?? {},
+    enabled: rule.enabled !== false,
+    createdBy: rule.createdBy ?? null,
+    createdAt: rule.createdAt ?? new Date().toISOString(),
+    updatedAt: new Date().toISOString()
+  };
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.pipelineRules = [saved, ...(store.pipelineRules ?? []).filter((entry) => entry.id !== saved.id)];
+    await saveDevStore(store);
+    return rowToPipelineRule(saved);
+  }
+  const result = await pgQuery(
+    `INSERT INTO pipeline_rules (id, company_id, module, rule_key, label, config, enabled, created_by)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+     ON CONFLICT (id) DO UPDATE SET
+       label = EXCLUDED.label,
+       config = EXCLUDED.config,
+       enabled = EXCLUDED.enabled,
+       updated_at = NOW()
+     RETURNING *;`,
+    [saved.id, saved.companyId, saved.module, saved.ruleKey, saved.label, JSON.stringify(saved.config), saved.enabled, saved.createdBy]
+  );
+  return rowToPipelineRule(result.rows[0]);
+}
+
+export async function listPipelineRules(user, companyId, module) {
+  const requestedCompanyId = String(companyId || '').trim();
+  if (!(await canAccessCompany(user, requestedCompanyId))) return [];
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.pipelineRules ?? [])
+      .filter((entry) => entry.companyId === requestedCompanyId)
+      .filter((entry) => !module || entry.module === module)
+      .map(rowToPipelineRule);
+  }
+  const params = [requestedCompanyId];
+  const moduleFilter = module ? 'AND module = $2' : '';
+  if (module) params.push(module);
+  const result = await pgQuery(`SELECT * FROM pipeline_rules WHERE company_id = $1 ${moduleFilter} ORDER BY updated_at DESC;`, params);
+  return result.rows.map(rowToPipelineRule);
+}
+
 export async function saveAccessRequest(request) {
   const saved = {
     id: request.id,
@@ -2992,6 +3100,41 @@ function rowToWorkflowIntelligence(row) {
   };
 }
 
+function rowToPipelineStageRun(row) {
+  return {
+    id: row.id,
+    pipelineId: row.pipeline_id ?? row.pipelineId,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    module: row.module,
+    datasetId: row.dataset_id ?? row.datasetId,
+    stageName: row.stage_name ?? row.stageName,
+    status: row.status,
+    operatorUserId: row.operator_user_id ?? row.operatorUserId,
+    logs: parseJson(row.logs, []),
+    validationOutput: parseJson(row.validation_output ?? row.validationOutput, {}),
+    metrics: parseJson(row.metrics, {}),
+    startedAt: toIso(row.started_at ?? row.startedAt),
+    completedAt: toIso(row.completed_at ?? row.completedAt),
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
+function rowToPipelineRule(row) {
+  return {
+    id: row.id,
+    companyId: row.company_id ?? row.companyId ?? defaultCompanyId,
+    module: row.module,
+    ruleKey: row.rule_key ?? row.ruleKey,
+    label: row.label,
+    config: parseJson(row.config, {}),
+    enabled: row.enabled !== false,
+    createdBy: row.created_by ?? row.createdBy,
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt)
+  };
+}
+
 function rowToAccessRequest(row) {
   return {
     id: row.id,
@@ -3236,6 +3379,8 @@ async function loadDevStore() {
       enterpriseConnectors: [],
       connectorSyncLogs: [],
       pipelineSchedules: [],
+      pipelineStageRuns: [],
+      pipelineRules: [],
       workflowIntelligence: [],
       accessRequests: [],
       userCompanyAssignments: []
@@ -3262,6 +3407,8 @@ async function loadDevStore() {
     enterpriseConnectors: store.enterpriseConnectors ?? [],
     connectorSyncLogs: store.connectorSyncLogs ?? [],
     pipelineSchedules: store.pipelineSchedules ?? [],
+    pipelineStageRuns: store.pipelineStageRuns ?? [],
+    pipelineRules: store.pipelineRules ?? [],
     workflowIntelligence: store.workflowIntelligence ?? [],
     accessRequests: store.accessRequests ?? [],
     userCompanyAssignments: store.userCompanyAssignments ?? []
