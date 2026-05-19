@@ -2855,6 +2855,50 @@ export function App() {
           </section>
         ) : (
           <>
+            <EnterpriseCockpit
+              activeCleanedDataset={activeCleanedDataset}
+              activeDataset={activeDataset}
+              canManageUsers={canManageUsers(user)}
+              chartMax={chartMax}
+              chartType={chartType}
+              cleanupJobs={companyCleanupJobs}
+              companies={companies}
+              companyDashboards={companyDashboards}
+              companyDatasets={companyDatasets}
+              companyReports={companyReports}
+              connectorHealth={connectorHealth}
+              datasetHealthScore={datasetHealthScore}
+              downloadDatasetExport={downloadDatasetExport}
+              downloadPdfReport={downloadPdfReport}
+              enterpriseOps={enterpriseOps}
+              enterpriseOpsMessage={enterpriseOpsMessage}
+              failedRecordCount={failedRecordCount}
+              insights={insights}
+              linePoints={linePoints}
+              navigate={navigate}
+              notifications={notifications}
+              onArchiveDataset={archiveDatasetRecord}
+              onCleanDataset={cleanActiveDataset}
+              onCreateNightlySchedule={createNightlySchedule}
+              onOpenView={openView}
+              onRequestWorkflowAccess={requestWorkflowAccess}
+              onSaveDashboard={saveCurrentDashboard}
+              onSelectCompany={setSelectedCompanyId}
+              onSelectDataset={setActiveDataset}
+              onSyncConnector={syncEnterpriseConnector}
+              onToggleTheme={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+              persistenceState={persistenceState}
+              roleLabel={roleLabel(user?.role)}
+              selectedCompany={selectedCompany}
+              selectedCompanyId={selectedCompanyId}
+              syncingConnectorId={syncingConnectorId}
+              theme={theme}
+              updateNotificationRecord={updateNotificationRecord}
+              uploadState={uploadState}
+              user={user}
+              workflows={workflows}
+            />
+            <div className="legacy-dashboard-hidden">
             <section className="panel ops-command-center">
               <div className="panel-header">
                 <div>
@@ -3285,6 +3329,7 @@ export function App() {
                 </div>
               </article>
             </section>
+            </div>
           </>
         )}
       </section>
@@ -3361,6 +3406,346 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
       ))}
     </div>
   );
+}
+
+function EnterpriseCockpit({
+  activeCleanedDataset,
+  activeDataset,
+  canManageUsers,
+  chartMax,
+  chartType,
+  cleanupJobs,
+  companies,
+  companyDashboards,
+  companyDatasets,
+  companyReports,
+  connectorHealth,
+  datasetHealthScore,
+  downloadDatasetExport,
+  downloadPdfReport,
+  enterpriseOps,
+  enterpriseOpsMessage,
+  failedRecordCount,
+  insights,
+  linePoints,
+  navigate,
+  notifications,
+  onArchiveDataset,
+  onCleanDataset,
+  onCreateNightlySchedule,
+  onOpenView,
+  onRequestWorkflowAccess,
+  onSaveDashboard,
+  onSelectCompany,
+  onSelectDataset,
+  onSyncConnector,
+  onToggleTheme,
+  persistenceState,
+  roleLabel,
+  selectedCompany,
+  selectedCompanyId,
+  syncingConnectorId,
+  theme,
+  updateNotificationRecord,
+  uploadState,
+  user,
+  workflows
+}: {
+  activeCleanedDataset: Dataset | null;
+  activeDataset: Dataset | null;
+  canManageUsers: boolean;
+  chartMax: number;
+  chartType: ChartType;
+  cleanupJobs: CleanupJob[];
+  companies: Company[];
+  companyDashboards: SavedDashboard[];
+  companyDatasets: Dataset[];
+  companyReports: ReportHistoryItem[];
+  connectorHealth: { total: number; healthy: number; failed: number };
+  datasetHealthScore: number;
+  downloadDatasetExport: (dataset: Dataset | null) => void;
+  downloadPdfReport: () => void;
+  enterpriseOps: EnterpriseOperations;
+  enterpriseOpsMessage: string;
+  failedRecordCount: number;
+  insights: InsightResponse;
+  linePoints: string;
+  navigate: (path: string) => void;
+  notifications: NotificationItem[];
+  onArchiveDataset: (dataset: Dataset | null) => void;
+  onCleanDataset: () => void;
+  onCreateNightlySchedule: () => void;
+  onOpenView: (view: AppView) => void;
+  onRequestWorkflowAccess: () => void;
+  onSaveDashboard: () => void;
+  onSelectCompany: (companyId: string) => void;
+  onSelectDataset: (dataset: Dataset | null) => void;
+  onSyncConnector: (connector: EnterpriseConnector) => void;
+  onToggleTheme: () => void;
+  persistenceState: string;
+  roleLabel: string;
+  selectedCompany?: Company;
+  selectedCompanyId: string;
+  syncingConnectorId: string;
+  theme: Theme;
+  updateNotificationRecord: (notification: NotificationItem, updates: { status?: string; archive?: boolean }) => void;
+  uploadState: string;
+  user: User | null;
+  workflows: Workflow[];
+}) {
+  const tabs = ['Overview', 'Operations', 'Pipelines', 'Connectors', 'Approvals', 'Analytics', 'Reports', 'Governance'];
+  const [activeTab, setActiveTab] = useState('Overview');
+  const [drillPanel, setDrillPanel] = useState<{ title: string; kind: string } | null>(null);
+  const [search, setSearch] = useState('');
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('metenovaCockpitCollapsed') || '{}');
+    } catch {
+      return {};
+    }
+  });
+  const pendingApprovals = cleanupJobs.filter((job) => job.status === 'pending' || job.status === 'processing').length;
+  const failedJobs = cleanupJobs.filter((job) => job.status === 'failed').length + connectorHealth.failed;
+  const unreadNotifications = notifications.filter((notification) => notification.status !== 'read').length;
+  const lastUpload = companyDatasets[0]?.uploadedAt ? new Date(companyDatasets[0].uploadedAt).toLocaleString() : 'No uploads yet';
+  const latestExport = companyReports[0]?.createdAt ? new Date(companyReports[0].createdAt).toLocaleString() : 'No exports yet';
+  const visibleConnectors = enterpriseOps.connectors.filter((connector) => !search || [connector.name, connector.connectorType, connector.status].join(' ').toLowerCase().includes(search.toLowerCase()));
+  const toggleSection = (section: string) => {
+    setCollapsed((current) => {
+      const next = { ...current, [section]: !current[section] };
+      localStorage.setItem('metenovaCockpitCollapsed', JSON.stringify(next));
+      return next;
+    });
+  };
+  const kpis = [
+    { key: 'workflows', label: 'Active workflows', value: workflows.length, detail: `${cleanupJobs.length} cleanup jobs tracked`, kind: 'workflow' },
+    { key: 'failed', label: 'Failed jobs', value: failedJobs, detail: 'Connector and pipeline failures', kind: 'timeline' },
+    { key: 'approvals', label: 'Pending approvals', value: pendingApprovals, detail: `${enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length} access requests`, kind: 'approval' },
+    { key: 'connectors', label: 'Connector health', value: `${connectorHealth.healthy}/${connectorHealth.total}`, detail: 'Healthy enterprise sources', kind: 'connectors' },
+    { key: 'exports', label: 'Exports today', value: companyReports.length, detail: `Latest: ${latestExport}`, kind: 'reports' },
+    { key: 'savings', label: 'Automation savings', value: insights.metrics[1]?.value ?? 0, detail: `${insights.metrics[1]?.trend ?? '+0%'} this month`, kind: 'analytics' },
+    { key: 'quality', label: 'Data quality score', value: `${datasetHealthScore}%`, detail: `${failedRecordCount} failed rows isolated`, kind: 'datasets' },
+    { key: 'ai', label: 'AI alerts', value: enterpriseOps.intelligence.length, detail: 'Anomaly and risk insights', kind: 'ai' }
+  ];
+  const showSection = (section: string) => !collapsed[section] && (activeTab === 'Overview' || activeTab === section);
+
+  return (
+    <section className="dashboard-cockpit" aria-label="Enterprise operations cockpit">
+      <div className="cockpit-topbar">
+        <label>
+          Company
+          <select value={selectedCompanyId} onChange={(event) => onSelectCompany(event.target.value)}>
+            {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+          </select>
+        </label>
+        <input aria-label="Global search" placeholder="Search workflows, connectors, datasets..." value={search} onChange={(event) => setSearch(event.target.value)} />
+        <button type="button" onClick={() => setDrillPanel({ title: 'Notifications', kind: 'notifications' })}>Alerts {unreadNotifications}</button>
+        <button type="button" onClick={() => setDrillPanel({ title: 'Approval Queue', kind: 'approval' })}>Approvals {pendingApprovals}</button>
+        <button type="button" onClick={() => setDrillPanel({ title: 'Connector Health', kind: 'connectors' })}>Connectors {connectorHealth.healthy}/{connectorHealth.total}</button>
+        <button type="button" onClick={onToggleTheme}>{theme === 'light' ? 'Dark' : 'Light'}</button>
+        <div className="cockpit-profile">
+          <strong>{user?.name ?? 'Workspace'}</strong>
+          <span>{roleLabel}</span>
+        </div>
+      </div>
+
+      <div className="cockpit-tabs" role="tablist" aria-label="Dashboard views">
+        {tabs.map((tab) => (
+          <button className={activeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setActiveTab(tab)}>{tab}</button>
+        ))}
+      </div>
+
+      <div className="cockpit-kpis">
+        {kpis.map((kpi) => (
+          <button className="cockpit-kpi" key={kpi.key} type="button" onClick={() => setDrillPanel({ title: kpi.label, kind: kpi.kind })}>
+            <span>{kpi.label}</span>
+            <strong>{kpi.value}</strong>
+            <small>{kpi.detail}</small>
+            <i style={{ width: `${Math.min(100, Math.max(18, Number.parseInt(String(kpi.value), 10) || 72))}%` }} />
+          </button>
+        ))}
+      </div>
+
+      <div className="cockpit-layout">
+        <div className="cockpit-main">
+          {showSection('Operations') && (
+            <CockpitSection title="Real-time operations" count={`${cleanupJobs.length} jobs`} collapsed={collapsed.Operations} onToggle={() => toggleSection('Operations')}>
+              <div className="workflow-map">
+                {['Connector Trigger', 'Queued', 'Running', 'Waiting Approval', 'Export', 'Audit'].map((node, index) => (
+                  <button className={index <= 2 ? 'completed' : index === 3 ? 'waiting' : 'queued'} key={node} type="button" onClick={() => setDrillPanel({ title: node, kind: 'timeline' })}>
+                    <strong>{node}</strong>
+                    <span>{index < 5 ? '->' : 'done'}</span>
+                  </button>
+                ))}
+              </div>
+              <div className="cockpit-mini-grid">
+                <div><strong>{lastUpload}</strong><span>Recent upload</span></div>
+                <div><strong>{enterpriseOps.schedules.length}</strong><span>Scheduled workflows</span></div>
+                <div><strong>{enterpriseOps.syncLogs.length}</strong><span>Sync events</span></div>
+                <div><strong>{enterpriseOpsMessage}</strong><span>Operations status</span></div>
+              </div>
+            </CockpitSection>
+          )}
+
+          {showSection('Connectors') && (
+            <CockpitSection title="Connectors" count={`${visibleConnectors.length} sources`} collapsed={collapsed.Connectors} onToggle={() => toggleSection('Connectors')}>
+              <div className="compact-table">
+                {visibleConnectors.slice(0, 8).map((connector) => (
+                  <div key={connector.id}>
+                    <span><strong>{connector.name}</strong><small>{connector.connectorType.replaceAll('_', ' ')}</small></span>
+                    <span>{connector.healthStatus}</span>
+                    <span>{connector.lastSyncAt ? new Date(connector.lastSyncAt).toLocaleDateString() : 'No sync'}</span>
+                    <button type="button" disabled={syncingConnectorId === connector.id} onClick={() => onSyncConnector(connector)}>{syncingConnectorId === connector.id ? 'Syncing' : 'Sync'}</button>
+                  </div>
+                ))}
+              </div>
+            </CockpitSection>
+          )}
+
+          {showSection('Pipelines') && (
+            <CockpitSection title="Pipeline queue" count={`${enterpriseOps.schedules.length} schedules`} collapsed={collapsed.Pipelines} onToggle={() => toggleSection('Pipelines')}>
+              <div className="timeline-list">
+                {enterpriseOps.schedules.slice(0, 5).map((schedule) => (
+                  <button key={schedule.id} type="button" onClick={() => setDrillPanel({ title: schedule.name, kind: 'timeline' })}>
+                    <strong>{schedule.name}</strong>
+                    <span>{schedule.status} | SLA {schedule.slaMinutes}m | {schedule.cronExpression || schedule.eventTrigger || 'manual'}</span>
+                  </button>
+                ))}
+                <button type="button" onClick={onCreateNightlySchedule}>Create nightly workflow schedule</button>
+              </div>
+            </CockpitSection>
+          )}
+
+          {showSection('Analytics') && (
+            <CockpitSection title="Compact data studio" count={`${companyDatasets.length} datasets`} collapsed={collapsed.Analytics} onToggle={() => toggleSection('Analytics')}>
+              <div className="data-studio-compact">
+                <div>
+                  <span>Datasets</span>
+                  <strong>{companyDatasets.length}</strong>
+                  <small>Last upload: {lastUpload}</small>
+                </div>
+                <div>
+                  <span>Quality</span>
+                  <strong>{datasetHealthScore}%</strong>
+                  <small>Trust score based on failed rows and cleanup signals</small>
+                </div>
+                <div className="studio-chart-preview">
+                  {renderChart(chartType, activeDataset, chartMax, linePoints)}
+                </div>
+                <div className="studio-actions">
+                  <button type="button" onClick={() => navigate('/data-processing/cleanup')}>Open analytics studio</button>
+                  <button type="button" disabled={!activeDataset} onClick={downloadPdfReport}>PDF</button>
+                  <button type="button" disabled={!activeCleanedDataset} onClick={() => downloadDatasetExport(activeCleanedDataset)}>Clean CSV</button>
+                  <button type="button" disabled={!activeDataset} onClick={onSaveDashboard}>Save</button>
+                </div>
+              </div>
+            </CockpitSection>
+          )}
+
+          {showSection('Reports') && (
+            <CockpitSection title="Reports and exports" count={`${companyReports.length + companyDashboards.length} assets`} collapsed={collapsed.Reports} onToggle={() => toggleSection('Reports')}>
+              <div className="compact-table">
+                {[...companyReports.slice(0, 4).map((report) => ({ id: report.id, name: report.title, meta: report.datasetName, date: report.createdAt })), ...companyDashboards.slice(0, 3).map((dashboard) => ({ id: dashboard.id, name: dashboard.name, meta: dashboard.datasetName, date: dashboard.updatedAt }))].map((item) => (
+                  <div key={item.id}><span><strong>{item.name}</strong><small>{item.meta}</small></span><span>{new Date(item.date).toLocaleDateString()}</span><button type="button" onClick={() => onOpenView('reports')}>Open</button></div>
+                ))}
+              </div>
+            </CockpitSection>
+          )}
+
+          {showSection('Governance') && (
+            <CockpitSection title="Governance" count={`${enterpriseOps.accessRequests.length} access requests`} collapsed={collapsed.Governance} onToggle={() => toggleSection('Governance')}>
+              <div className="cockpit-mini-grid">
+                <div><strong>{canManageUsers ? companies.length : 1}</strong><span>Visible companies</span></div>
+                <div><strong>{enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length}</strong><span>Pending access requests</span></div>
+                <div><strong>{roleLabel}</strong><span>Current access level</span></div>
+                <button type="button" onClick={onRequestWorkflowAccess}>Request workflow access</button>
+              </div>
+            </CockpitSection>
+          )}
+        </div>
+
+        <aside className="live-rail" aria-label="Live activity rail">
+          <div>
+            <p className="eyebrow">Live activity</p>
+            <strong>{selectedCompany?.name ?? 'Company'}</strong>
+          </div>
+          {notifications.slice(0, 8).map((notification) => (
+            <button key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
+              <strong>{notification.title}</strong>
+              <span>{notification.message}</span>
+            </button>
+          ))}
+          {!notifications.length && <p className="muted">No live alerts yet.</p>}
+        </aside>
+      </div>
+
+      {drillPanel && (
+        <div className="drill-overlay" role="dialog" aria-modal="true" aria-label={drillPanel.title}>
+          <section className="drill-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Drill-through</p>
+                <h2>{drillPanel.title}</h2>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setDrillPanel(null)}>Close</button>
+            </div>
+            <div className="drill-tabs">
+              {['Summary', 'Timeline', 'Logs', 'Actions'].map((tab) => <button key={tab} type="button">{tab}</button>)}
+            </div>
+            <div className="drill-content">
+              {renderDrillContent(drillPanel.kind, {
+                activeDataset,
+                cleanupJobs,
+                companyDatasets,
+                enterpriseOps,
+                notifications,
+                onArchiveDataset,
+                onCleanDataset,
+                onSelectDataset
+              })}
+            </div>
+          </section>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function CockpitSection({ children, collapsed, count, onToggle, title }: { children: ReactNode; collapsed?: boolean; count: string; onToggle: () => void; title: string }) {
+  return (
+    <article className="cockpit-section">
+      <button className="cockpit-section-header" type="button" onClick={onToggle}>
+        <span><strong>{title}</strong><small>{count}</small></span>
+        <i>{collapsed ? 'Expand' : 'Collapse'}</i>
+      </button>
+      {!collapsed && children}
+    </article>
+  );
+}
+
+function renderDrillContent(kind: string, context: {
+  activeDataset: Dataset | null;
+  cleanupJobs: CleanupJob[];
+  companyDatasets: Dataset[];
+  enterpriseOps: EnterpriseOperations;
+  notifications: NotificationItem[];
+  onArchiveDataset: (dataset: Dataset | null) => void;
+  onCleanDataset: () => void;
+  onSelectDataset: (dataset: Dataset | null) => void;
+}) {
+  if (kind === 'connectors') {
+    return <div className="compact-table">{context.enterpriseOps.connectors.map((connector) => <div key={connector.id}><span><strong>{connector.name}</strong><small>{connector.connectorType}</small></span><span>{connector.status}</span><span>{connector.healthStatus}</span></div>)}</div>;
+  }
+  if (kind === 'datasets' || kind === 'analytics') {
+    return <div className="compact-table">{context.companyDatasets.map((dataset) => <div key={dataset.id}><span><strong>{dataset.fileName}</strong><small>{dataset.rows} rows | {dataset.cleanupStatus}</small></span><button type="button" onClick={() => context.onSelectDataset(dataset)}>Select</button><button type="button" onClick={context.onCleanDataset}>Clean</button><button type="button" onClick={() => context.onArchiveDataset(dataset)}>Archive</button></div>)}</div>;
+  }
+  if (kind === 'ai') {
+    return <div className="timeline-list">{context.enterpriseOps.intelligence.map((insight) => <button key={insight.id} type="button"><strong>{insight.title}</strong><span>{insight.summary} | {Math.round(insight.confidence * 100)}% confidence</span></button>)}</div>;
+  }
+  if (kind === 'notifications') {
+    return <div className="timeline-list">{context.notifications.map((notification) => <button key={notification.id} type="button"><strong>{notification.title}</strong><span>{notification.message}</span></button>)}</div>;
+  }
+  return <div className="timeline-list">{context.cleanupJobs.map((job) => <button key={job.id} type="button"><strong>{job.status}</strong><span>{job.logs?.[0] ?? 'Pipeline execution'} | {new Date(job.updatedAt).toLocaleString()}</span></button>)}</div>;
 }
 
 function renderCleanupPanel(
