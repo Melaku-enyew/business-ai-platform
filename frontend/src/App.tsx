@@ -1019,7 +1019,7 @@ export function App() {
       const moduleMetricsPayload = await readJson<{ metrics: ModuleMetrics }>(moduleMetricsResponse);
       const enterpriseOpsPayload = await readJson<EnterpriseOperations>(enterpriseOpsResponse);
 
-      const savedDatasets = datasetsPayload.datasets ?? [];
+      const savedDatasets = asArray(datasetsPayload.datasets).map(normalizeDatasetForClient);
       const savedDashboards = dashboardsPayload.dashboards ?? [];
       const latestDashboard = savedDashboards[0];
       const latestDataset = latestDashboard
@@ -1214,21 +1214,23 @@ export function App() {
   }
 
   const chartMax = useMemo(() => {
-    if (!activeDataset?.chart.length) {
+    const chart = datasetChart(activeDataset);
+    if (!chart.length) {
       return 1;
     }
 
-    return Math.max(...activeDataset.chart.map((point) => point.value), 1);
+    return Math.max(...chart.map((point) => point.value), 1);
   }, [activeDataset]);
 
   const linePoints = useMemo(() => {
-    if (!activeDataset?.chart.length) {
+    const chart = datasetChart(activeDataset);
+    if (!chart.length) {
       return '';
     }
 
-    return activeDataset.chart
+    return chart
       .map((point, index) => {
-        const x = activeDataset.chart.length === 1 ? 50 : (index / (activeDataset.chart.length - 1)) * 100;
+        const x = chart.length === 1 ? 50 : (index / (chart.length - 1)) * 100;
         const y = 100 - (point.value / chartMax) * 88;
         return `${x},${Math.max(y, 8)}`;
       })
@@ -1306,12 +1308,13 @@ export function App() {
         body: formData
       });
 
-      const dataset = await readJson<Dataset & { error?: string; code?: string; uploadStage?: string; requestId?: string }>(response);
+      const uploadPayload = await readJson<Dataset & { error?: string; code?: string; uploadStage?: string; requestId?: string }>(response);
 
       if (!response.ok) {
-        throw new Error(formatUploadError(dataset, response.status));
+        throw new Error(formatUploadError(uploadPayload, response.status));
       }
 
+      const dataset = normalizeDatasetForClient(uploadPayload);
       setLastUploadedFile(file);
       setActiveDataset(dataset);
       setDatasets((current: Dataset[]) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
@@ -1370,11 +1373,11 @@ export function App() {
       }
 
       setDatasets((current) => [
-        payload.cleanedDataset as Dataset,
-        payload.originalDataset as Dataset,
+        normalizeDatasetForClient(payload.cleanedDataset as Dataset),
+        normalizeDatasetForClient(payload.originalDataset as Dataset),
         ...current.filter((item) => item.id !== payload.cleanedDataset?.id && item.id !== payload.originalDataset?.id)
       ]);
-      setActiveDataset(payload.cleanedDataset);
+      setActiveDataset(normalizeDatasetForClient(payload.cleanedDataset));
       setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
       setCleanupMessage('Cleaned dataset created and ready for business analytics.');
       setPersistenceState('Original preserved. Cleaned dataset saved to the company workspace.');
@@ -1466,8 +1469,9 @@ export function App() {
       const response = await apiFetch(`/api/datasets/${dataset.id}/archive`, { method: 'POST' });
       const payload = await readJson<{ dataset?: Dataset; error?: string }>(response);
       if (!response.ok || !payload.dataset) throw new Error(payload.error || 'Dataset archive failed.');
-      setDatasets((current) => current.map((entry) => entry.id === payload.dataset?.id ? payload.dataset as Dataset : entry));
-      setActiveDataset(payload.dataset);
+      const archivedDataset = normalizeDatasetForClient(payload.dataset);
+      setDatasets((current) => current.map((entry) => entry.id === archivedDataset.id ? archivedDataset : entry));
+      setActiveDataset(archivedDataset);
       setPersistenceState('Dataset archived.');
     } catch (error) {
       setPersistenceState(error instanceof Error ? error.message : 'Dataset archive failed.');
@@ -2049,7 +2053,7 @@ export function App() {
       if (!notificationsResponse.ok) throw new Error(notificationsPayload.error || 'Could not load notifications.');
       if (!enterpriseOpsResponse.ok) throw new Error(enterpriseOpsPayload.error || 'Could not load enterprise operations.');
 
-      const nextDatasets = datasetsPayload.datasets ?? [];
+      const nextDatasets = asArray(datasetsPayload.datasets).map(normalizeDatasetForClient);
       setDatasets(nextDatasets);
       setDashboards(dashboardsPayload.dashboards ?? []);
       setReports(reportsPayload.reports ?? []);
@@ -2175,7 +2179,8 @@ export function App() {
         const response = await apiFetch(`/api/datasets${query}`);
         const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
         if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
-        const candidate = (payload.datasets ?? []).find((dataset) => !dataset.originalDatasetId);
+        const companyActionDatasets = asArray(payload.datasets).map(normalizeDatasetForClient);
+        const candidate = companyActionDatasets.find((dataset) => !dataset.originalDatasetId);
         if (!candidate) throw new Error('Upload an original dataset before running cleanup.');
         setActiveDataset(candidate);
         const cleanupResponse = await apiFetch(`/api/datasets/${candidate.id}/cleanup`, { method: 'POST' });
@@ -2183,12 +2188,14 @@ export function App() {
         if (!cleanupResponse.ok || !cleanupPayload.cleanedDataset || !cleanupPayload.originalDataset) {
           throw new Error(cleanupPayload.error || 'Cleanup failed.');
         }
+        const cleanedDataset = normalizeDatasetForClient(cleanupPayload.cleanedDataset as Dataset);
+        const originalDataset = normalizeDatasetForClient(cleanupPayload.originalDataset as Dataset);
         setDatasets((current) => [
-          cleanupPayload.cleanedDataset as Dataset,
-          cleanupPayload.originalDataset as Dataset,
+          cleanedDataset,
+          originalDataset,
           ...current.filter((item) => item.id !== cleanupPayload.cleanedDataset?.id && item.id !== cleanupPayload.originalDataset?.id)
         ]);
-        setActiveDataset(cleanupPayload.cleanedDataset);
+        setActiveDataset(cleanedDataset);
         if (cleanupPayload.job) setCleanupJobs((current) => [cleanupPayload.job as CleanupJob, ...current]);
         navigate('/');
         setCurrentView('dashboard');
@@ -2206,14 +2213,15 @@ export function App() {
         const response = await apiFetch(`/api/datasets${query}`);
         const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
         if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
-        const dataset = (payload.datasets ?? []).find((item) => item.cleanupStatus === 'completed') ?? payload.datasets?.[0] ?? null;
+        const companyActionDatasets = asArray(payload.datasets).map(normalizeDatasetForClient);
+        const dataset = companyActionDatasets.find((item) => item.cleanupStatus === 'completed') ?? companyActionDatasets[0] ?? null;
         if (!dataset) throw new Error('No datasets are available to export.');
         await downloadDatasetExport(dataset);
       } else if (action === 'Delete Dataset') {
         const response = await apiFetch(`/api/datasets${query}`);
         const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
         if (!response.ok) throw new Error(payload.error || 'Could not load datasets.');
-        const dataset = payload.datasets?.[0] ?? null;
+        const dataset = asArray(payload.datasets).map(normalizeDatasetForClient)[0] ?? null;
         if (!dataset) throw new Error('No datasets are available to delete.');
         await deleteDatasetRecord(dataset);
       } else if (action === 'Delete Cleanup Job') {
@@ -2354,7 +2362,7 @@ export function App() {
           chartType,
           rows: activeDataset.rows,
           columns: activeDataset.columns,
-          insights: activeDataset.insights,
+          insights: datasetInsights(activeDataset),
           lines,
           dataset: activeDataset
         }
@@ -3301,19 +3309,22 @@ export function App() {
                         <table>
                           <thead>
                             <tr>
-                              {activeDataset.headers.map((header) => (
+                              {datasetHeaders(activeDataset).map((header) => (
                                 <th key={header}>{header}</th>
                               ))}
                             </tr>
                           </thead>
                           <tbody>
-                            {activeDataset.preview.map((row, rowIndex) => (
+                            {datasetPreview(activeDataset).map((row, rowIndex) => (
                               <tr key={`${activeDataset.id}-${rowIndex}`}>
-                                {activeDataset.headers.map((header) => (
+                                {datasetHeaders(activeDataset).map((header) => (
                                   <td key={header}>{row[header]}</td>
                                 ))}
                               </tr>
                             ))}
+                            {!datasetPreview(activeDataset).length && (
+                              <tr><td colSpan={Math.max(datasetHeaders(activeDataset).length, 1)}>No preview rows are available for this dataset yet.</td></tr>
+                            )}
                           </tbody>
                         </table>
                       </div>
@@ -3477,6 +3488,10 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
   if (!dataset) {
     return <div className="empty-state chart-empty">Upload a dataset to build a chart.</div>;
   }
+  const chart = datasetChart(dataset);
+  if (!chart.length) {
+    return <div className="empty-state chart-empty">Upload your first dataset to begin processing.</div>;
+  }
 
   if (chartType === 'line') {
     return (
@@ -3489,8 +3504,8 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
   }
 
   if (chartType === 'donut') {
-    const total = dataset.chart.reduce((sum, point) => sum + point.value, 0) || 1;
-    const topValue = dataset.chart[0]?.value ?? 0;
+    const total = chart.reduce((sum, point) => sum + point.value, 0) || 1;
+    const topValue = chart[0]?.value ?? 0;
     const percentage = Math.round((topValue / total) * 100);
     return (
       <div className="donut-wrap">
@@ -3504,7 +3519,7 @@ function renderChart(chartType: ChartType, dataset: Dataset | null, chartMax: nu
 
   return (
     <div className="bar-chart">
-      {dataset.chart.map((point) => (
+      {chart.map((point) => (
         <div className="bar-row" key={point.label}>
           <span>{point.label}</span>
           <div>
@@ -3980,6 +3995,46 @@ function displayNumber(value: number | null | undefined) {
   return Number(value ?? 0).toLocaleString();
 }
 
+function datasetChart(dataset: Dataset | null | undefined) {
+  return asArray(dataset?.chart);
+}
+
+function datasetHeaders(dataset: Dataset | null | undefined) {
+  return asArray(dataset?.headers);
+}
+
+function datasetPreview(dataset: Dataset | null | undefined) {
+  return asArray(dataset?.preview);
+}
+
+function datasetInsights(dataset: Dataset | null | undefined) {
+  return asArray(dataset?.insights);
+}
+
+function datasetNumericSummary(dataset: Dataset | null | undefined) {
+  return asArray(dataset?.numericSummary);
+}
+
+function normalizeDatasetForClient(dataset: Dataset): Dataset {
+  return {
+    ...dataset,
+    rows: Number(dataset.rows ?? 0),
+    columns: Number(dataset.columns ?? datasetHeaders(dataset).length),
+    headers: datasetHeaders(dataset),
+    preview: datasetPreview(dataset),
+    chart: datasetChart(dataset),
+    insights: datasetInsights(dataset),
+    numericSummary: datasetNumericSummary(dataset),
+    warnings: asArray(dataset.warnings),
+    worksheets: asArray(dataset.worksheets),
+    cleanupLogs: asArray(dataset.cleanupLogs),
+    cleanupPreview: dataset.cleanupPreview ? {
+      before: asArray(dataset.cleanupPreview.before),
+      after: asArray(dataset.cleanupPreview.after)
+    } : dataset.cleanupPreview
+  };
+}
+
 function roleLabel(role?: string) {
   const labels: Record<string, string> = {
     owner: 'Owner / Super Admin',
@@ -4050,7 +4105,16 @@ function summarizeValidation(dataset: Dataset) {
       }
     });
   });
-  return { missingValues, invalidTypes, failedRows: failedRows.size };
+  const warnings = [
+    missingValues ? `${missingValues} missing values found in preview.` : '',
+    invalidTypes ? `${invalidTypes} invalid column type values found.` : '',
+    failedRows.size ? `${failedRows.size} failed preview rows detected.` : ''
+  ].filter(Boolean);
+  return { missingValues, invalidTypes, failedRows: failedRows.size, warnings };
+}
+
+function validationWarningCount(dataset: Dataset) {
+  return asArray(summarizeValidation(dataset).warnings).length;
 }
 
 function findDuplicateRows(rows: Record<string, string>[]) {
@@ -4870,15 +4934,17 @@ function ModuleWorkspacePage({
       if (!response.ok || !payload.cleanedDataset || !payload.originalDataset) {
         throw new Error(payload.error || 'Cleanup failed.');
       }
+      const cleanedDataset = normalizeDatasetForClient(payload.cleanedDataset as Dataset);
+      const originalDataset = normalizeDatasetForClient(payload.originalDataset as Dataset);
       setDatasets((current) => [
-        payload.cleanedDataset as Dataset,
-        payload.originalDataset as Dataset,
+        cleanedDataset,
+        originalDataset,
         ...current.filter((entry) => entry.id !== payload.cleanedDataset?.id && entry.id !== payload.originalDataset?.id)
       ]);
       setCleanupJobs((current) => payload.job ? [payload.job, ...current.filter((job) => job.id !== payload.job?.id)] : current);
-      setActiveDataset(payload.cleanedDataset);
+      setActiveDataset(cleanedDataset);
       setWorkflowStage(workflowStages.find((stage) => /approval|approve/i.test(stage)) ?? workflowStages.at(-2) ?? workflowStages[0]);
-      setWorkflowMessage(`Cleanup completed. ${payload.job?.metrics?.totalCleanedRows ?? payload.cleanedDataset.rows} rows ready for approval.`);
+      setWorkflowMessage(`Cleanup completed. ${payload.job?.metrics?.totalCleanedRows ?? cleanedDataset.rows} rows ready for approval.`);
     } catch (cleanupError) {
       setWorkflowStage(workflowStages.find((stage) => /clean|cleanup/i.test(stage)) ?? workflowStages[4] ?? workflowStages[0]);
       setWorkflowMessage(cleanupError instanceof Error ? cleanupError.message : 'Cleanup failed.');
@@ -5097,7 +5163,7 @@ function ModuleWorkspacePage({
                     </div>
                     <div>
                       <span>Anomaly score</span>
-                      <strong>{dataset.cleanupMetrics?.anomaliesDetected ?? summarizeValidation(dataset).warnings.length}</strong>
+                      <strong>{dataset.cleanupMetrics?.anomaliesDetected ?? validationWarningCount(dataset)}</strong>
                     </div>
                   </div>
                   <div className="dataset-preview-strip">
@@ -5134,7 +5200,7 @@ function ModuleWorkspacePage({
               )}
             </article>
           ))}
-          {!moduleDatasets.length && <EmptyState title="No datasets uploaded" copy={pipelineConfig.emptyState} />}
+          {!moduleDatasets.length && <EmptyState title="Upload your first dataset to begin processing." copy={pipelineConfig.emptyState} />}
         </div>
       </article>
       {isDataProcessingWorkspace ? (
@@ -5150,7 +5216,7 @@ function ModuleWorkspacePage({
           </div>
           <div className="dataset-detail-grid">
             <div><span>Datasets</span><strong>{moduleDatasets.length}</strong></div>
-            <div><span>Invalid values</span><strong>{moduleDatasets.reduce((sum, dataset) => sum + (dataset.cleanupMetrics?.invalidValuesDetected ?? summarizeValidation(dataset).warnings.length), 0)}</strong></div>
+            <div><span>Invalid values</span><strong>{moduleDatasets.reduce((sum, dataset) => sum + (dataset.cleanupMetrics?.invalidValuesDetected ?? validationWarningCount(dataset)), 0)}</strong></div>
             <div><span>Duplicates</span><strong>{moduleDatasets.reduce((sum, dataset) => sum + findDuplicateRows(dataset.preview).length, 0)}</strong></div>
             <div><span>Exports ready</span><strong>{moduleDatasets.filter((dataset) => dataset.cleanupStatus === 'completed' || dataset.originalDatasetId).length}</strong></div>
           </div>
@@ -5749,9 +5815,9 @@ function buildDashboardSnapshot(dataset: Dataset, chartType: ChartType) {
       chartColumn: dataset.chartColumn,
       labelColumn: dataset.labelColumn
     },
-    chart: dataset.chart,
-    insights: dataset.insights,
-    numericSummary: dataset.numericSummary
+    chart: datasetChart(dataset),
+    insights: datasetInsights(dataset),
+    numericSummary: datasetNumericSummary(dataset)
   };
 }
 
@@ -5766,11 +5832,11 @@ function buildReportLines(dataset: Dataset) {
     `Columns: ${dataset.columns}`,
     '',
     'Business Insights',
-    ...dataset.insights.map((item) => `- ${item}`),
+    ...(datasetInsights(dataset).length ? datasetInsights(dataset).map((item) => `- ${item}`) : ['- No generated insights are available yet.']),
     '',
     'Numeric Summary',
-    ...(dataset.numericSummary.length
-      ? dataset.numericSummary.map((item) => `${item.column}: total ${item.total.toFixed(2)}, average ${item.average.toFixed(2)}, min ${item.min.toFixed(2)}, max ${item.max.toFixed(2)}`)
+    ...(datasetNumericSummary(dataset).length
+      ? datasetNumericSummary(dataset).map((item) => `${item.column}: total ${item.total.toFixed(2)}, average ${item.average.toFixed(2)}, min ${item.min.toFixed(2)}, max ${item.max.toFixed(2)}`)
       : ['No numeric columns detected.'])
   ];
 }
