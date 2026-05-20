@@ -1,4 +1,4 @@
-import { ChangeEvent, CSSProperties, Dispatch, DragEvent, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useState } from 'react';
+import { ChangeEvent, Component, CSSProperties, Dispatch, DragEvent, ErrorInfo, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
 
 type InsightResponse = {
@@ -567,6 +567,14 @@ const moduleLabels: Record<string, string> = {
 const workspaceRoutes: WorkspaceRoute[] = Object.entries(moduleCards).flatMap(([module, cards]) =>
   cards.map((card) => ({ ...card, module, moduleLabel: moduleLabels[module] ?? module }))
 );
+const dataProcessingWorkspaceRoute = workspaceRoutes.find((route) => route.path === '/data-processing/workspace') ?? {
+  title: 'Dataset Workspace',
+  copy: 'Upload once, then validate, dedupe, normalize, clean, score, approve, and export from one operational workspace.',
+  type: 'dataset_workspace',
+  path: '/data-processing/workspace',
+  module: 'dataProcessing',
+  moduleLabel: 'Data Processing'
+};
 
 const defaultPipelineStages = ['Upload', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Approval', 'Export'];
 
@@ -861,7 +869,7 @@ export function App() {
 
   useEffect(() => {
     const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname)
-      ?? (location.pathname.startsWith('/data-processing/') ? workspaceRoutes.find((route) => route.path === '/data-processing/workspace') : undefined);
+      ?? (location.pathname.startsWith('/data-processing/') ? dataProcessingWorkspaceRoute : undefined);
     if (workspaceRoute) {
       setCurrentView(workspaceRoute.module as AppView);
       return;
@@ -4261,6 +4269,42 @@ function RecordTable({
   );
 }
 
+class WorkspaceErrorBoundary extends Component<{ children: ReactNode; label: string }, { error?: Error; info?: ErrorInfo }> {
+  state: { error?: Error; info?: ErrorInfo } = {};
+
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+
+  componentDidCatch(error: Error, info: ErrorInfo) {
+    console.error('[Metenova Workspace] Render failure', { label: this.props.label, error, info });
+    this.setState({ info });
+  }
+
+  render() {
+    if (!this.state.error) return this.props.children;
+    return (
+      <PageLayout>
+        <article className="panel workspace-error-panel">
+          <p className="eyebrow">Runtime fallback</p>
+          <h2>{this.props.label} could not render</h2>
+          <p className="persistence-note warning-note">{this.state.error.message || 'A rendering error occurred while mounting this workspace.'}</p>
+          <div className="dataset-detail-grid">
+            <div><span>Route</span><strong>{window.location.pathname}</strong></div>
+            <div><span>Recovery</span><strong>Reload workspace</strong></div>
+            <div><span>Component</span><strong>{this.props.label}</strong></div>
+            <div><span>Status</span><strong>Fallback active</strong></div>
+          </div>
+          <div className="modal-actions">
+            <button className="ghost-button" type="button" onClick={() => this.setState({ error: undefined, info: undefined })}>Retry render</button>
+            <button type="button" onClick={() => window.location.assign('/data-processing/workspace')}>Reload workspace</button>
+          </div>
+        </article>
+      </PageLayout>
+    );
+  }
+}
+
 function RoutedPages(props: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   archiveDatasetRecord: (dataset: Dataset | null) => void;
@@ -4306,22 +4350,24 @@ function RoutedPages(props: {
       {workspaceRoutes.map((route) => (
         <Route
           element={(
-            <ModuleWorkspacePage
-              apiFetch={props.apiFetch}
-              archiveDatasetRecord={props.archiveDatasetRecord}
-              companies={props.companies}
-              datasets={props.datasets}
-              deleteDatasetRecord={props.deleteDatasetRecord}
-              deletingDatasetId={props.deletingDatasetId}
-              downloadDatasetExport={props.downloadDatasetExport}
-              route={route}
-              selectedCompanyId={props.selectedCompanyId}
-              setActiveDataset={props.setActiveDataset}
-              setCleanupJobs={props.setCleanupJobs}
-              setDatasets={props.setDatasets}
-              setSelectedCompanyId={props.setSelectedCompanyId}
-              uploadDataset={props.uploadDataset}
-            />
+            <WorkspaceErrorBoundary label={route.title}>
+              <ModuleWorkspacePage
+                apiFetch={props.apiFetch}
+                archiveDatasetRecord={props.archiveDatasetRecord}
+                companies={props.companies}
+                datasets={props.datasets}
+                deleteDatasetRecord={props.deleteDatasetRecord}
+                deletingDatasetId={props.deletingDatasetId}
+                downloadDatasetExport={props.downloadDatasetExport}
+                route={route}
+                selectedCompanyId={props.selectedCompanyId}
+                setActiveDataset={props.setActiveDataset}
+                setCleanupJobs={props.setCleanupJobs}
+                setDatasets={props.setDatasets}
+                setSelectedCompanyId={props.setSelectedCompanyId}
+                uploadDataset={props.uploadDataset}
+              />
+            </WorkspaceErrorBoundary>
           )}
           key={route.path}
           path={route.path}
@@ -4330,22 +4376,24 @@ function RoutedPages(props: {
       <Route
         path="/data-processing/*"
         element={(
-          <ModuleWorkspacePage
-            apiFetch={props.apiFetch}
-            archiveDatasetRecord={props.archiveDatasetRecord}
-            companies={props.companies}
-            datasets={props.datasets}
-            deleteDatasetRecord={props.deleteDatasetRecord}
-            deletingDatasetId={props.deletingDatasetId}
-            downloadDatasetExport={props.downloadDatasetExport}
-            route={workspaceRoutes.find((route) => route.path === '/data-processing/workspace') as WorkspaceRoute}
-            selectedCompanyId={props.selectedCompanyId}
-            setActiveDataset={props.setActiveDataset}
-            setCleanupJobs={props.setCleanupJobs}
-            setDatasets={props.setDatasets}
-            setSelectedCompanyId={props.setSelectedCompanyId}
-            uploadDataset={props.uploadDataset}
-          />
+          <WorkspaceErrorBoundary label="Data Processing Workspace">
+            <ModuleWorkspacePage
+              apiFetch={props.apiFetch}
+              archiveDatasetRecord={props.archiveDatasetRecord}
+              companies={props.companies}
+              datasets={props.datasets}
+              deleteDatasetRecord={props.deleteDatasetRecord}
+              deletingDatasetId={props.deletingDatasetId}
+              downloadDatasetExport={props.downloadDatasetExport}
+              route={dataProcessingWorkspaceRoute}
+              selectedCompanyId={props.selectedCompanyId}
+              setActiveDataset={props.setActiveDataset}
+              setCleanupJobs={props.setCleanupJobs}
+              setDatasets={props.setDatasets}
+              setSelectedCompanyId={props.setSelectedCompanyId}
+              uploadDataset={props.uploadDataset}
+            />
+          </WorkspaceErrorBoundary>
         )}
       />
       <Route
@@ -4636,7 +4684,8 @@ function ModuleWorkspacePage({
   }, [datasets, selectedCompanyId, workspaceDatasets]);
   const workflowStages = pipelineConfig.stages;
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
-  const selectedCompanyName = companies.find((company) => company.id === selectedCompanyId)?.name ?? 'Selected company';
+  const selectedCompany = companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? null;
+  const selectedCompanyName = selectedCompany?.name ?? 'No company selected';
 
   useEffect(() => {
     setWorkflowStage(pipelineConfig.stages[0]);
@@ -4904,6 +4953,7 @@ function ModuleWorkspacePage({
             <h2>{pipelineConfig.uploadTitle}</h2>
           </div>
           <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
+            {!companies.some((company) => company.id === selectedCompanyId) && <option value="">Select company</option>}
             {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
           </select>
         </div>
@@ -4961,6 +5011,9 @@ function ModuleWorkspacePage({
           </div>
         )}
         <p className="persistence-note">{workflowMessage}</p>
+        {!companies.length && (
+          <p className="persistence-note warning-note">No company context is available yet. Retry after workspace access loads, or ask an owner to assign a company.</p>
+        )}
         {error && lastModuleFile && (
           <button className="ghost-button compact" type="button" onClick={() => void handleModuleUpload(lastModuleFile)}>
             Retry upload

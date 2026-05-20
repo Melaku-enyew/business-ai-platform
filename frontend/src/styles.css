@@ -2493,6 +2493,13 @@ th {
   min-height: 0;
 }
 
+.workspace-error-panel {
+  max-width: 860px;
+  margin: 32px auto;
+  border-color: rgba(220, 38, 38, 0.2);
+  background: linear-gradient(180deg, rgba(254, 242, 242, 0.92), #fff);
+}
+
 .workflow-rule-grid span {
   border: 1px solid rgba(15, 23, 42, 0.08);
   border-radius: 8px;
