@@ -396,6 +396,8 @@ const AUTH_TOKEN_KEY = 'metenovaSessionToken';
 const LEGACY_AUTH_TOKEN_KEY = 'authToken';
 const SESSION_ACTIVITY_KEY = 'metenovaLastActivityAt';
 const LOGOUT_BROADCAST_KEY = 'metenovaLogoutAt';
+const STARTUP_ERROR_KEY = 'metenovaStartupError';
+const DEFAULT_AUTH_MESSAGE = 'Sign in to access your dashboards and datasets.';
 
 function apiUrl(path: string) {
   if (/^https?:\/\//i.test(path)) {
@@ -665,7 +667,7 @@ export function App() {
   const [authName, setAuthName] = useState('');
   const [authEmail, setAuthEmail] = useState('');
   const [authPassword, setAuthPassword] = useState('');
-  const [authMessage, setAuthMessage] = useState('Sign in to access your dashboards and datasets.');
+  const [authMessage, setAuthMessage] = useState(DEFAULT_AUTH_MESSAGE);
   const [inviteToken, setInviteToken] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [invitePassword, setInvitePassword] = useState('');
@@ -752,18 +754,26 @@ export function App() {
     });
   }, []);
 
+  function applyRuntimeConfig(config: ConfigResponse) {
+    setAuthDisabled(Boolean(config.authDisabled));
+    setDurableStorage(config.durableStorage !== false);
+    setEmailConfigured(Boolean(config.emailConfigured));
+    setCsrfToken(config.csrfToken ?? '');
+    setSessionTimeoutMs((config.sessionTimeoutMinutes ?? 30) * 60 * 1000);
+    setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
+    setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
+
+    if (config.durableStorage !== false && config.postgresqlConnected !== false) {
+      localStorage.removeItem(STARTUP_ERROR_KEY);
+      sessionStorage.removeItem(STARTUP_ERROR_KEY);
+      setAuthMessage((message) => message.startsWith('Backend startup is not ready') ? DEFAULT_AUTH_MESSAGE : message);
+    }
+  }
+
   useEffect(() => {
     fetchWithRetry('/api/config', { credentials: 'include' }, 3)
       .then((response) => readJson<ConfigResponse>(response))
-      .then((config) => {
-        setAuthDisabled(Boolean(config.authDisabled));
-        setDurableStorage(config.durableStorage !== false);
-        setEmailConfigured(Boolean(config.emailConfigured));
-        setCsrfToken(config.csrfToken ?? '');
-        setSessionTimeoutMs((config.sessionTimeoutMinutes ?? 30) * 60 * 1000);
-        setSessionWarningSeconds(Math.max(config.sessionWarningSeconds ?? 60, 15));
-        setPersistenceState(config.durableStorage === false ? 'Protected workspace storage needs to be connected before workspace changes can be saved permanently.' : 'Enterprise-grade secure cloud storage ready.');
-      })
+      .then(applyRuntimeConfig)
       .catch((error) => {
         console.error('[Metenova API] Config request failed', error);
         setAuthDisabled(false);
@@ -773,6 +783,21 @@ export function App() {
       })
       .finally(() => setConfigLoaded(true));
   }, []);
+
+  useEffect(() => {
+    if (user) return undefined;
+    const shouldPoll = authMessage.startsWith('Backend startup is not ready') || durableStorage === false;
+    if (!shouldPoll) return undefined;
+
+    const interval = window.setInterval(() => {
+      fetchWithRetry('/api/config', { credentials: 'include' }, 1)
+        .then((response) => readJson<ConfigResponse>(response))
+        .then(applyRuntimeConfig)
+        .catch((error) => console.warn('[Metenova API] Startup recovery check failed', error));
+    }, 5000);
+
+    return () => window.clearInterval(interval);
+  }, [authMessage, durableStorage, user]);
 
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -1073,7 +1098,9 @@ export function App() {
       const payload = await readJson<Partial<AuthResponse> & { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }>(response);
 
       if (!response.ok || !payload.token || !payload.user) {
-        throw new Error(startupErrorMessage(payload));
+        const message = startupErrorMessage(payload);
+        if (payload.code === 'STARTUP_NOT_READY') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
+        throw new Error(message);
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
@@ -1113,7 +1140,9 @@ export function App() {
       });
       const payload = await readJson<Partial<AuthResponse> & { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }>(response);
       if (!response.ok || !payload.token || !payload.user) {
-        throw new Error(startupErrorMessage(payload));
+        const message = startupErrorMessage(payload);
+        if (payload.code === 'STARTUP_NOT_READY') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
+        throw new Error(message);
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);

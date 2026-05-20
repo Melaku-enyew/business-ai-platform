@@ -20,7 +20,7 @@ For local development, the app can run without production storage credentials. P
 
 ## Required Production Environment
 
-Configure these variables in the backend Vercel project. Railway provides `DATABASE_URL` automatically when you connect the PostgreSQL service.
+Configure these variables in the backend Vercel project. Production should use the Neon PostgreSQL connection string with SSL enabled, for example a `DATABASE_URL` that includes `sslmode=require`.
 
 ```env
 JWT_SECRET=replace-with-long-random-secret

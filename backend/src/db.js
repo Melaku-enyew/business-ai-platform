@@ -85,10 +85,10 @@ function assertPublicDatabaseUrl() {
   try {
     const host = new URL(process.env.DATABASE_URL).hostname;
     if (process.env.VERCEL === '1' && host.endsWith('.internal')) {
-      throw new Error('DATABASE_URL points to a Railway private hostname. Configure the Railway public proxy URL for Vercel.');
+      throw new Error('DATABASE_URL points to a private database hostname. Configure a public Neon PostgreSQL connection string for Vercel.');
     }
-    if (process.env.VERCEL === '1' && !host.endsWith('.proxy.rlwy.net') && !host.includes('neon.tech')) {
-      console.warn('DATABASE_URL does not use a recognized public PostgreSQL hostname for Vercel deployments.');
+    if (process.env.VERCEL === '1' && !host.includes('neon.tech')) {
+      console.warn('DATABASE_URL does not use the expected Neon PostgreSQL hostname for Vercel deployments.');
     }
   } catch (error) {
     lastConnectionError = error instanceof Error ? error.message : 'Invalid DATABASE_URL.';
@@ -3582,9 +3582,6 @@ function publicHostLabel(value) {
   try {
     const host = new URL(value).hostname;
     if (host.includes('neon.tech')) return 'neon-postgres';
-    if (host.endsWith('.proxy.rlwy.net')) return 'railway-public-proxy';
-    if (host.endsWith('.internal')) return 'railway-private-internal';
-    if (host.includes('railway')) return 'railway-host';
     return 'external-postgres';
   } catch {
     return 'invalid-url';
