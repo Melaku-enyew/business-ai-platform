@@ -35,6 +35,7 @@ import {
   getAccessibleCompanyIds,
   hasRole,
   canAccessCompany,
+  clearDatabaseRuntimeFailure,
   findSessionById,
   getDevUser,
   getDataset,
@@ -911,6 +912,9 @@ async function deliverEmail({ type, to, subject, text, userId, companyId, replyT
 
 function requireDurableStorage(req, res, next) {
   const dbStatus = getDatabaseRuntimeStatus();
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+    runStartupInBackground(`${req.method} ${req.path}`);
+  }
   if (isEphemeralProductionStorage) {
     res.status(503).json({
       error: 'Protected workspace storage must be connected before saving changes in production.',
@@ -920,8 +924,33 @@ function requireDurableStorage(req, res, next) {
   }
   if (dbStatus.usingPostgres && !dbStatus.connected) {
     res.status(503).json({
-      error: 'PostgreSQL storage is not connected. Please check the production database configuration.',
+      error: 'PostgreSQL storage is reconnecting. Please retry in a moment.',
       code: 'POSTGRESQL_UNAVAILABLE'
+    });
+    return;
+  }
+
+  next();
+}
+
+async function requireDatabaseReady(req, res, next) {
+  const before = getDatabaseRuntimeStatus();
+  if (!before.usingPostgres) {
+    next();
+    return;
+  }
+
+  if (!before.connected || !before.tablesInitialized) {
+    await runStartupInBackground(`${req.method} ${req.path}`);
+  }
+
+  const after = getDatabaseRuntimeStatus();
+  if (!after.connected || !after.tablesInitialized) {
+    res.status(503).json({
+      error: 'PostgreSQL storage is reconnecting. Please retry in a moment.',
+      code: 'POSTGRESQL_UNAVAILABLE',
+      requestId: req.requestId,
+      database: after
     });
     return;
   }
@@ -1155,52 +1184,26 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
-app.use('/api', async (req, res, next) => {
-  const publicBootstrapRoutes = new Set(['/health', '/readiness', '/config']);
-  if (req.method === 'GET' && publicBootstrapRoutes.has(req.path)) {
-    next();
-    return;
-  }
-
-  try {
-    if (startupError) {
-      startupPromise = beginStartup();
-    }
-    if (startupPromise) {
-      await startupPromise;
-    }
-    if (startupError) {
-      throw startupError;
-    }
-    next();
-  } catch (error) {
-    const dbStatus = getDatabaseRuntimeStatus();
-    console.error('[Metenova Startup] API startup gate failed', {
-      requestId: req.requestId,
-      path: req.path,
-      database: dbStatus,
-      error: error instanceof Error ? error.message : String(error)
-    });
-    res.status(503).json({
-      error: 'Backend startup is not ready. Database initialization failed.',
-      code: 'STARTUP_NOT_READY',
-      requestId: req.requestId,
-      database: dbStatus
-    });
-  }
-});
 
 app.get('/api/health', (_req, res) => {
+  const dbStatus = getDatabaseRuntimeStatus();
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+    runStartupInBackground('health');
+  }
   res.json({
     status: 'ok',
     service: 'metenova-business-platform',
     timestamp: new Date().toISOString(),
-    uptimeSeconds: Math.round(process.uptime())
+    uptimeSeconds: Math.round(process.uptime()),
+    database: dbStatus
   });
 });
 
 app.get('/api/readiness', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+    runStartupInBackground('readiness');
+  }
   const ready = !dbStatus.usingPostgres || (dbStatus.connected && dbStatus.tablesInitialized);
   res.status(ready ? 200 : 503).json({
     ready,
@@ -1283,7 +1286,7 @@ app.get('/api/config', (_req, res) => {
   });
 });
 
-app.post('/api/auth/signup', authRateLimit, async (req, res, next) => {
+app.post('/api/auth/signup', authRateLimit, requireDatabaseReady, async (req, res, next) => {
   try {
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
@@ -1324,7 +1327,7 @@ app.post('/api/auth/signup', authRateLimit, async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/accept-invite', authRateLimit, async (req, res, next) => {
+app.post('/api/auth/accept-invite', authRateLimit, requireDatabaseReady, async (req, res, next) => {
   try {
     const token = String(req.body?.token || '').trim();
     const name = String(req.body?.name || '').trim();
@@ -1367,7 +1370,7 @@ app.post('/api/auth/accept-invite', authRateLimit, async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
+app.post('/api/auth/forgot-password', authRateLimit, requireDatabaseReady, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const user = email ? await findUserByEmail(email) : undefined;
@@ -1410,7 +1413,7 @@ app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/reset-password', async (req, res, next) => {
+app.post('/api/auth/reset-password', requireDatabaseReady, async (req, res, next) => {
   try {
     const token = String(req.body?.token || '').trim();
     const password = String(req.body?.password || '');
@@ -1435,7 +1438,7 @@ app.post('/api/auth/reset-password', async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/recover-username', async (req, res, next) => {
+app.post('/api/auth/recover-username', requireDatabaseReady, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const user = email ? await findUserByEmail(email) : undefined;
@@ -1486,7 +1489,7 @@ app.post('/api/auth/request-verification', requireAuth, async (req, res, next) =
   }
 });
 
-app.post('/api/auth/verify-email', async (req, res, next) => {
+app.post('/api/auth/verify-email', requireDatabaseReady, async (req, res, next) => {
   try {
     const token = String(req.body?.token || '').trim();
     const accountToken = await findAccountToken(hashToken(token), 'email_verification');
@@ -1503,7 +1506,7 @@ app.post('/api/auth/verify-email', async (req, res, next) => {
   }
 });
 
-app.post('/api/auth/login', authRateLimit, async (req, res, next) => {
+app.post('/api/auth/login', authRateLimit, requireDatabaseReady, async (req, res, next) => {
   try {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const password = String(req.body?.password || '');
@@ -3132,14 +3135,32 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-function beginStartup() {
+function runStartupInBackground(reason = 'startup') {
+  if (startupPromise && !startupError) return startupPromise;
+  startupPromise = beginStartup(reason);
+  return startupPromise;
+}
+
+function beginStartup(reason = 'startup') {
   startupError = null;
+  const startedAt = Date.now();
+  const initialStatus = getDatabaseRuntimeStatus();
+  console.log('[Metenova Startup] database bootstrap requested', {
+    reason,
+    host: initialStatus.host,
+    database: initialStatus.database,
+    fingerprint: initialStatus.fingerprint
+  });
   return initDatabase()
     .then(removeDemoAccounts)
     .then(seedOwnerAccountIfEmpty)
     .then(() => promoteAdminEmails(adminEmails))
     .then(ensureOwnerAccount)
     .then(importLegacyDatasets)
+    .then(() => {
+      startupError = null;
+      clearDatabaseRuntimeFailure();
+    })
     .catch((error) => {
       startupError = error;
       console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
@@ -3149,16 +3170,18 @@ function beginStartup() {
       console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
       console.log(`PostgreSQL configured: ${dbStatus.usingPostgres ? 'true' : 'false'}`);
       console.log(`PostgreSQL connected: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
+      console.log(`PostgreSQL active host: ${dbStatus.host || 'none'} fingerprint: ${dbStatus.fingerprint || 'none'} port: ${dbStatus.port || 'none'}`);
       console.log(`PostgreSQL tables initialized: ${dbStatus.tablesInitialized ? 'true' : dbStatus.usingPostgres ? 'false' : 'local-mode'}`);
       if (dbStatus.connectionError) {
         console.error(`PostgreSQL startup error: ${dbStatus.connectionError}`);
       }
       console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
       console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
+      console.log(`Startup duration: ${Date.now() - startedAt}ms`);
     });
 }
 
-startupPromise = beginStartup();
+runStartupInBackground('module-load');
 
 if (process.env.VERCEL !== '1') {
   startupPromise.finally(() => {

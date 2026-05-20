@@ -1,4 +1,5 @@
 import { config } from 'dotenv';
+import { createHash } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -46,12 +47,13 @@ const sampleCompanies = [
 
 export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
 export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
-export const usingPostgres = Boolean(process.env.DATABASE_URL);
+export const usingPostgres = Boolean(currentDatabaseUrl());
 export let pool = null;
 
 let connected = false;
 let tablesInitialized = false;
 let lastConnectionError = null;
+let activeConnectionFingerprint = null;
 
 const devUser = {
   id: 'local-dev-user',
@@ -70,7 +72,7 @@ const devUser = {
 
 function getPostgresConfig() {
   assertPublicDatabaseUrl();
-  const databaseUrl = process.env.DATABASE_URL || '';
+  const databaseUrl = currentDatabaseUrl();
   const sslRequired = /sslmode=require/i.test(databaseUrl) || isVercelRuntime || /neon\.tech/i.test(databaseUrl);
   return {
     connectionString: databaseUrl,
@@ -80,13 +82,11 @@ function getPostgresConfig() {
 }
 
 function assertPublicDatabaseUrl() {
-  if (!process.env.DATABASE_URL) return;
+  const databaseUrl = currentDatabaseUrl();
+  if (!databaseUrl) return;
 
   try {
-    const host = new URL(process.env.DATABASE_URL).hostname;
-    if (process.env.VERCEL === '1' && host.endsWith('.internal')) {
-      throw new Error('DATABASE_URL points to a private database hostname. Configure a public Neon PostgreSQL connection string for Vercel.');
-    }
+    const host = new URL(databaseUrl).hostname;
     if (process.env.VERCEL === '1' && !host.includes('neon.tech')) {
       console.warn('DATABASE_URL does not use the expected Neon PostgreSQL hostname for Vercel deployments.');
     }
@@ -97,7 +97,18 @@ function assertPublicDatabaseUrl() {
 }
 
 async function getPool() {
+  const fingerprint = connectionStringFingerprint(currentDatabaseUrl());
+  if (pool && activeConnectionFingerprint !== fingerprint) {
+    await pool.end().catch((error) => {
+      console.warn(`Previous PostgreSQL pool close failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    });
+    pool = null;
+    connected = false;
+    tablesInitialized = false;
+  }
+
   if (!pool) {
+    activeConnectionFingerprint = fingerprint;
     pool = new Pool({
       ...getPostgresConfig(),
       max: Number(process.env.PGPOOL_MAX || (isVercelRuntime ? 1 : 10)),
@@ -893,15 +904,21 @@ export async function initDatabase() {
 export function getDatabaseRuntimeStatus() {
   return {
     usingPostgres,
-    hostConfigured: Boolean(process.env.DATABASE_URL),
-    database: usingPostgres ? databaseFromUrl(process.env.DATABASE_URL) : null,
-    host: usingPostgres ? publicHostLabel(process.env.DATABASE_URL) : null,
-    port: usingPostgres ? databasePort(process.env.DATABASE_URL) : null,
+    hostConfigured: Boolean(currentDatabaseUrl()),
+    database: usingPostgres ? databaseFromUrl(currentDatabaseUrl()) : null,
+    host: usingPostgres ? publicHostLabel(currentDatabaseUrl()) : null,
+    port: usingPostgres ? databasePort(currentDatabaseUrl()) : null,
+    fingerprint: usingPostgres ? connectionStringFingerprint(currentDatabaseUrl()) : null,
     connected,
     tablesInitialized,
     connectionError: lastConnectionError,
     retries: postgresConnectRetries
   };
+}
+
+export function clearDatabaseRuntimeFailure() {
+  lastConnectionError = null;
+  if (!usingPostgres) tablesInitialized = false;
 }
 
 export async function getAccessibleCompanyIds(user) {
@@ -3577,12 +3594,21 @@ function databaseFromUrl(value) {
   }
 }
 
+function currentDatabaseUrl() {
+  return process.env.DATABASE_URL || '';
+}
+
+function connectionStringFingerprint(value) {
+  if (!value) return null;
+  return createHash('sha256').update(value).digest('hex').slice(0, 16);
+}
+
 function publicHostLabel(value) {
   if (!value) return null;
   try {
     const host = new URL(value).hostname;
     if (host.includes('neon.tech')) return 'neon-postgres';
-    return 'external-postgres';
+    return 'configured-postgres';
   } catch {
     return 'invalid-url';
   }

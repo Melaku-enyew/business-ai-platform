@@ -440,14 +440,18 @@ async function fetchWithRetry(path: string, options: RequestInit = {}, attempts 
 }
 
 function startupErrorMessage(payload: { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }) {
-  if (payload.code !== 'STARTUP_NOT_READY') return payload.error || 'Authentication failed.';
+  if (payload.code !== 'STARTUP_NOT_READY' && payload.code !== 'POSTGRESQL_UNAVAILABLE') return payload.error || 'Authentication failed.';
   const database = payload.database;
   const details = [
     database?.host ? `database host: ${database.host}` : '',
     database?.connectionError ? `error: ${database.connectionError}` : '',
     payload.requestId ? `request: ${payload.requestId}` : ''
   ].filter(Boolean).join(' | ');
-  return `Backend startup is not ready. ${details || 'Database initialization is still running.'}`;
+  return `${payload.error || 'Database is reconnecting. Please retry in a moment.'}${details ? ` ${details}` : ''}`;
+}
+
+function isStartupRecoveryMessage(message: string) {
+  return message.startsWith('Backend startup is not ready') || message.startsWith('PostgreSQL storage is reconnecting') || message.startsWith('Database is reconnecting');
 }
 
 const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
@@ -766,7 +770,7 @@ export function App() {
     if (config.durableStorage !== false && config.postgresqlConnected !== false) {
       localStorage.removeItem(STARTUP_ERROR_KEY);
       sessionStorage.removeItem(STARTUP_ERROR_KEY);
-      setAuthMessage((message) => message.startsWith('Backend startup is not ready') ? DEFAULT_AUTH_MESSAGE : message);
+      setAuthMessage((message) => isStartupRecoveryMessage(message) ? DEFAULT_AUTH_MESSAGE : message);
     }
   }
 
@@ -786,7 +790,7 @@ export function App() {
 
   useEffect(() => {
     if (user) return undefined;
-    const shouldPoll = authMessage.startsWith('Backend startup is not ready') || durableStorage === false;
+    const shouldPoll = isStartupRecoveryMessage(authMessage) || durableStorage === false;
     if (!shouldPoll) return undefined;
 
     const interval = window.setInterval(() => {
@@ -1099,12 +1103,14 @@ export function App() {
 
       if (!response.ok || !payload.token || !payload.user) {
         const message = startupErrorMessage(payload);
-        if (payload.code === 'STARTUP_NOT_READY') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
+        if (payload.code === 'STARTUP_NOT_READY' || payload.code === 'POSTGRESQL_UNAVAILABLE') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
         throw new Error(message);
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
       sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
+      localStorage.removeItem(STARTUP_ERROR_KEY);
+      sessionStorage.removeItem(STARTUP_ERROR_KEY);
       setToken(payload.token);
       setUser(payload.user);
       setAuthPassword('');
@@ -1141,12 +1147,14 @@ export function App() {
       const payload = await readJson<Partial<AuthResponse> & { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }>(response);
       if (!response.ok || !payload.token || !payload.user) {
         const message = startupErrorMessage(payload);
-        if (payload.code === 'STARTUP_NOT_READY') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
+        if (payload.code === 'STARTUP_NOT_READY' || payload.code === 'POSTGRESQL_UNAVAILABLE') sessionStorage.setItem(STARTUP_ERROR_KEY, message);
         throw new Error(message);
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
       sessionStorage.setItem(SESSION_ACTIVITY_KEY, String(Date.now()));
+      localStorage.removeItem(STARTUP_ERROR_KEY);
+      sessionStorage.removeItem(STARTUP_ERROR_KEY);
       window.history.replaceState({}, '', '/');
       setToken(payload.token);
       setUser(payload.user);
