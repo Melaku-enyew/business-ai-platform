@@ -524,6 +524,38 @@ const sampleCompanies: Company[] = [
   }
 ];
 
+function companyFromAssignment(assignment: CompanyAssignment): Company {
+  return {
+    id: assignment.companyId,
+    name: assignment.companyName || 'Assigned workspace',
+    industry: 'Business operations',
+    ownerName: 'Assigned team',
+    email: '',
+    phone: '',
+    status: 'Active'
+  };
+}
+
+function userScopedCompanyFallback(user?: User | null): Company[] {
+  if (!user) return [];
+  const assigned = asArray(user.assignedCompanies)
+    .filter((assignment) => Boolean(assignment.companyId))
+    .map(companyFromAssignment);
+
+  if (assigned.length) return assigned;
+  if (!user.companyId) return [];
+
+  return [{
+    id: user.companyId,
+    name: 'Assigned workspace',
+    industry: 'Business operations',
+    ownerName: user.name || 'Assigned user',
+    email: user.email || '',
+    phone: '',
+    status: 'Active'
+  }];
+}
+
 function buildCompanyQuery(companyId: string) {
   return companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
 }
@@ -1307,7 +1339,8 @@ export function App() {
   const uploadCompanies = useMemo(() => {
     if (!user || canManageUsers(user)) return companies;
     const assigned = companies.filter((company) => assignedCompanyIds.includes(company.id));
-    return assigned.length ? assigned : companies.filter((company) => company.id === user.companyId);
+    const primaryCompany = companies.filter((company) => company.id === user.companyId);
+    return assigned.length ? assigned : primaryCompany.length ? primaryCompany : userScopedCompanyFallback(user);
   }, [assignedCompanyIds, companies, user]);
   const effectiveCompanyId = useMemo(() => {
     if (uploadCompanies.some((company) => company.id === selectedCompanyId)) return selectedCompanyId;
@@ -2062,11 +2095,11 @@ export function App() {
       const visibleCompanies = !user || canManageUsers(user)
         ? nextCompanies
         : nextCompanies.filter((company) => userAssignedIds.includes(company.id) || company.id === user.companyId);
-      const companyOptions = visibleCompanies.length ? visibleCompanies : nextCompanies;
+      const companyOptions = visibleCompanies.length ? visibleCompanies : userScopedCompanyFallback(user);
       setCompanies(companyOptions);
       setSelectedCompanyId((current) => companyOptions.some((company) => company.id === current) ? current : companyOptions[0]?.id ?? '');
     } catch (error) {
-      setCompanies(sampleCompanies);
+      setCompanies(!user || canManageUsers(user) ? sampleCompanies : userScopedCompanyFallback(user));
       setCompaniesError(error instanceof Error ? error.message : 'Could not load companies.');
     } finally {
       setCompaniesLoading(false);
