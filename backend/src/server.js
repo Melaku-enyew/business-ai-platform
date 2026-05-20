@@ -1095,7 +1095,10 @@ app.use(cors({
     }
     callback(new Error(`CORS origin not allowed: ${origin}`));
   },
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-CSRF-Token', 'X-Request-Id', 'X-Retry-Count'],
+  exposedHeaders: ['X-Request-Id']
 }));
 app.use((req, res, next) => {
   const requestId = req.headers['x-request-id'] || randomUUID();
@@ -3060,7 +3063,7 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-initDatabase()
+const startupPromise = initDatabase()
   .then(removeDemoAccounts)
   .then(() => promoteAdminEmails(adminEmails))
   .then(ensureOwnerAccount)
@@ -3079,7 +3082,14 @@ initDatabase()
     }
     console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
     console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
+  });
+
+if (process.env.VERCEL !== '1') {
+  startupPromise.finally(() => {
     app.listen(port, () => {
       console.log(`Backend listening on http://localhost:${port}`);
     });
   });
+}
+
+export default app;

@@ -390,6 +390,39 @@ function apiUrl(path: string) {
   return `${API_BASE}${path.startsWith('/') ? path : `/${path}`}`;
 }
 
+async function fetchWithRetry(path: string, options: RequestInit = {}, attempts = 2) {
+  const requestUrl = apiUrl(path);
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      const response = await fetch(requestUrl, {
+        ...options,
+        credentials: options.credentials ?? 'include',
+        headers: {
+          'X-Request-Id': `web-${Date.now()}-${attempt}`,
+          ...(options.headers instanceof Headers ? Object.fromEntries(options.headers.entries()) : options.headers ?? {})
+        }
+      });
+      if (attempt > 1) {
+        console.info('[Metenova API] retry recovered', { path, requestUrl, attempt, status: response.status });
+      }
+      return response;
+    } catch (error) {
+      lastError = error;
+      console.error('[Metenova API] fetch failed', {
+        path,
+        requestUrl,
+        attempt,
+        apiBase: API_BASE,
+        origin: window.location.origin,
+        message: error instanceof Error ? error.message : String(error)
+      });
+      if (attempt < attempts) await new Promise((resolve) => window.setTimeout(resolve, 600 * attempt));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('Failed to fetch.');
+}
+
 const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
   { view: 'dashboard', label: 'Dashboard', icon: 'DB' },
   { view: 'assistant', label: 'Business Assistant', icon: 'BA' },
@@ -695,7 +728,7 @@ export function App() {
   }, []);
 
   useEffect(() => {
-    fetch(apiUrl('/api/config'), { credentials: 'include' })
+    fetchWithRetry('/api/config', { credentials: 'include' }, 3)
       .then((response) => readJson<ConfigResponse>(response))
       .then((config) => {
         setAuthDisabled(Boolean(config.authDisabled));
@@ -709,6 +742,8 @@ export function App() {
       .catch((error) => {
         console.error('[Metenova API] Config request failed', error);
         setAuthDisabled(false);
+        setCsrfToken('');
+        setAuthMessage('Login is available. Secure configuration is retrying in the background.');
         setPersistenceState('Protected workspace infrastructure ready.');
       })
       .finally(() => setConfigLoaded(true));
@@ -841,7 +876,7 @@ export function App() {
   }, [user?.id, authDisabled, sessionTimeoutMs, sessionWarningSeconds]);
 
   async function refreshCsrfToken() {
-    const response = await fetch(apiUrl('/api/config'), { credentials: 'include' });
+    const response = await fetchWithRetry('/api/config', { credentials: 'include' }, 3);
     const config = await readJson<ConfigResponse>(response);
     if (!response.ok || !config.csrfToken) {
       throw new Error('Could not refresh secure request token.');
@@ -872,13 +907,13 @@ export function App() {
       credentials: 'include'
     };
 
-    const response = await fetch(requestUrl, requestInit);
+      const response = await fetchWithRetry(path, requestInit, 2);
     if (response.status === 403 && isMutation) {
       const payload = await response.clone().json().catch(() => ({} as { code?: string }));
       if (payload.code === 'CSRF_INVALID') {
         const refreshed = await refreshCsrfToken();
         headers.set('X-CSRF-Token', refreshed);
-        return fetch(requestUrl, requestInit);
+        return fetchWithRetry(path, requestInit, 2);
       }
     }
 
@@ -999,7 +1034,7 @@ export function App() {
 
   async function submitAuth(credentials: { name?: string; email: string; password: string; mode: AuthMode }) {
     try {
-      const response = await fetch(apiUrl(`/api/auth/${credentials.mode}`), {
+      const response = await fetchWithRetry(`/api/auth/${credentials.mode}`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -1025,7 +1060,14 @@ export function App() {
       setStatus('Live');
       setCurrentView('dashboard');
     } catch (error) {
-      setAuthMessage(error instanceof Error ? error.message : 'Authentication failed.');
+      const message = error instanceof Error ? error.message : 'Authentication failed.';
+      console.error('[Metenova Auth] Authentication request failed', {
+        apiBase: API_BASE,
+        origin: window.location.origin,
+        mode: credentials.mode,
+        message
+      });
+      setAuthMessage(message === 'Failed to fetch' ? 'Could not reach the authentication service. Please retry; production connectivity has been logged.' : message);
     }
   }
 
@@ -1034,7 +1076,7 @@ export function App() {
     setAuthMessage('Activating your workspace invitation...');
 
     try {
-      const response = await fetch(apiUrl('/api/auth/accept-invite'), {
+      const response = await fetchWithRetry('/api/auth/accept-invite', {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
