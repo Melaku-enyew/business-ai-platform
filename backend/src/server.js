@@ -268,6 +268,19 @@ function uploadError(message, code, stage, statusCode = 400, details = {}) {
   return error;
 }
 
+function uploadFailurePayload(req, error, fallbackStage = 'unknown') {
+  const stage = error.uploadStage || fallbackStage;
+  return {
+    success: false,
+    error: error.message || 'Upload failed.',
+    code: error.code || 'UPLOAD_FAILED',
+    requestId: req.requestId,
+    stage,
+    uploadStage: stage,
+    details: error.details ?? {}
+  };
+}
+
 function logUploadStage(req, stage, details = {}) {
   console.info('[Metenova Upload]', {
     requestId: req.requestId,
@@ -730,13 +743,22 @@ function canManageCompany(user, companyId) {
 }
 
 function canManageDataset(user, dataset) {
-  return hasRole(user, 'admin') || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(dataset.companyId));
+  return hasRole(user, 'admin')
+    || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(dataset.companyId))
+    || (dataset.userId && dataset.userId === user?.id);
 }
 
 async function requireCompanyAccess(req, res, companyId) {
   if (!companyId) return true;
   if (!(await canAccessCompany(req.user, companyId))) {
-    res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
+    const isUploadRequest = req.path === '/api/files/upload' || req.path === '/api/csv/upload';
+    const payload = {
+      error: 'Company workspace is not assigned to this account.',
+      code: 'COMPANY_FORBIDDEN',
+      requestId: req.requestId,
+      ...(isUploadRequest ? { success: false, stage: 'auth', uploadStage: 'company_assignment', details: { companyId } } : {})
+    };
+    res.status(403).json(payload);
     return false;
   }
   return true;
@@ -2530,7 +2552,8 @@ async function handleDatasetUpload(req, res) {
   const startedAt = Date.now();
   logUploadStage(req, 'request_received', { workflowStage: 'Upload' });
   if (!req.file) {
-    res.status(400).json({ error: 'A .csv, .xlsx, .xls, or .json file is required.', code: 'UPLOAD_FILE_MISSING', requestId: req.requestId, uploadStage: 'multipart_form_data' });
+    const error = uploadError('A .csv, .xlsx, .xls, or .json file is required.', 'UPLOAD_FILE_MISSING', 'multipart_form_data');
+    res.status(400).json(uploadFailurePayload(req, error, 'multipart_form_data'));
     return;
   }
   logUploadStage(req, 'multipart_received', { fileSize: req.file.size });
@@ -2541,7 +2564,8 @@ async function handleDatasetUpload(req, res) {
   const companyId = requestedCompanyId(req);
   if (!companyId) {
     logUploadStage(req, 'company_validation_failed', { validationResult: 'missing_company' });
-    res.status(400).json({ error: 'Unauthorized company: select a company before uploading a dataset.', code: 'UPLOAD_COMPANY_REQUIRED', requestId: req.requestId, uploadStage: 'company_assignment' });
+    const error = uploadError('Unauthorized company: select a company before uploading a dataset.', 'UPLOAD_COMPANY_REQUIRED', 'company_assignment');
+    res.status(400).json(uploadFailurePayload(req, error, 'company_assignment'));
     return;
   }
   if (!(await requireCompanyAccess(req, res, companyId))) {
@@ -2550,7 +2574,8 @@ async function handleDatasetUpload(req, res) {
   }
   if (!(await companyExists(companyId))) {
     logUploadStage(req, 'company_validation_failed', { companyId, validationResult: 'not_found' });
-    res.status(400).json({ error: 'Unauthorized company: selected company workspace was not found.', code: 'UPLOAD_COMPANY_NOT_FOUND', requestId: req.requestId, uploadStage: 'company_assignment' });
+    const error = uploadError('Unauthorized company: selected company workspace was not found.', 'UPLOAD_COMPANY_NOT_FOUND', 'company_assignment');
+    res.status(400).json(uploadFailurePayload(req, error, 'company_assignment'));
     return;
   }
 
@@ -2560,7 +2585,8 @@ async function handleDatasetUpload(req, res) {
 
   if (!parsed.columns.length || !parsed.records.length) {
     logUploadStage(req, 'schema_validation_failed', { companyId, validationResult: 'missing_headers_or_rows' });
-    res.status(400).json({ error: 'Invalid schema: the uploaded file does not contain tabular data with headers and rows.', code: 'UPLOAD_INVALID_SCHEMA', requestId: req.requestId, uploadStage: 'schema_validation' });
+    const error = uploadError('Invalid schema: the uploaded file does not contain tabular data with headers and rows.', 'UPLOAD_INVALID_SCHEMA', 'schema_validation');
+    res.status(400).json(uploadFailurePayload(req, error, 'schema_validation'));
     return;
   }
 
@@ -2589,6 +2615,12 @@ async function handleDatasetUpload(req, res) {
     cleanupMetrics: {},
     cleanupPreview: null,
     cleanupOperations: [],
+    validationResults: moduleValidation.missing?.length ? [{ stage: moduleValidation.stage, result: moduleValidation.result, missing: moduleValidation.missing }] : [],
+    duplicateResults: [],
+    cleanupResults: [],
+    qualityScore: moduleValidation.result === 'passed' ? 100 : 82,
+    pipelineStatus: 'uploaded',
+    status: 'uploaded',
     futureAiReady: false,
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
     ...summary
@@ -2624,7 +2656,7 @@ async function handleDatasetUpload(req, res) {
   });
   logUploadStage(req, 'upload_completed', { companyId, workflowStage: 'Workflow Ready', validationResult: 'success', durationMs: Date.now() - startedAt });
 
-  res.json(publicDataset(dataset));
+  res.json({ success: true, dataset: publicDataset(dataset), ...publicDataset(dataset) });
 }
 
 app.post('/api/files/upload', requireDurableStorage, upload.single('file'), (req, res) => {
@@ -2642,13 +2674,7 @@ app.post('/api/files/upload', requireDurableStorage, upload.single('file'), (req
       code: error.code,
       stack: error.stack
     });
-    res.status(error.statusCode || 500).json({
-      error: error.message || 'Upload failed.',
-      code: error.code || 'UPLOAD_FAILED',
-      requestId: req.requestId,
-      uploadStage: error.uploadStage || 'unknown',
-      details: error.details ?? {}
-    });
+    res.status(error.statusCode || 500).json(uploadFailurePayload(req, error));
   });
 });
 
@@ -2667,13 +2693,7 @@ app.post('/api/csv/upload', requireDurableStorage, upload.single('file'), (req, 
       code: error.code,
       stack: error.stack
     });
-    res.status(error.statusCode || 500).json({
-      error: error.message || 'Upload failed.',
-      code: error.code || 'UPLOAD_FAILED',
-      requestId: req.requestId,
-      uploadStage: error.uploadStage || 'unknown',
-      details: error.details ?? {}
-    });
+    res.status(error.statusCode || 500).json(uploadFailurePayload(req, error));
   });
 });
 

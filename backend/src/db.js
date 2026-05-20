@@ -1676,6 +1676,12 @@ export async function saveDataset(dataset) {
     cleanupMetrics: dataset.cleanupMetrics ?? {},
     cleanupPreview: dataset.cleanupPreview ?? null,
     cleanupOperations: dataset.cleanupOperations ?? [],
+    validationResults: dataset.validationResults ?? [],
+    duplicateResults: dataset.duplicateResults ?? [],
+    cleanupResults: dataset.cleanupResults ?? [],
+    qualityScore: dataset.qualityScore ?? 0,
+    pipelineStatus: dataset.pipelineStatus ?? dataset.status ?? dataset.cleanupStatus ?? 'uploaded',
+    status: dataset.status ?? dataset.pipelineStatus ?? 'uploaded',
     futureAiReady: dataset.futureAiReady === true
   };
 
@@ -3217,6 +3223,12 @@ function rowToDataset(row) {
     cleanupMetrics: analysis.cleanupMetrics ?? {},
     cleanupPreview: analysis.cleanupPreview ?? null,
     cleanupOperations: analysis.cleanupOperations ?? [],
+    validationResults: analysis.validationResults ?? [],
+    duplicateResults: analysis.duplicateResults ?? [],
+    cleanupResults: analysis.cleanupResults ?? [],
+    qualityScore: analysis.qualityScore ?? 0,
+    pipelineStatus: analysis.pipelineStatus ?? analysis.status ?? row.cleanup_status ?? row.cleanupStatus ?? 'uploaded',
+    status: analysis.status ?? analysis.pipelineStatus ?? row.cleanup_status ?? row.cleanupStatus ?? 'uploaded',
     futureAiReady: analysis.futureAiReady === true,
     deletedAt: toIso(row.deleted_at ?? row.deletedAt),
     archivedAt: toIso(row.archived_at ?? row.archivedAt),

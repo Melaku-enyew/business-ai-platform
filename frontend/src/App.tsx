@@ -346,6 +346,16 @@ type Company = {
   updatedAt?: string;
 };
 
+type UploadErrorPayload = {
+  success?: boolean;
+  error?: string;
+  code?: string;
+  uploadStage?: string;
+  stage?: string;
+  requestId?: string;
+  details?: Record<string, unknown>;
+};
+
 type CompanyFormValues = {
   name: string;
   industry: string;
@@ -518,12 +528,13 @@ function buildCompanyQuery(companyId: string) {
   return companyId ? `?companyId=${encodeURIComponent(companyId)}` : '';
 }
 
-function formatUploadError(payload: { error?: string; code?: string; uploadStage?: string; requestId?: string }, status: number) {
+function formatUploadError(payload: UploadErrorPayload, status: number) {
   const codeLabels: Record<string, string> = {
     UPLOAD_INVALID_MIME: 'Invalid MIME',
     UPLOAD_INVALID_SCHEMA: 'Invalid schema',
     UPLOAD_COMPANY_REQUIRED: 'Unauthorized company',
     UPLOAD_COMPANY_NOT_FOUND: 'Unauthorized company',
+    COMPANY_FORBIDDEN: 'Unauthorized company',
     UPLOAD_PARSER_FAILURE: 'Parser failure',
     UPLOAD_DATABASE_FAILURE: 'Database persistence failure',
     UPLOAD_FILE_MISSING: 'Multipart/form-data handling failed',
@@ -531,7 +542,8 @@ function formatUploadError(payload: { error?: string; code?: string; uploadStage
     SESSION_EXPIRED: 'CSRF/session failure'
   };
   const label = payload.code ? codeLabels[payload.code] ?? payload.code : status === 401 || status === 403 ? 'CSRF/session failure' : 'Upload failure';
-  const stage = payload.uploadStage ? ` Stage: ${payload.uploadStage}.` : '';
+  const stageName = payload.stage ?? payload.uploadStage;
+  const stage = stageName ? ` Stage: ${stageName}.` : '';
   const request = payload.requestId ? ` Request ID: ${payload.requestId}.` : '';
   return `${label}: ${payload.error || 'The dataset could not be uploaded.'}${stage}${request}`;
 }
@@ -1291,9 +1303,19 @@ export function App() {
     const healthy = enterpriseOps.connectors.filter((connector) => ['healthy', 'ready'].includes(connector.healthStatus) || connector.status === 'ready').length;
     return { total, healthy, failed: enterpriseOps.connectors.filter((connector) => connector.status === 'failed').length };
   }, [enterpriseOps.connectors]);
+  const assignedCompanyIds = useMemo(() => asArray(user?.assignedCompanies).map((assignment) => assignment.companyId), [user?.assignedCompanies]);
+  const uploadCompanies = useMemo(() => {
+    if (!user || canManageUsers(user)) return companies;
+    const assigned = companies.filter((company) => assignedCompanyIds.includes(company.id));
+    return assigned.length ? assigned : companies.filter((company) => company.id === user.companyId);
+  }, [assignedCompanyIds, companies, user]);
+  const effectiveCompanyId = useMemo(() => {
+    if (uploadCompanies.some((company) => company.id === selectedCompanyId)) return selectedCompanyId;
+    return uploadCompanies[0]?.id ?? selectedCompanyId;
+  }, [selectedCompanyId, uploadCompanies]);
 
   async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string) {
-    const targetCompanyId = companyIdOverride || selectedCompanyId;
+    const targetCompanyId = companyIdOverride || effectiveCompanyId;
     if (!targetCompanyId) {
       setUploadState('Select a company before uploading a dataset.');
       return undefined;
@@ -1320,7 +1342,7 @@ export function App() {
         body: formData
       });
 
-      const uploadPayload = await readJson<Dataset & { error?: string; code?: string; uploadStage?: string; requestId?: string }>(response);
+      const uploadPayload = await readJson<(Dataset & UploadErrorPayload) & { dataset?: Dataset }>(response);
       console.info('[Metenova Upload] Dataset upload response', {
         requestId: uploadPayload?.requestId,
         keys: Object.keys(asObject(uploadPayload)),
@@ -1331,7 +1353,7 @@ export function App() {
         throw new Error(formatUploadError(uploadPayload, response.status));
       }
 
-      const dataset = normalizeDatasetForClient(uploadPayload);
+      const dataset = normalizeDatasetForClient(uploadPayload.dataset ?? uploadPayload);
       setLastUploadedFile(file);
       setActiveDataset(dataset);
       setDatasets((current: Dataset[]) => [dataset, ...current.filter((item) => item.id !== dataset.id)]);
@@ -2036,8 +2058,13 @@ export function App() {
       }
 
       const nextCompanies = payload.companies?.length ? payload.companies : sampleCompanies;
-      setCompanies(nextCompanies);
-      setSelectedCompanyId((current) => nextCompanies.some((company) => company.id === current) ? current : nextCompanies[0]?.id ?? '');
+      const userAssignedIds = asArray(user?.assignedCompanies).map((assignment) => assignment.companyId);
+      const visibleCompanies = !user || canManageUsers(user)
+        ? nextCompanies
+        : nextCompanies.filter((company) => userAssignedIds.includes(company.id) || company.id === user.companyId);
+      const companyOptions = visibleCompanies.length ? visibleCompanies : nextCompanies;
+      setCompanies(companyOptions);
+      setSelectedCompanyId((current) => companyOptions.some((company) => company.id === current) ? current : companyOptions[0]?.id ?? '');
     } catch (error) {
       setCompanies(sampleCompanies);
       setCompaniesError(error instanceof Error ? error.message : 'Could not load companies.');
@@ -2579,7 +2606,7 @@ export function App() {
           <CompanyAccessModal
             accessCompanyIds={accessCompanyIds}
             accessRole={accessRole}
-            companies={companies}
+            companies={uploadCompanies}
             onClose={() => setAccessUser(null)}
             onRoleChange={setAccessRole}
             onSave={saveCompanyAccess}
@@ -2615,7 +2642,7 @@ export function App() {
             runCompanyAction={runCompanyAction}
             saveCompany={saveCompany}
             setCompanyFormOpen={setCompanyFormOpen}
-            selectedCompanyId={selectedCompanyId}
+            selectedCompanyId={effectiveCompanyId}
             setActiveDataset={setActiveDataset}
             setCleanupJobs={setCleanupJobs}
             setDatasets={setDatasets}
@@ -3222,8 +3249,8 @@ export function App() {
                 </div>
                 <label className="company-selector">
                   Company
-                  <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
-                    {companies.map((company) => (
+                  <select value={effectiveCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
+                    {uploadCompanies.map((company) => (
                       <option key={company.id} value={company.id}>{company.name}</option>
                     ))}
                   </select>
