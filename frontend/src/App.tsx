@@ -162,10 +162,24 @@ type ConfigResponse = {
   authDisabled: boolean;
   storage: 'sql-server' | 'local-json' | string;
   durableStorage?: boolean;
+  postgresqlConnected?: boolean;
+  database?: DatabaseStatus;
   emailConfigured?: boolean;
   sessionTimeoutMinutes?: number;
   sessionWarningSeconds?: number;
   csrfToken?: string;
+};
+
+type DatabaseStatus = {
+  usingPostgres?: boolean;
+  hostConfigured?: boolean;
+  database?: string | null;
+  host?: string | null;
+  port?: string | null;
+  connected?: boolean;
+  tablesInitialized?: boolean;
+  connectionError?: string | null;
+  retries?: number;
 };
 
 type AuditLog = {
@@ -421,6 +435,17 @@ async function fetchWithRetry(path: string, options: RequestInit = {}, attempts 
     }
   }
   throw lastError instanceof Error ? lastError : new Error('Failed to fetch.');
+}
+
+function startupErrorMessage(payload: { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }) {
+  if (payload.code !== 'STARTUP_NOT_READY') return payload.error || 'Authentication failed.';
+  const database = payload.database;
+  const details = [
+    database?.host ? `database host: ${database.host}` : '',
+    database?.connectionError ? `error: ${database.connectionError}` : '',
+    payload.requestId ? `request: ${payload.requestId}` : ''
+  ].filter(Boolean).join(' | ');
+  return `Backend startup is not ready. ${details || 'Database initialization is still running.'}`;
 }
 
 const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
@@ -1045,10 +1070,10 @@ export function App() {
         })
       });
 
-      const payload = await readJson<Partial<AuthResponse> & { error?: string }>(response);
+      const payload = await readJson<Partial<AuthResponse> & { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }>(response);
 
       if (!response.ok || !payload.token || !payload.user) {
-        throw new Error(payload.error || 'Authentication failed.');
+        throw new Error(startupErrorMessage(payload));
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);
@@ -1086,9 +1111,9 @@ export function App() {
           password: invitePassword
         })
       });
-      const payload = await readJson<Partial<AuthResponse> & { error?: string }>(response);
+      const payload = await readJson<Partial<AuthResponse> & { error?: string; code?: string; database?: DatabaseStatus; requestId?: string }>(response);
       if (!response.ok || !payload.token || !payload.user) {
-        throw new Error(payload.error || 'Invitation could not be accepted.');
+        throw new Error(startupErrorMessage(payload));
       }
 
       sessionStorage.setItem(AUTH_TOKEN_KEY, payload.token);

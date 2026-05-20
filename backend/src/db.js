@@ -70,9 +70,12 @@ const devUser = {
 
 function getPostgresConfig() {
   assertPublicDatabaseUrl();
+  const databaseUrl = process.env.DATABASE_URL || '';
+  const sslRequired = /sslmode=require/i.test(databaseUrl) || isVercelRuntime || /neon\.tech/i.test(databaseUrl);
   return {
-    connectionString: process.env.DATABASE_URL,
-    ssl: { rejectUnauthorized: false }
+    connectionString: databaseUrl,
+    ssl: sslRequired ? { rejectUnauthorized: false } : false,
+    application_name: process.env.PGAPPNAME || 'metenova-ai'
   };
 }
 
@@ -84,8 +87,8 @@ function assertPublicDatabaseUrl() {
     if (process.env.VERCEL === '1' && host.endsWith('.internal')) {
       throw new Error('DATABASE_URL points to a Railway private hostname. Configure the Railway public proxy URL for Vercel.');
     }
-    if (process.env.VERCEL === '1' && !host.endsWith('.proxy.rlwy.net')) {
-      console.warn('DATABASE_URL does not use the Railway public proxy hostname expected for Vercel deployments.');
+    if (process.env.VERCEL === '1' && !host.endsWith('.proxy.rlwy.net') && !host.includes('neon.tech')) {
+      console.warn('DATABASE_URL does not use a recognized public PostgreSQL hostname for Vercel deployments.');
     }
   } catch (error) {
     lastConnectionError = error instanceof Error ? error.message : 'Invalid DATABASE_URL.';
@@ -99,8 +102,9 @@ async function getPool() {
       ...getPostgresConfig(),
       max: Number(process.env.PGPOOL_MAX || (isVercelRuntime ? 1 : 10)),
       idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || (isVercelRuntime ? 5000 : 30000)),
-      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
+      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || (isVercelRuntime ? 15000 : 10000)),
       keepAlive: true,
+      keepAliveInitialDelayMillis: 10000,
       allowExitOnIdle: isVercelRuntime
     });
     pool.on('error', (error) => {
@@ -401,6 +405,180 @@ export async function initDatabase() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
 
+    CREATE TABLE IF NOT EXISTS workflows (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      pipeline_id TEXT REFERENCES pipelines(id) ON DELETE SET NULL,
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      module TEXT NOT NULL DEFAULT 'data-processing',
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      priority INTEGER NOT NULL DEFAULT 5,
+      current_stage TEXT,
+      metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      logs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_stage_runs (
+      id TEXT PRIMARY KEY,
+      workflow_id TEXT REFERENCES workflows(id) ON DELETE CASCADE,
+      pipeline_stage_run_id TEXT REFERENCES pipeline_stage_runs(id) ON DELETE SET NULL,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      stage_name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      operator_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      validation_output JSONB NOT NULL DEFAULT '{}'::jsonb,
+      metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      logs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      retry_count INTEGER NOT NULL DEFAULT 0,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS workflow_rules (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      pipeline_rule_id TEXT REFERENCES pipeline_rules(id) ON DELETE SET NULL,
+      module TEXT NOT NULL,
+      rule_key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      config JSONB NOT NULL DEFAULT '{}'::jsonb,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS approvals (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL,
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      requested_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      approver_user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      decision_notes TEXT NOT NULL DEFAULT '',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      decided_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS connector_configs (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      connector_id TEXT REFERENCES enterprise_connectors(id) ON DELETE SET NULL,
+      connector_type TEXT NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'not_configured',
+      encrypted_credentials TEXT,
+      permissions JSONB NOT NULL DEFAULT '{}'::jsonb,
+      schedule JSONB NOT NULL DEFAULT '{}'::jsonb,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS sync_logs (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      connector_id TEXT REFERENCES enterprise_connectors(id) ON DELETE SET NULL,
+      connector_config_id TEXT REFERENCES connector_configs(id) ON DELETE SET NULL,
+      status TEXT NOT NULL DEFAULT 'queued',
+      records_processed INTEGER NOT NULL DEFAULT 0,
+      failed_rows INTEGER NOT NULL DEFAULT 0,
+      retries INTEGER NOT NULL DEFAULT 0,
+      duration_ms INTEGER NOT NULL DEFAULT 0,
+      error TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      started_at TIMESTAMPTZ,
+      completed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS schedules (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      pipeline_id TEXT REFERENCES pipelines(id) ON DELETE SET NULL,
+      workflow_id TEXT REFERENCES workflows(id) ON DELETE SET NULL,
+      name TEXT NOT NULL,
+      schedule_type TEXT NOT NULL DEFAULT 'cron',
+      cron_expression TEXT,
+      event_trigger TEXT,
+      status TEXT NOT NULL DEFAULT 'queued',
+      priority INTEGER NOT NULL DEFAULT 5,
+      sla_minutes INTEGER NOT NULL DEFAULT 60,
+      retry_policy JSONB NOT NULL DEFAULT '{}'::jsonb,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      next_run_at TIMESTAMPTZ,
+      last_run_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS ai_insights (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      workflow_intelligence_id TEXT REFERENCES workflow_intelligence(id) ON DELETE SET NULL,
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      module TEXT NOT NULL,
+      insight_type TEXT NOT NULL DEFAULT 'recommendation',
+      severity TEXT NOT NULL DEFAULT 'info',
+      title TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      confidence NUMERIC(5,2) NOT NULL DEFAULT 0,
+      recommendations JSONB NOT NULL DEFAULT '[]'::jsonb,
+      explainability JSONB NOT NULL DEFAULT '{}'::jsonb,
+      status TEXT NOT NULL DEFAULT 'active',
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS dataset_versions (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE CASCADE,
+      version_number INTEGER NOT NULL DEFAULT 1,
+      version_type TEXT NOT NULL DEFAULT 'cleaned',
+      records JSONB NOT NULL DEFAULT '[]'::jsonb,
+      metrics JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_by TEXT REFERENCES users(id) ON DELETE SET NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS export_history (
+      id TEXT PRIMARY KEY,
+      company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
+      dataset_id TEXT REFERENCES datasets(id) ON DELETE SET NULL,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      export_type TEXT NOT NULL DEFAULT 'csv',
+      filename TEXT NOT NULL DEFAULT '',
+      row_count INTEGER NOT NULL DEFAULT 0,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
+    CREATE TABLE IF NOT EXISTS login_history (
+      id TEXT PRIMARY KEY,
+      user_id TEXT REFERENCES users(id) ON DELETE SET NULL,
+      email TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL,
+      ip_address TEXT,
+      user_agent TEXT,
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+
     CREATE TABLE IF NOT EXISTS access_requests (
       id TEXT PRIMARY KEY,
       company_id TEXT NOT NULL DEFAULT '${defaultCompanyId}',
@@ -550,6 +728,17 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_connector_sync_logs_company_created ON connector_sync_logs (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_pipeline_schedules_company_status ON pipeline_schedules (company_id, status, next_run_at DESC);
     CREATE INDEX IF NOT EXISTS idx_workflow_intelligence_company_module ON workflow_intelligence (company_id, module, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflows_company_status ON workflows (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_stage_runs_company_status ON workflow_stage_runs (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_workflow_rules_company_module ON workflow_rules (company_id, module, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_approvals_company_status ON approvals (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_connector_configs_company_status ON connector_configs (company_id, status, updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_sync_logs_company_created ON sync_logs (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_schedules_company_status ON schedules (company_id, status, next_run_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_ai_insights_company_module ON ai_insights (company_id, module, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_dataset_versions_dataset ON dataset_versions (dataset_id, version_number DESC);
+    CREATE INDEX IF NOT EXISTS idx_export_history_company_created ON export_history (company_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_login_history_email_created ON login_history (email, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_access_requests_company_status ON access_requests (company_id, status, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_analytics_company_created_at ON analytics (company_id, created_at DESC);
     CREATE INDEX IF NOT EXISTS idx_notifications_company_created_at ON notifications (company_id, created_at DESC);
@@ -635,6 +824,46 @@ export async function initDatabase() {
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflow_intelligence_company') THEN
         ALTER TABLE workflow_intelligence
           ADD CONSTRAINT fk_workflow_intelligence_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflows_company') THEN
+        ALTER TABLE workflows
+          ADD CONSTRAINT fk_workflows_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflow_stage_runs_company') THEN
+        ALTER TABLE workflow_stage_runs
+          ADD CONSTRAINT fk_workflow_stage_runs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_workflow_rules_company') THEN
+        ALTER TABLE workflow_rules
+          ADD CONSTRAINT fk_workflow_rules_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_approvals_company') THEN
+        ALTER TABLE approvals
+          ADD CONSTRAINT fk_approvals_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_connector_configs_company') THEN
+        ALTER TABLE connector_configs
+          ADD CONSTRAINT fk_connector_configs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_sync_logs_company') THEN
+        ALTER TABLE sync_logs
+          ADD CONSTRAINT fk_sync_logs_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_schedules_company') THEN
+        ALTER TABLE schedules
+          ADD CONSTRAINT fk_schedules_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_ai_insights_company') THEN
+        ALTER TABLE ai_insights
+          ADD CONSTRAINT fk_ai_insights_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_dataset_versions_company') THEN
+        ALTER TABLE dataset_versions
+          ADD CONSTRAINT fk_dataset_versions_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_export_history_company') THEN
+        ALTER TABLE export_history
+          ADD CONSTRAINT fk_export_history_company FOREIGN KEY (company_id) REFERENCES companies(id) ON DELETE CASCADE;
       END IF;
       IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'fk_access_requests_company') THEN
         ALTER TABLE access_requests
@@ -1181,6 +1410,16 @@ export async function setUserRoleByEmail(email, role) {
 
 export async function promoteAdminEmails(emails) {
   await Promise.all(emails.map((email) => setUserRoleByEmail(email, email === ownerEmail ? 'owner' : 'admin')));
+}
+
+export async function countUsers() {
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.users ?? []).length;
+  }
+
+  const result = await pgQuery('SELECT COUNT(*)::int AS count FROM users;');
+  return Number(result.rows[0]?.count ?? 0);
 }
 
 export async function ensureOwnerAccount() {
@@ -3342,6 +3581,7 @@ function publicHostLabel(value) {
   if (!value) return null;
   try {
     const host = new URL(value).hostname;
+    if (host.includes('neon.tech')) return 'neon-postgres';
     if (host.endsWith('.proxy.rlwy.net')) return 'railway-public-proxy';
     if (host.endsWith('.internal')) return 'railway-private-internal';
     if (host.includes('railway')) return 'railway-host';

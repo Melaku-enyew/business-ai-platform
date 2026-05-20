@@ -11,6 +11,7 @@ import multer from 'multer';
 import * as XLSX from 'xlsx';
 import {
   companyExists,
+  countUsers,
   createAccountToken,
   createCompany,
   createInvitation,
@@ -619,6 +620,37 @@ async function verifyPassword(password, passwordHash) {
   const candidate = await scryptAsync(password, salt, 64);
   const stored = Buffer.from(storedHash, 'base64url');
   return stored.length === candidate.length && timingSafeEqual(stored, candidate);
+}
+
+async function seedOwnerAccountIfEmpty() {
+  const userCount = await countUsers();
+  if (userCount > 0) return;
+
+  const ownerPassword = process.env.OWNER_PASSWORD || process.env.INITIAL_OWNER_PASSWORD;
+  if (!ownerPassword) {
+    console.warn('No users exist. Set OWNER_PASSWORD once to seed the first owner account, or use signup with OWNER_EMAIL.');
+    return;
+  }
+
+  const owner = await createUser({
+    id: randomUUID(),
+    companyId: 'metenova-default-company',
+    name: process.env.OWNER_NAME || 'Metenova Owner',
+    email: ownerEmail,
+    role: 'owner',
+    active: true,
+    emailVerified: true,
+    passwordHash: await hashPassword(ownerPassword)
+  });
+  await saveAuditLog({
+    id: randomUUID(),
+    actorUserId: owner.id,
+    actorEmail: owner.email,
+    action: 'auth.owner_seeded',
+    targetType: 'user',
+    targetId: owner.id,
+    metadata: { source: 'startup' }
+  });
 }
 
 async function requireAuth(req, res, next) {
@@ -1246,7 +1278,8 @@ app.get('/api/config', (_req, res) => {
     emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
     sessionWarningSeconds: warningSeconds,
-    csrfToken
+    csrfToken,
+    database: dbStatus
   });
 });
 
@@ -3103,6 +3136,7 @@ function beginStartup() {
   startupError = null;
   return initDatabase()
     .then(removeDemoAccounts)
+    .then(seedOwnerAccountIfEmpty)
     .then(() => promoteAdminEmails(adminEmails))
     .then(ensureOwnerAccount)
     .then(importLegacyDatasets)
