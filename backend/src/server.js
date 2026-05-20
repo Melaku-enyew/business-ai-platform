@@ -1124,6 +1124,12 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 app.use('/api', async (req, res, next) => {
+  const publicBootstrapRoutes = new Set(['/health', '/readiness', '/config']);
+  if (req.method === 'GET' && publicBootstrapRoutes.has(req.path)) {
+    next();
+    return;
+  }
+
   try {
     if (startupPromise) {
       await startupPromise;

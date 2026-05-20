@@ -13,6 +13,7 @@ const defaultCompanyId = 'metenova-default-company';
 const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
 const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || 3);
 const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || 1500);
+const isVercelRuntime = process.env.VERCEL === '1';
 const sampleCompanies = [
   {
     id: 'company-brightpath-logistics',
@@ -96,8 +97,11 @@ async function getPool() {
   if (!pool) {
     pool = new Pool({
       ...getPostgresConfig(),
-      max: Number(process.env.PGPOOL_MAX || 10),
-      idleTimeoutMillis: 30000
+      max: Number(process.env.PGPOOL_MAX || (isVercelRuntime ? 1 : 10)),
+      idleTimeoutMillis: Number(process.env.PG_IDLE_TIMEOUT_MS || (isVercelRuntime ? 5000 : 30000)),
+      connectionTimeoutMillis: Number(process.env.PG_CONNECT_TIMEOUT_MS || 10000),
+      keepAlive: true,
+      allowExitOnIdle: isVercelRuntime
     });
     pool.on('error', (error) => {
       connected = false;
@@ -662,6 +666,8 @@ export function getDatabaseRuntimeStatus() {
     usingPostgres,
     hostConfigured: Boolean(process.env.DATABASE_URL),
     database: usingPostgres ? databaseFromUrl(process.env.DATABASE_URL) : null,
+    host: usingPostgres ? publicHostLabel(process.env.DATABASE_URL) : null,
+    port: usingPostgres ? databasePort(process.env.DATABASE_URL) : null,
     connected,
     tablesInitialized,
     connectionError: lastConnectionError,
@@ -3327,6 +3333,29 @@ function databaseFromUrl(value) {
   if (!value) return null;
   try {
     return new URL(value).pathname.replace(/^\//, '') || null;
+  } catch {
+    return null;
+  }
+}
+
+function publicHostLabel(value) {
+  if (!value) return null;
+  try {
+    const host = new URL(value).hostname;
+    if (host.endsWith('.proxy.rlwy.net')) return 'railway-public-proxy';
+    if (host.endsWith('.internal')) return 'railway-private-internal';
+    if (host.includes('railway')) return 'railway-host';
+    return 'external-postgres';
+  } catch {
+    return 'invalid-url';
+  }
+}
+
+function databasePort(value) {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.port || 'default';
   } catch {
     return null;
   }
