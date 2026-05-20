@@ -930,15 +930,15 @@ export async function getAccessibleCompanyIds(user) {
     (store.userCompanyAssignments ?? [])
       .filter((assignment) => assignment.userId === user?.id)
       .forEach((assignment) => assigned.add(assignment.companyId));
-    if (user?.companyId && user.companyId !== defaultCompanyId) assigned.add(user.companyId);
+    if (user?.companyId) assigned.add(user.companyId);
     return [...assigned];
   }
 
   const result = await pgQuery(
     `SELECT company_id FROM user_company_assignments WHERE user_id = $1
      UNION
-     SELECT company_id FROM users WHERE id = $1 AND company_id <> $2;`,
-    [user?.id, defaultCompanyId]
+     SELECT company_id FROM users WHERE id = $1 AND company_id IS NOT NULL;`,
+    [user?.id]
   );
   return result.rows.map((row) => row.company_id);
 }

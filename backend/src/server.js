@@ -2909,10 +2909,6 @@ app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, ne
 
 app.delete('/api/datasets/:id', requireDurableStorage, async (req, res, next) => {
   try {
-    if (!hasRole(req.user, 'manager')) {
-      res.status(403).json({ error: 'Company workspace is not assigned to this account.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
-      return;
-    }
     const dataset = await getDataset(req.params.id, req.user);
     if (!dataset) {
       res.status(404).json({ error: 'Dataset not found.' });
