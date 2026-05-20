@@ -15,6 +15,7 @@ type Workflow = {
 
 type Dataset = {
   id: string;
+  name?: string;
   companyId?: string;
   fileName: string;
   fileType?: string;
@@ -44,6 +45,16 @@ type Dataset = {
   futureAiReady?: boolean;
   ownerName?: string;
   ownerEmail?: string;
+  records?: Record<string, string>[];
+  previewRows?: Record<string, string>[];
+  validationResults?: unknown[];
+  duplicates?: unknown[];
+  pipeline?: unknown[];
+  exports?: unknown[];
+  approvals?: unknown[];
+  qualityResults?: unknown[];
+  qualityScore?: number;
+  status?: string;
 };
 
 type CleanupMetrics = {
@@ -1025,12 +1036,13 @@ export function App() {
       const latestDataset = latestDashboard
         ? savedDatasets.find((dataset) => dataset.id === latestDashboard.datasetId) ?? latestDashboard.snapshot?.dataset
         : undefined;
+      const normalizedLatestDataset = latestDataset ? normalizeDatasetForClient(latestDataset) : null;
 
       setUser(mePayload.user);
       setInsights(insightsPayload);
       setWorkflows(workflowsPayload.workflows ?? []);
       setDatasets(savedDatasets);
-      setActiveDataset(latestDataset ?? savedDatasets[0] ?? null);
+      setActiveDataset(normalizedLatestDataset ?? savedDatasets[0] ?? null);
       setDashboards(savedDashboards);
       setReports(reportsPayload.reports ?? []);
       setModuleMetrics(moduleMetricsPayload.metrics ?? {});
@@ -1309,6 +1321,11 @@ export function App() {
       });
 
       const uploadPayload = await readJson<Dataset & { error?: string; code?: string; uploadStage?: string; requestId?: string }>(response);
+      console.info('[Metenova Upload] Dataset upload response', {
+        requestId: uploadPayload?.requestId,
+        keys: Object.keys(asObject(uploadPayload)),
+        dataset: uploadPayload
+      });
 
       if (!response.ok) {
         throw new Error(formatUploadError(uploadPayload, response.status));
@@ -1666,8 +1683,8 @@ export function App() {
         companyId: activeDataset.companyId,
         chartType,
         config: {
-          chartColumn: activeDataset.chartColumn,
-          labelColumn: activeDataset.labelColumn
+          chartColumn: activeDataset.chartColumn ?? '',
+          labelColumn: activeDataset.labelColumn ?? ''
         },
         snapshot: buildDashboardSnapshot(activeDataset, chartType)
       })
@@ -3291,9 +3308,9 @@ export function App() {
                           {deletingDatasetId === activeDataset.id ? 'Deleting...' : 'Delete Dataset'}
                         </button>
                       </div>
-                      {(activeDataset.worksheets?.length ?? 0) > 1 && (
+                      {asArray(activeDataset.worksheets).length > 1 && (
                         <div className="sheet-tabs" aria-label="Worksheet tabs">
-                          {activeDataset.worksheets?.map((sheetName) => (
+                          {asArray(activeDataset.worksheets).map((sheetName) => (
                             <button
                               className={activeDataset.worksheetName === sheetName ? 'active' : ''}
                               key={sheetName}
@@ -3339,7 +3356,7 @@ export function App() {
                     <div className="panel-header">
                       <div>
                         <h3>Auto chart</h3>
-                        <p className="muted">{activeDataset ? `Showing ${activeDataset.chartColumn}` : 'A chart appears after upload.'}</p>
+                        <p className="muted">{activeDataset ? `Showing ${activeDataset.chartColumn ?? 'dataset values'}` : 'A chart appears after upload.'}</p>
                       </div>
                       <div className="segmented" aria-label="Chart type">
                         {(['bar', 'line', 'donut'] as ChartType[]).map((type) => (
@@ -3355,7 +3372,7 @@ export function App() {
                   <article className="panel ai-panel">
                     <h3>Business insights</h3>
                     <ul>
-                      {(activeDataset?.insights ?? ['Upload a CSV or Excel file to generate clear, practical data insights.']).map((item) => (
+                      {(datasetInsights(activeDataset).length ? datasetInsights(activeDataset) : ['Upload a CSV or Excel file to generate clear, practical data insights.']).map((item) => (
                         <li key={item}>{item}</li>
                       ))}
                     </ul>
@@ -3991,8 +4008,23 @@ function asArray<T>(value: T[] | null | undefined): T[] {
   return Array.isArray(value) ? value : EMPTY_ARRAY;
 }
 
+function asObject(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? value as Record<string, unknown> : {};
+}
+
+function asRecordArray(value: unknown): Record<string, string>[] {
+  return Array.isArray(value)
+    ? value.filter((entry): entry is Record<string, string> => Boolean(entry) && typeof entry === 'object')
+    : [];
+}
+
+function finiteNumber(value: unknown, fallback = 0) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : fallback;
+}
+
 function displayNumber(value: number | null | undefined) {
-  return Number(value ?? 0).toLocaleString();
+  return finiteNumber(value).toLocaleString();
 }
 
 function datasetChart(dataset: Dataset | null | undefined) {
@@ -4004,7 +4036,15 @@ function datasetHeaders(dataset: Dataset | null | undefined) {
 }
 
 function datasetPreview(dataset: Dataset | null | undefined) {
-  return asArray(dataset?.preview);
+  return asRecordArray(dataset?.preview);
+}
+
+function datasetRecords(dataset: Dataset | null | undefined) {
+  return asRecordArray(dataset?.records);
+}
+
+function datasetPreviewRows(dataset: Dataset | null | undefined) {
+  return asRecordArray(dataset?.previewRows);
 }
 
 function datasetInsights(dataset: Dataset | null | undefined) {
@@ -4016,12 +4056,36 @@ function datasetNumericSummary(dataset: Dataset | null | undefined) {
 }
 
 function normalizeDatasetForClient(dataset: Dataset): Dataset {
+  const preview = datasetPreview(dataset);
+  const previewRows = datasetPreviewRows(dataset);
+  const records = datasetRecords(dataset);
+  const resolvedPreview = preview.length ? preview : previewRows.length ? previewRows : records;
+  const resolvedHeaders = datasetHeaders(dataset).length
+    ? datasetHeaders(dataset)
+    : Array.from(new Set(resolvedPreview.flatMap((row) => Object.keys(row))));
+  const rawRows = Array.isArray((dataset as unknown as { rows?: unknown }).rows)
+    ? ((dataset as unknown as { rows?: unknown[] }).rows?.length ?? 0)
+    : dataset.rows;
   return {
     ...dataset,
-    rows: Number(dataset.rows ?? 0),
-    columns: Number(dataset.columns ?? datasetHeaders(dataset).length),
-    headers: datasetHeaders(dataset),
-    preview: datasetPreview(dataset),
+    id: dataset?.id ?? crypto.randomUUID(),
+    name: dataset.name ?? dataset.fileName ?? 'Untitled Dataset',
+    fileName: dataset.fileName ?? dataset.name ?? 'Untitled Dataset',
+    uploadedAt: dataset.uploadedAt ?? new Date().toISOString(),
+    rows: finiteNumber(rawRows, resolvedPreview.length),
+    columns: finiteNumber(dataset.columns, resolvedHeaders.length),
+    headers: resolvedHeaders,
+    preview: resolvedPreview,
+    records,
+    previewRows: previewRows.length ? previewRows : resolvedPreview,
+    validationResults: asArray(dataset.validationResults),
+    duplicates: asArray(dataset.duplicates),
+    pipeline: asArray(dataset.pipeline),
+    exports: asArray(dataset.exports),
+    approvals: asArray(dataset.approvals),
+    qualityResults: asArray(dataset.qualityResults),
+    qualityScore: finiteNumber(dataset.qualityScore, 0),
+    status: dataset.status ?? dataset.cleanupStatus ?? 'uploaded',
     chart: datasetChart(dataset),
     insights: datasetInsights(dataset),
     numericSummary: datasetNumericSummary(dataset),
@@ -4129,7 +4193,7 @@ function findDuplicateRows(rows: Record<string, string>[]) {
 }
 
 function normalizePreviewRow(row: Record<string, string>) {
-  return Object.fromEntries(Object.entries(row).map(([key, value]) => [standardizeColumnName(key), normalizePreviewValue(value)]));
+  return Object.fromEntries(Object.entries(asObject(row)).map(([key, value]) => [standardizeColumnName(key), normalizePreviewValue(String(value ?? ''))]));
 }
 
 function standardizeColumnName(key: string) {
@@ -5280,14 +5344,14 @@ function DatasetPreviewModal({
 }) {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState('');
-  const [sortColumn, setSortColumn] = useState(dataset.headers[0] ?? '');
+  const [sortColumn, setSortColumn] = useState(datasetHeaders(dataset)[0] ?? '');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
   const pageSize = 10;
   const previewRows = getPreviewRows(dataset, mode);
   const headers = getPreviewHeaders(dataset, previewRows);
   const columnTypes = inferColumnTypes(dataset.preview, dataset.headers);
   const validation = summarizeValidation(dataset);
-  const duplicates = findDuplicateRows(dataset.preview);
+  const duplicates = findDuplicateRows(datasetPreview(dataset));
   const versionHistory = getDatasetVersions(allDatasets, dataset);
   const filteredRows = previewRows
     .filter((row) => !filter.trim() || Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(filter.toLowerCase())))
