@@ -96,6 +96,8 @@ import { cleanDataset, recordsToCsv } from './dataCleanup.js';
 
 const scryptAsync = promisify(scrypt);
 const app = express();
+let startupPromise;
+let startupError = null;
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 15 * 1024 * 1024);
 const maxSpreadsheetRows = Number(process.env.MAX_SPREADSHEET_ROWS || 10000);
 const upload = multer({
@@ -1121,6 +1123,31 @@ app.use((req, res, next) => {
   next();
 });
 app.use(express.json());
+app.use('/api', async (req, res, next) => {
+  try {
+    if (startupPromise) {
+      await startupPromise;
+    }
+    if (startupError) {
+      throw startupError;
+    }
+    next();
+  } catch (error) {
+    const dbStatus = getDatabaseRuntimeStatus();
+    console.error('[Metenova Startup] API startup gate failed', {
+      requestId: req.requestId,
+      path: req.path,
+      database: dbStatus,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    res.status(503).json({
+      error: 'Backend startup is not ready. Database initialization failed.',
+      code: 'STARTUP_NOT_READY',
+      requestId: req.requestId,
+      database: dbStatus
+    });
+  }
+});
 
 app.get('/api/health', (_req, res) => {
   res.json({
@@ -3063,12 +3090,13 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-const startupPromise = initDatabase()
+startupPromise = initDatabase()
   .then(removeDemoAccounts)
   .then(() => promoteAdminEmails(adminEmails))
   .then(ensureOwnerAccount)
   .then(importLegacyDatasets)
   .catch((error) => {
+    startupError = error;
     console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
   })
   .finally(() => {
