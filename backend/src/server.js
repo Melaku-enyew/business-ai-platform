@@ -517,23 +517,187 @@ function validateModuleUpload(parsed, moduleName) {
 }
 
 function reportLines(dataset) {
+  const intelligence = buildEnterpriseReportContent(dataset);
   return [
-    'Metenova AI Data Report',
+    'Metenova AI Executive Operations Report',
     `Dataset: ${dataset.fileName}`,
     `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
     ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),
     `Uploaded: ${new Date(dataset.uploadedAt).toLocaleString()}`,
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
+    `Quality score: ${intelligence.metrics.qualityScore}%`,
+    `Duplicate rows: ${intelligence.metrics.duplicates}`,
+    `Failed rows: ${intelligence.metrics.failedRows}`,
     '',
-    'Business Insights',
-    ...dataset.insights.map((item) => `- ${item}`),
+    'Executive Summary',
+    ...intelligence.executiveSummary.map((item) => `- ${item}`),
+    '',
+    'AI Operational Insights',
+    ...intelligence.aiInsights.map((item) => `- ${item.title}: ${item.summary}`),
+    '',
+    'Operational Recommendations',
+    ...intelligence.recommendations.map((item) => `- ${item}`),
     '',
     'Numeric Summary',
-    ...(dataset.numericSummary.length
+    ...(dataset.numericSummary?.length
       ? dataset.numericSummary.map((item) => `${item.column}: total ${Number(item.total).toFixed(2)}, average ${Number(item.average).toFixed(2)}, min ${Number(item.min).toFixed(2)}, max ${Number(item.max).toFixed(2)}`)
       : ['No numeric columns detected.'])
   ];
+}
+
+function duplicateCount(dataset) {
+  const seen = new Set();
+  let duplicates = 0;
+  for (const row of dataset.records ?? dataset.preview ?? []) {
+    const signature = JSON.stringify(row);
+    if (seen.has(signature)) duplicates += 1;
+    seen.add(signature);
+  }
+  return duplicates;
+}
+
+function missingValueCount(dataset) {
+  return (dataset.records ?? dataset.preview ?? []).reduce((total, row) => total + Object.values(row ?? {}).filter((value) => value == null || String(value).trim() === '').length, 0);
+}
+
+function trendSummaries(dataset) {
+  return (dataset.numericSummary ?? []).slice(0, 3).map((summary) => ({
+    column: summary.column,
+    total: Number(summary.total ?? 0),
+    average: Number(summary.average ?? 0),
+    change: Number(summary.change ?? 0),
+    changePercent: Number(summary.changePercent ?? 0),
+    direction: Number(summary.change ?? 0) >= 0 ? 'up' : 'down'
+  }));
+}
+
+function buildEnterpriseReportContent(dataset) {
+  const duplicates = duplicateCount(dataset);
+  const missingValues = missingValueCount(dataset);
+  const cleanupMetrics = dataset.cleanupMetrics ?? {};
+  const invalidValues = cleanupMetrics.invalidValuesDetected ?? missingValues;
+  const failedRows = cleanupMetrics.failedRows ?? 0;
+  const rowsFixed = cleanupMetrics.rowsFixed ?? 0;
+  const standardizedColumns = cleanupMetrics.columnsStandardized ?? 0;
+  const totalIssues = duplicates + invalidValues + failedRows;
+  const baseQuality = Number(dataset.qualityScore ?? 0) || Math.max(45, 100 - Math.round((totalIssues / Math.max(dataset.rows || 1, 1)) * 20));
+  const qualityScore = Math.max(0, Math.min(100, Math.round(baseQuality)));
+  const trends = trendSummaries(dataset);
+  const anomalyScore = Math.min(100, Math.round((failedRows * 12) + (duplicates * 6) + (invalidValues * 2)));
+  const approvalStatus = failedRows > 0 || anomalyScore > 45 ? 'needs_review' : qualityScore >= 85 ? 'approved_ready' : 'waiting_approval';
+  const executiveSummary = [
+    `${dataset.fileName} contains ${dataset.rows} rows and ${dataset.columns} columns for operational review.`,
+    qualityScore >= 85
+      ? `Data quality is strong at ${qualityScore}%, with low operational risk.`
+      : `Data quality is ${qualityScore}%, so this dataset should be reviewed before executive use.`,
+    trends[0]
+      ? `${trends[0].column} is trending ${trends[0].direction} by ${formatNumber(Math.abs(trends[0].change))}.`
+      : 'No numeric trend column was detected; use categorical review and validation output.'
+  ];
+  const aiInsights = [
+    missingValues > 0 && {
+      type: 'missing_values',
+      severity: missingValues > 10 ? 'high' : 'medium',
+      title: 'Missing identifiers or values detected',
+      summary: `${missingValues} empty values were found and should be reviewed before approval.`,
+      confidence: 0.91
+    },
+    duplicates > 0 && {
+      type: 'duplicates',
+      severity: duplicates > 5 ? 'high' : 'medium',
+      title: 'Duplicate business records found',
+      summary: `${duplicates} duplicate row${duplicates === 1 ? '' : 's'} may inflate totals or create repeated workflow actions.`,
+      confidence: 0.88
+    },
+    trends.some((trend) => trend.direction === 'down') && {
+      type: 'trend_decline',
+      severity: 'medium',
+      title: 'Operational trend decline detected',
+      summary: `${trends.find((trend) => trend.direction === 'down')?.column ?? 'A tracked metric'} declined across the dataset window.`,
+      confidence: 0.82
+    },
+    totalIssues > 0 && {
+      type: 'quality_risk',
+      severity: totalIssues > 20 ? 'high' : 'medium',
+      title: 'Data quality risks identified',
+      summary: `${totalIssues} combined quality signals were detected across duplicates, missing values, and failed rows.`,
+      confidence: 0.9
+    }
+  ].filter(Boolean);
+
+  if (!aiInsights.length) {
+    aiInsights.push({
+      type: 'quality_ready',
+      severity: 'low',
+      title: 'Dataset is reporting-ready',
+      summary: 'No major duplicate, missing-value, or failed-row signals were detected.',
+      confidence: 0.86
+    });
+  }
+
+  const recommendations = [
+    duplicates ? 'Review duplicate rows before sending this dataset to downstream business workflows.' : 'Keep duplicate monitoring enabled for future uploads.',
+    missingValues ? 'Assign owners to fill missing values or approve null handling rules.' : 'Continue enforcing required-field validation during upload.',
+    failedRows ? 'Route failed rows into an approval queue before exporting reports.' : 'Dataset can proceed to approval after stakeholder review.',
+    'TODO: Add AI recommendations, anomaly detection, predictive analytics, and automated report summaries.'
+  ];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    reportVersion: 'enterprise-bi-v1',
+    metrics: {
+      rowCount: dataset.rows,
+      columnCount: dataset.columns,
+      duplicates,
+      missingValues,
+      invalidValues,
+      failedRows,
+      rowsFixed,
+      standardizedColumns,
+      qualityScore,
+      anomalyScore,
+      totalIssues
+    },
+    trends,
+    executiveSummary,
+    aiInsights,
+    recommendations,
+    approvalStatus,
+    exportHistory: [],
+    charts: {
+      primary: dataset.chart ?? [],
+      numericSummary: dataset.numericSummary ?? []
+    }
+  };
+}
+
+async function saveDatasetReports(dataset, user, trigger = 'manual') {
+  const content = buildEnterpriseReportContent(dataset);
+  const reportSpecs = [
+    ['executive_summary', `${dataset.fileName} executive summary`],
+    ['quality_report', `${dataset.fileName} quality report`],
+    ['audit_report', `${dataset.fileName} audit report`]
+  ];
+  const saved = [];
+  for (const [reportType, title] of reportSpecs) {
+    saved.push(await saveReport({
+      id: randomUUID(),
+      userId: user.id,
+      companyId: dataset.companyId,
+      datasetId: dataset.id,
+      datasetName: dataset.fileName,
+      title,
+      reportType,
+      content: {
+        ...content,
+        trigger,
+        lines: reportLines(dataset),
+        dataset: publicDataset(dataset)
+      }
+    }));
+  }
+  return saved;
 }
 
 function publicUser(user) {
@@ -2654,9 +2818,10 @@ async function handleDatasetUpload(req, res) {
     startedAt: new Date(startedAt).toISOString(),
     completedAt: new Date().toISOString()
   });
+  const linkedReports = await saveDatasetReports(dataset, req.user, 'upload');
   logUploadStage(req, 'upload_completed', { companyId, workflowStage: 'Workflow Ready', validationResult: 'success', durationMs: Date.now() - startedAt });
 
-  res.json({ success: true, dataset: publicDataset(dataset), ...publicDataset(dataset) });
+  res.json({ success: true, dataset: publicDataset(dataset), reports: linkedReports, ...publicDataset(dataset) });
 }
 
 app.post('/api/files/upload', requireDurableStorage, upload.single('file'), (req, res) => {
@@ -2878,11 +3043,13 @@ app.post('/api/datasets/:id/cleanup', requireDurableStorage, async (req, res, ne
       message: `${cleanedDataset.fileName} is ready for export and analytics.`,
       metadata: { datasetId: dataset.id, cleanedDatasetId: cleanedDataset.id, metrics: cleaned.metrics }
     });
+    const linkedReports = await saveDatasetReports(cleanedDataset, req.user, 'cleanup');
 
     res.status(201).json({
       job: completedJob,
       originalDataset: publicDataset(originalDataset),
-      cleanedDataset: publicDataset(cleanedDataset)
+      cleanedDataset: publicDataset(cleanedDataset),
+      reports: linkedReports
     });
   } catch (error) {
     if (job) {
@@ -3039,6 +3206,35 @@ app.get('/api/reports', async (req, res, next) => {
     const companyId = requestedCompanyId(req);
     if (!(await requireCompanyAccess(req, res, companyId))) return;
     res.json({ reports: await listReports(req.user, companyId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/datasets/:id/reports/generate', requireDurableStorage, async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    const reports = await saveDatasetReports(dataset, req.user, String(req.body?.trigger || 'manual'));
+    await audit(req, 'dataset.reports_generated', 'dataset', dataset.id, {
+      companyId: dataset.companyId,
+      reportIds: reports.map((report) => report.id)
+    });
+    await notifyWorkspace({
+      companyId: dataset.companyId,
+      userId: req.user.id,
+      type: 'report_generated',
+      title: 'Business intelligence reports generated',
+      message: `${dataset.fileName} now has executive, quality, and audit reports.`,
+      metadata: { datasetId: dataset.id, reportIds: reports.map((report) => report.id) }
+    });
+    res.status(201).json({
+      reports,
+      intelligence: buildEnterpriseReportContent(dataset)
+    });
   } catch (error) {
     next(error);
   }

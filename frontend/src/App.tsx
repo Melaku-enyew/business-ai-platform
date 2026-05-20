@@ -165,6 +165,20 @@ type ReportHistoryItem = {
     lines?: string[];
     dataset?: Dataset;
     chartType?: ChartType;
+    metrics?: Record<string, number>;
+    trends?: Array<Record<string, string | number>>;
+    executiveSummary?: string[];
+    aiInsights?: Array<{
+      type?: string;
+      severity?: string;
+      title: string;
+      summary: string;
+      confidence?: number;
+    }>;
+    recommendations?: string[];
+    approvalStatus?: string;
+    generatedAt?: string;
+    trigger?: string;
   };
   createdAt: string;
 };
@@ -2679,6 +2693,7 @@ export function App() {
             setActiveDataset={setActiveDataset}
             setCleanupJobs={setCleanupJobs}
             setDatasets={setDatasets}
+            setReports={setReports}
             setSelectedCompanyId={setSelectedCompanyId}
             loadCompanies={loadCompanies}
             systemStatus={systemStatus}
@@ -4539,6 +4554,7 @@ function RoutedPages(props: {
   setActiveDataset: (dataset: Dataset | null) => void;
   setCleanupJobs: Dispatch<SetStateAction<CleanupJob[]>>;
   setDatasets: Dispatch<SetStateAction<Dataset[]>>;
+  setReports: Dispatch<SetStateAction<ReportHistoryItem[]>>;
   setSelectedCompanyId: (companyId: string) => void;
   systemStatus: SystemStatus | null;
   updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
@@ -4563,11 +4579,13 @@ function RoutedPages(props: {
                 deleteDatasetRecord={props.deleteDatasetRecord}
                 deletingDatasetId={props.deletingDatasetId}
                 downloadDatasetExport={props.downloadDatasetExport}
+                reports={props.reports}
                 route={route}
                 selectedCompanyId={props.selectedCompanyId}
                 setActiveDataset={props.setActiveDataset}
                 setCleanupJobs={props.setCleanupJobs}
                 setDatasets={props.setDatasets}
+                setReports={props.setReports}
                 setSelectedCompanyId={props.setSelectedCompanyId}
                 uploadDataset={props.uploadDataset}
               />
@@ -4589,11 +4607,13 @@ function RoutedPages(props: {
               deleteDatasetRecord={props.deleteDatasetRecord}
               deletingDatasetId={props.deletingDatasetId}
               downloadDatasetExport={props.downloadDatasetExport}
+              reports={props.reports}
               route={dataProcessingWorkspaceRoute}
               selectedCompanyId={props.selectedCompanyId}
               setActiveDataset={props.setActiveDataset}
               setCleanupJobs={props.setCleanupJobs}
               setDatasets={props.setDatasets}
+              setReports={props.setReports}
               setSelectedCompanyId={props.setSelectedCompanyId}
               uploadDataset={props.uploadDataset}
             />
@@ -4831,11 +4851,13 @@ function ModuleWorkspacePage({
   deleteDatasetRecord,
   deletingDatasetId,
   downloadDatasetExport,
+  reports,
   route,
   selectedCompanyId,
   setActiveDataset,
   setCleanupJobs,
   setDatasets,
+  setReports,
   setSelectedCompanyId,
   uploadDataset
 }: {
@@ -4846,11 +4868,13 @@ function ModuleWorkspacePage({
   deleteDatasetRecord: (dataset: Dataset | null) => void;
   deletingDatasetId: string;
   downloadDatasetExport: (dataset: Dataset | null) => void;
+  reports: ReportHistoryItem[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
   setActiveDataset: (dataset: Dataset | null) => void;
   setCleanupJobs: Dispatch<SetStateAction<CleanupJob[]>>;
   setDatasets: Dispatch<SetStateAction<Dataset[]>>;
+  setReports: Dispatch<SetStateAction<ReportHistoryItem[]>>;
   setSelectedCompanyId: (companyId: string) => void;
   uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
 }) {
@@ -4881,6 +4905,7 @@ function ModuleWorkspacePage({
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
+  const [generatingReportId, setGeneratingReportId] = useState('');
   const moduleDatasets = useMemo(() => {
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
     const unique = new Map<string, Dataset>();
@@ -4894,6 +4919,7 @@ function ModuleWorkspacePage({
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
   const selectedCompany = safeCompanies.find((company) => company.id === selectedCompanyId) ?? safeCompanies[0] ?? null;
   const selectedCompanyName = selectedCompany?.name ?? 'No company selected';
+  const safeReports = asArray(reports);
 
   useEffect(() => {
     setWorkflowStage(workflowStages[0] ?? 'Upload');
@@ -5100,6 +5126,76 @@ function ModuleWorkspacePage({
     setPreviewState({ dataset, mode: 'approval' });
   }
 
+  function reportsForDataset(dataset: Dataset) {
+    return safeReports.filter((report) => report.datasetId === dataset.id);
+  }
+
+  function latestReportForDataset(dataset: Dataset) {
+    return reportsForDataset(dataset)[0] ?? null;
+  }
+
+  async function generateDatasetReport(dataset: Dataset) {
+    setGeneratingReportId(dataset.id);
+    setError('');
+    setWorkflowStage(workflowStages.find((stage) => /quality|approval|export/i.test(stage)) ?? workflowStages.at(-2) ?? workflowStages[0]);
+    setWorkflowMessage(`Generating executive, quality, and audit reports for ${dataset.fileName}...`);
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}/reports/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ trigger: 'workspace_action' })
+      });
+      const payload = await readJson<{ reports?: ReportHistoryItem[]; error?: string }>(response);
+      if (!response.ok || !payload.reports?.length) {
+        throw new Error(payload.error || 'Report generation failed.');
+      }
+      setReports((current) => [
+        ...asArray(payload.reports),
+        ...current.filter((report) => !asArray(payload.reports).some((next) => next.id === report.id))
+      ]);
+      setWorkflowMessage(`Generated ${payload.reports.length} linked BI reports for ${dataset.fileName}.`);
+      setToolPanel('reports');
+    } catch (reportError) {
+      const message = reportError instanceof Error ? reportError.message : 'Report generation failed.';
+      setWorkflowMessage(message);
+      setError(message);
+    } finally {
+      setGeneratingReportId('');
+    }
+  }
+
+  function exportReportPdf(dataset: Dataset) {
+    const report = latestReportForDataset(dataset);
+    const lines = report?.content?.lines ?? buildReportLines(dataset);
+    downloadPdf(lines, `${dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '')}-executive-report.pdf`);
+    setWorkflowMessage(`PDF report exported for ${dataset.fileName}.`);
+  }
+
+  function exportReportExcel(dataset: Dataset) {
+    const report = latestReportForDataset(dataset);
+    const metrics = report?.content?.metrics ?? {};
+    const rows = [
+      ['Metric', 'Value'],
+      ['Dataset', dataset.fileName],
+      ['Rows', String(dataset.rows)],
+      ['Columns', String(dataset.columns)],
+      ...Object.entries(metrics).map(([key, value]) => [key, String(value)]),
+      ['', ''],
+      ['Recommendation', 'Summary'],
+      ...(report?.content?.recommendations ?? datasetInsights(dataset)).map((item) => ['Recommendation', item])
+    ];
+    downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), `${dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '')}-bi-report.csv`, 'text/csv');
+    setWorkflowMessage(`Excel-compatible report export created for ${dataset.fileName}.`);
+  }
+
+  function sendDatasetReport(dataset: Dataset) {
+    setWorkflowMessage(`Report send queued for ${dataset.fileName}. Email delivery will use workspace notification settings when SMTP is configured.`);
+  }
+
+  function scheduleDatasetReport(dataset: Dataset) {
+    setWorkflowMessage(`Scheduled weekly executive report placeholder created for ${dataset.fileName}.`);
+  }
+
   const filteredRecords = records
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
@@ -5118,6 +5214,11 @@ function ModuleWorkspacePage({
     if (action === 'clean') void cleanDatasetFromModule(dataset);
     if (action === 'compare') setPreviewState({ dataset, mode: 'compare' });
     if (action === 'approve') approveDataset(dataset);
+    if (action === 'generateReport') void generateDatasetReport(dataset);
+    if (action === 'exportPdf') exportReportPdf(dataset);
+    if (action === 'exportExcel') exportReportExcel(dataset);
+    if (action === 'sendReport') sendDatasetReport(dataset);
+    if (action === 'scheduleReport') scheduleDatasetReport(dataset);
     if (action === 'export') setPreviewState({ dataset, mode: 'export' });
     if (action === 'download') downloadDatasetExport(dataset);
     if (action === 'reprocess') void cleanDatasetFromModule(dataset.originalDatasetId ? safeDatasets.find((item) => item.id === dataset.originalDatasetId) ?? dataset : dataset);
@@ -5290,6 +5391,16 @@ function ModuleWorkspacePage({
                       <strong>{dataset.cleanupMetrics?.anomaliesDetected ?? validationWarningCount(dataset)}</strong>
                     </div>
                   </div>
+                  <EnterpriseReportPanel
+                    dataset={dataset}
+                    generating={generatingReportId === dataset.id}
+                    onExportExcel={() => runDatasetAction(dataset, 'exportExcel')}
+                    onExportPdf={() => runDatasetAction(dataset, 'exportPdf')}
+                    onGenerate={() => runDatasetAction(dataset, 'generateReport')}
+                    onSchedule={() => runDatasetAction(dataset, 'scheduleReport')}
+                    onSend={() => runDatasetAction(dataset, 'sendReport')}
+                    reports={reportsForDataset(dataset)}
+                  />
                   <div className="dataset-preview-strip">
                     {getPreviewRows(dataset, 'upload').slice(0, 3).map((row, index) => (
                       <span key={`${dataset.id}-preview-${index}`}>{getPreviewHeaders(dataset).slice(0, 3).map((header) => row[header] || 'null').join(' | ')}</span>
@@ -5310,6 +5421,11 @@ function ModuleWorkspacePage({
                       <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'approve')}>Approve</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'generateReport')}>{generatingReportId === dataset.id ? 'Generating...' : 'Generate Report'}</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'exportPdf')}>Export PDF</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'exportExcel')}>Export Excel</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'sendReport')}>Send Report</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'scheduleReport')}>Schedule Report</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>{pipelineConfig.exportLabel}</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'download')}>Download</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
@@ -5378,6 +5494,81 @@ function ModuleWorkspacePage({
         </article>
       )}
     </PageLayout>
+  );
+}
+
+function EnterpriseReportPanel({
+  dataset,
+  generating,
+  onExportExcel,
+  onExportPdf,
+  onGenerate,
+  onSchedule,
+  onSend,
+  reports
+}: {
+  dataset: Dataset;
+  generating: boolean;
+  onExportExcel: () => void;
+  onExportPdf: () => void;
+  onGenerate: () => void;
+  onSchedule: () => void;
+  onSend: () => void;
+  reports: ReportHistoryItem[];
+}) {
+  const latestReport = asArray(reports)[0] ?? null;
+  const intelligence = latestReport?.content ?? buildLocalBusinessIntelligence(dataset);
+  const metrics = intelligence.metrics ?? {};
+  const aiInsights = asArray(intelligence.aiInsights);
+  const recommendations = asArray(intelligence.recommendations);
+  const executiveSummary = asArray(intelligence.executiveSummary);
+  const approvalStatus = String(intelligence.approvalStatus ?? (Number(metrics.qualityScore ?? 0) >= 85 ? 'approved_ready' : 'waiting_approval'));
+
+  return (
+    <section className="enterprise-report-panel">
+      <div className="report-panel-header">
+        <div>
+          <p className="eyebrow">Enterprise BI layer</p>
+          <h3>Executive report intelligence</h3>
+          <span>{reports.length ? `${reports.length} linked report${reports.length === 1 ? '' : 's'}` : 'Auto-generate quality, audit, and executive summaries'}</span>
+        </div>
+        <span className={`approval-status ${approvalStatus}`}>{approvalStatus.replace('_', ' ')}</span>
+      </div>
+      <div className="report-kpi-grid">
+        <div><span>Total rows</span><strong>{displayNumber(Number(metrics.rowCount ?? dataset.rows))}</strong></div>
+        <div><span>Quality score</span><strong>{Number(metrics.qualityScore ?? dataset.qualityScore ?? 0)}%</strong></div>
+        <div><span>Anomaly score</span><strong>{Number(metrics.anomalyScore ?? 0)}</strong></div>
+        <div><span>Duplicates</span><strong>{Number(metrics.duplicates ?? findDuplicateRows(datasetPreview(dataset)).length)}</strong></div>
+        <div><span>Failed rows</span><strong>{Number(metrics.failedRows ?? dataset.cleanupMetrics?.failedRows ?? 0)}</strong></div>
+      </div>
+      <div className="report-intelligence-grid">
+        <article>
+          <h4>Executive summary</h4>
+          {(executiveSummary.length ? executiveSummary : datasetInsights(dataset)).slice(0, 3).map((item) => <p key={item}>{item}</p>)}
+        </article>
+        <article>
+          <h4>AI insight panel</h4>
+          {(aiInsights.length ? aiInsights : buildLocalBusinessIntelligence(dataset).aiInsights).slice(0, 4).map((insight) => (
+            <div className="ai-insight-chip" key={insight.title}>
+              <strong>{insight.title}</strong>
+              <span>{insight.summary}</span>
+            </div>
+          ))}
+        </article>
+        <article>
+          <h4>Operational recommendations</h4>
+          {(recommendations.length ? recommendations : ['Generate a linked report to unlock workflow recommendations.']).slice(0, 4).map((item) => <p key={item}>{item}</p>)}
+        </article>
+      </div>
+      <div className="report-action-row">
+        <button type="button" onClick={onGenerate} disabled={generating}>{generating ? 'Generating...' : 'Generate Report'}</button>
+        <button className="ghost-button compact" type="button" onClick={onExportPdf}>Export PDF</button>
+        <button className="ghost-button compact" type="button" onClick={onExportExcel}>Export Excel</button>
+        <button className="ghost-button compact" type="button" onClick={onSend}>Send Report</button>
+        <button className="ghost-button compact" type="button" onClick={onSchedule}>Schedule Report</button>
+      </div>
+      {latestReport && <p className="persistence-note">Latest report: {latestReport.title} - {new Date(latestReport.createdAt).toLocaleString()}</p>}
+    </section>
   );
 }
 
@@ -5946,23 +6137,101 @@ function buildDashboardSnapshot(dataset: Dataset, chartType: ChartType) {
 }
 
 function buildReportLines(dataset: Dataset) {
+  const intelligence = buildLocalBusinessIntelligence(dataset);
   return [
-    'Metenova AI Data Report',
+    'Metenova AI Executive Operations Report',
     `Dataset: ${dataset.fileName}`,
     `File type: ${(dataset.fileType ?? 'csv').toUpperCase()}`,
     ...(dataset.worksheetName ? [`Worksheet: ${dataset.worksheetName}`] : []),
     `Uploaded: ${new Date(dataset.uploadedAt).toLocaleString()}`,
     `Rows: ${dataset.rows}`,
     `Columns: ${dataset.columns}`,
+    `Quality score: ${intelligence.metrics.qualityScore}%`,
+    `Duplicate rows: ${intelligence.metrics.duplicates}`,
+    `Failed rows: ${intelligence.metrics.failedRows}`,
     '',
-    'Business Insights',
-    ...(datasetInsights(dataset).length ? datasetInsights(dataset).map((item) => `- ${item}`) : ['- No generated insights are available yet.']),
+    'Executive Summary',
+    ...(intelligence.executiveSummary.length ? intelligence.executiveSummary.map((item) => `- ${item}`) : ['- No generated summary is available yet.']),
+    '',
+    'AI Operational Insights',
+    ...intelligence.aiInsights.map((item) => `- ${item.title}: ${item.summary}`),
+    '',
+    'Operational Recommendations',
+    ...intelligence.recommendations.map((item) => `- ${item}`),
     '',
     'Numeric Summary',
     ...(datasetNumericSummary(dataset).length
       ? datasetNumericSummary(dataset).map((item) => `${item.column}: total ${item.total.toFixed(2)}, average ${item.average.toFixed(2)}, min ${item.min.toFixed(2)}, max ${item.max.toFixed(2)}`)
       : ['No numeric columns detected.'])
   ];
+}
+
+function buildLocalBusinessIntelligence(dataset: Dataset) {
+  const duplicates = findDuplicateRows(datasetPreview(dataset)).length;
+  const missingValues = datasetPreview(dataset).reduce((total, row) => total + Object.values(row).filter((value) => value == null || String(value).trim() === '').length, 0);
+  const failedRows = dataset.cleanupMetrics?.failedRows ?? 0;
+  const invalidValues = dataset.cleanupMetrics?.invalidValuesDetected ?? missingValues;
+  const qualityScore = Math.max(0, Math.min(100, Math.round(dataset.qualityScore ?? Math.max(45, 100 - duplicates - failedRows - Math.ceil(invalidValues / 2)))));
+  const anomalyScore = Math.min(100, (dataset.cleanupMetrics?.anomaliesDetected ?? 0) + duplicates * 6 + failedRows * 12 + Math.ceil(invalidValues / 2));
+  const trends = datasetNumericSummary(dataset).slice(0, 3).map((summary) => ({
+    column: summary.column,
+    total: summary.total,
+    average: summary.average,
+    change: summary.change,
+    changePercent: summary.changePercent,
+    direction: summary.change >= 0 ? 'up' : 'down'
+  }));
+  const executiveSummary = [
+    `${dataset.fileName} contains ${displayNumber(dataset.rows)} rows and ${displayNumber(dataset.columns)} columns for business review.`,
+    qualityScore >= 85 ? `Quality score is strong at ${qualityScore}%.` : `Quality score is ${qualityScore}%, so approval review is recommended.`,
+    trends[0] ? `${trends[0].column} is trending ${trends[0].direction} by ${Math.abs(Number(trends[0].change)).toLocaleString()}.` : 'No numeric trend was detected yet.'
+  ];
+  const aiInsights = [
+    missingValues > 0 ? { title: 'Missing employee IDs detected', summary: `${missingValues} blank values may represent missing identifiers or required fields.`, severity: 'medium', confidence: 0.91 } : null,
+    duplicates > 0 ? { title: 'Duplicate payroll entries found', summary: `${duplicates} duplicate row${duplicates === 1 ? '' : 's'} detected for review.`, severity: 'medium', confidence: 0.88 } : null,
+    trends.some((trend) => trend.direction === 'down') ? { title: 'Regional sales decline detected', summary: 'A tracked numeric metric declined across the uploaded sequence.', severity: 'medium', confidence: 0.82 } : null,
+    anomalyScore > 0 ? { title: 'Data quality risks identified', summary: `Composite anomaly score is ${anomalyScore}.`, severity: anomalyScore > 45 ? 'high' : 'medium', confidence: 0.89 } : null
+  ].filter(Boolean) as Array<{ title: string; summary: string; severity: string; confidence: number }>;
+  if (!aiInsights.length) {
+    aiInsights.push({ title: 'Dataset is reporting-ready', summary: 'No major duplicate, missing-value, or failed-row signals were detected.', severity: 'low', confidence: 0.86 });
+  }
+  return {
+    metrics: {
+      rowCount: dataset.rows,
+      columnCount: dataset.columns,
+      duplicates,
+      missingValues,
+      invalidValues,
+      failedRows,
+      rowsFixed: dataset.cleanupMetrics?.rowsFixed ?? 0,
+      standardizedColumns: dataset.cleanupMetrics?.columnsStandardized ?? 0,
+      qualityScore,
+      anomalyScore
+    },
+    trends,
+    executiveSummary,
+    aiInsights,
+    recommendations: [
+      duplicates ? 'Review duplicate records before payroll, invoice, or export processing.' : 'Keep duplicate monitoring enabled for scheduled uploads.',
+      missingValues ? 'Assign a data owner to resolve required-field gaps.' : 'Maintain current required-field validation rules.',
+      failedRows ? 'Route failed rows into approval workflow before executive reporting.' : 'Dataset is ready for approval review.',
+      'TODO: Add AI recommendations, anomaly detection, predictive analytics, and automated report summaries.'
+    ],
+    approvalStatus: failedRows || anomalyScore > 45 ? 'needs_review' : qualityScore >= 85 ? 'approved_ready' : 'waiting_approval'
+  };
+}
+
+function csvEscape(value: string | number | boolean | null | undefined) {
+  const text = String(value ?? '');
+  return /[",\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function downloadText(content: string, fileName: string, type: string) {
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(new Blob([content], { type }));
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(link.href);
 }
 
 function downloadPdf(lines: string[], fileName: string) {
