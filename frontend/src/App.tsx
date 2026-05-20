@@ -4328,6 +4328,27 @@ function RoutedPages(props: {
         />
       ))}
       <Route
+        path="/data-processing/*"
+        element={(
+          <ModuleWorkspacePage
+            apiFetch={props.apiFetch}
+            archiveDatasetRecord={props.archiveDatasetRecord}
+            companies={props.companies}
+            datasets={props.datasets}
+            deleteDatasetRecord={props.deleteDatasetRecord}
+            deletingDatasetId={props.deletingDatasetId}
+            downloadDatasetExport={props.downloadDatasetExport}
+            route={workspaceRoutes.find((route) => route.path === '/data-processing/workspace') as WorkspaceRoute}
+            selectedCompanyId={props.selectedCompanyId}
+            setActiveDataset={props.setActiveDataset}
+            setCleanupJobs={props.setCleanupJobs}
+            setDatasets={props.setDatasets}
+            setSelectedCompanyId={props.setSelectedCompanyId}
+            uploadDataset={props.uploadDataset}
+          />
+        )}
+      />
+      <Route
         path="/companies"
         element={(
           <CompaniesWorkspace
@@ -4602,7 +4623,17 @@ function ModuleWorkspacePage({
   const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
-  const moduleDatasets = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
+  const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
+  const moduleDatasets = useMemo(() => {
+    const merged = [...workspaceDatasets, ...datasets];
+    const unique = new Map<string, Dataset>();
+    merged.forEach((dataset) => {
+      if ((!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
+        unique.set(dataset.id, dataset);
+      }
+    });
+    return [...unique.values()].sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+  }, [datasets, selectedCompanyId, workspaceDatasets]);
   const workflowStages = pipelineConfig.stages;
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
   const selectedCompanyName = companies.find((company) => company.id === selectedCompanyId)?.name ?? 'Selected company';
@@ -4611,7 +4642,12 @@ function ModuleWorkspacePage({
     setWorkflowStage(pipelineConfig.stages[0]);
     setWorkflowMessage(pipelineConfig.emptyState);
     setExpandedDatasetId('');
-  }, [route.module, route.path]);
+    setStageDetail('');
+  }, [pipelineConfig.emptyState, pipelineConfig.stages, route.module, route.path]);
+
+  useEffect(() => {
+    setWorkspaceDatasets((current) => current.filter((dataset) => !datasets.some((entry) => entry.id === dataset.id)));
+  }, [datasets]);
 
   async function loadRecords() {
     setLoading(true);
@@ -4719,6 +4755,7 @@ function ModuleWorkspacePage({
       setWorkflowStage(workflowStages[1] ?? workflowStages[0]);
       setWorkflowMessage(`${dataset.fileName} uploaded to ${selectedCompanyName}. ${workflowStages[1] ?? 'Validation'} is ready.`);
       setActiveDataset(dataset);
+      setWorkspaceDatasets((current) => [dataset, ...current.filter((entry) => entry.id !== dataset.id)]);
       setExpandedDatasetId(dataset.id);
       setPreviewState({ dataset, mode: 'upload' });
     } catch (uploadError) {
