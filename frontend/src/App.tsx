@@ -3970,6 +3970,16 @@ function canManageWorkspaceData(user: User | null) {
   return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
 }
 
+const EMPTY_ARRAY: never[] = [];
+
+function asArray<T>(value: T[] | null | undefined): T[] {
+  return Array.isArray(value) ? value : EMPTY_ARRAY;
+}
+
+function displayNumber(value: number | null | undefined) {
+  return Number(value ?? 0).toLocaleString();
+}
+
 function roleLabel(role?: string) {
   const labels: Record<string, string> = {
     owner: 'Owner / Super Admin',
@@ -3982,25 +3992,30 @@ function roleLabel(role?: string) {
 }
 
 function getPreviewRows(dataset: Dataset, mode: PreviewMode) {
+  const preview = asArray(dataset.preview);
+  const cleanupAfter = asArray(dataset.cleanupPreview?.after);
   if (mode === 'cleanup' || mode === 'compare') {
-    return dataset.cleanupPreview?.after?.length ? dataset.cleanupPreview.after.slice(0, 25) : dataset.preview.slice(0, 25);
+    return cleanupAfter.length ? cleanupAfter.slice(0, 25) : preview.slice(0, 25);
   }
   if (mode === 'normalization') {
-    return dataset.preview.slice(0, 25).map((row) => {
+    return preview.slice(0, 25).map((row) => {
       const normalized = normalizePreviewRow(row);
       return Object.fromEntries(Object.keys(row).map((key) => [key, `${String(row[key] ?? '')} -> ${String(normalized[key] ?? '')}`]));
     });
   }
-  return dataset.preview.slice(0, 25);
+  return preview.slice(0, 25);
 }
 
-function getPreviewHeaders(dataset: Dataset, rows: Record<string, string>[]) {
-  return dataset.headers.length ? dataset.headers : Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+function getPreviewHeaders(dataset: Dataset, rows?: Record<string, string>[]) {
+  const headers = asArray(dataset.headers);
+  const previewRows = asArray(rows);
+  return headers.length ? headers : Array.from(new Set(previewRows.flatMap((row) => Object.keys(row ?? {}))));
 }
 
-function inferColumnTypes(rows: Record<string, string>[], headers: string[]) {
-  return headers.reduce<Record<string, string>>((types, header) => {
-    const values = rows.map((row) => String(row[header] ?? '').trim()).filter(Boolean);
+function inferColumnTypes(rows: Record<string, string>[] | undefined, headers: string[] | undefined) {
+  const previewRows = asArray(rows);
+  return asArray(headers).reduce<Record<string, string>>((types, header) => {
+    const values = previewRows.map((row) => String(row?.[header] ?? '').trim()).filter(Boolean);
     if (!values.length) {
       types[header] = 'empty';
     } else if (values.every((value) => Number.isFinite(Number(value.replace(/[$,%]/g, ''))))) {
@@ -4017,12 +4032,13 @@ function inferColumnTypes(rows: Record<string, string>[], headers: string[]) {
 }
 
 function summarizeValidation(dataset: Dataset) {
-  const rows = dataset.preview ?? [];
+  const rows = asArray(dataset.preview);
+  const headers = asArray(dataset.headers);
   let missingValues = 0;
   let invalidTypes = 0;
   const failedRows = new Set<number>();
   rows.forEach((row, rowIndex) => {
-    dataset.headers.forEach((header) => {
+    headers.forEach((header) => {
       const value = String(row[header] ?? '').trim();
       if (!value || ['null', 'n/a', 'na', 'undefined'].includes(value.toLowerCase())) {
         missingValues += 1;
@@ -4039,7 +4055,7 @@ function summarizeValidation(dataset: Dataset) {
 
 function findDuplicateRows(rows: Record<string, string>[]) {
   const seen = new Map<string, number>();
-  rows.forEach((row) => {
+  asArray(rows).forEach((row) => {
     const key = JSON.stringify(row);
     seen.set(key, (seen.get(key) ?? 0) + 1);
   });
@@ -4081,7 +4097,7 @@ function buildPreviewWarnings(dataset: Dataset, mode: PreviewMode, validation: {
 
 function getDatasetVersions(datasets: Dataset[], dataset: Dataset) {
   const rootId = dataset.originalDatasetId ?? dataset.id;
-  return datasets
+  return asArray(datasets)
     .filter((entry) => entry.id === rootId || entry.originalDatasetId === rootId || entry.cleanedDatasetId === dataset.id)
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
 }
@@ -4650,6 +4666,8 @@ function ModuleWorkspacePage({
   setSelectedCompanyId: (companyId: string) => void;
   uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
 }) {
+  const safeCompanies = asArray(companies);
+  const safeDatasets = asArray(datasets);
   const [records, setRecords] = useState<ModuleRecord[]>([]);
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
@@ -4661,10 +4679,13 @@ function ModuleWorkspacePage({
   const [error, setError] = useState('');
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
-  const pipelineConfig = modulePipelineConfigs[route.module] ?? modulePipelineConfigs.default;
+  const pipelineConfig = modulePipelineConfigs[route?.module] ?? modulePipelineConfigs.default;
+  const workflowStages = asArray(pipelineConfig.stages);
+  const pipelineRules = asArray(pipelineConfig.rules);
+  const qualitySignals = asArray(pipelineConfig.qualitySignals);
   const isDataProcessingWorkspace = route.module === 'dataProcessing';
   const [workflowMessage, setWorkflowMessage] = useState(pipelineConfig.emptyState);
-  const [workflowStage, setWorkflowStage] = useState(pipelineConfig.stages[0]);
+  const [workflowStage, setWorkflowStage] = useState(workflowStages[0] ?? 'Upload');
   const [stageDetail, setStageDetail] = useState('');
   const [toolPanel, setToolPanel] = useState<'validation' | 'duplicates' | 'cleanup' | 'reports'>('validation');
   const [dragActive, setDragActive] = useState(false);
@@ -4673,30 +4694,29 @@ function ModuleWorkspacePage({
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const moduleDatasets = useMemo(() => {
-    const merged = [...workspaceDatasets, ...datasets];
+    const merged = [...asArray(workspaceDatasets), ...safeDatasets];
     const unique = new Map<string, Dataset>();
     merged.forEach((dataset) => {
-      if ((!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
+      if (dataset?.id && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
         unique.set(dataset.id, dataset);
       }
     });
     return [...unique.values()].sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-  }, [datasets, selectedCompanyId, workspaceDatasets]);
-  const workflowStages = pipelineConfig.stages;
+  }, [safeDatasets, selectedCompanyId, workspaceDatasets]);
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
-  const selectedCompany = companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? null;
+  const selectedCompany = safeCompanies.find((company) => company.id === selectedCompanyId) ?? safeCompanies[0] ?? null;
   const selectedCompanyName = selectedCompany?.name ?? 'No company selected';
 
   useEffect(() => {
-    setWorkflowStage(pipelineConfig.stages[0]);
+    setWorkflowStage(workflowStages[0] ?? 'Upload');
     setWorkflowMessage(pipelineConfig.emptyState);
     setExpandedDatasetId('');
     setStageDetail('');
-  }, [pipelineConfig.emptyState, pipelineConfig.stages, route.module, route.path]);
+  }, [pipelineConfig.emptyState, route.module, route.path, workflowStages]);
 
   useEffect(() => {
-    setWorkspaceDatasets((current) => current.filter((dataset) => !datasets.some((entry) => entry.id === dataset.id)));
-  }, [datasets]);
+    setWorkspaceDatasets((current) => current.filter((dataset) => !safeDatasets.some((entry) => entry.id === dataset.id)));
+  }, [safeDatasets]);
 
   async function loadRecords() {
     setLoading(true);
@@ -4870,7 +4890,7 @@ function ModuleWorkspacePage({
     setActiveDataset(dataset);
     setExpandedDatasetId(dataset.id);
     setWorkflowStage(workflowStages.find((stage) => /duplicate|dependencies|project structure|invoice/i.test(stage)) ?? workflowStages[2] ?? workflowStages[0]);
-    setWorkflowMessage(`${dataset.fileName} validated. ${dataset.rows.toLocaleString()} rows and ${dataset.columns.toLocaleString()} columns detected.`);
+    setWorkflowMessage(`${dataset.fileName} validated. ${displayNumber(dataset.rows)} rows and ${displayNumber(dataset.columns)} columns detected.`);
     setPreviewState({ dataset, mode: 'validation' });
   }
 
@@ -4910,7 +4930,7 @@ function ModuleWorkspacePage({
     if (action === 'approve') approveDataset(dataset);
     if (action === 'export') setPreviewState({ dataset, mode: 'export' });
     if (action === 'download') downloadDatasetExport(dataset);
-    if (action === 'reprocess') void cleanDatasetFromModule(dataset.originalDatasetId ? datasets.find((item) => item.id === dataset.originalDatasetId) ?? dataset : dataset);
+    if (action === 'reprocess') void cleanDatasetFromModule(dataset.originalDatasetId ? safeDatasets.find((item) => item.id === dataset.originalDatasetId) ?? dataset : dataset);
     if (action === 'archive') archiveDatasetRecord(dataset);
     if (action === 'delete') deleteDatasetRecord(dataset);
   }
@@ -4931,8 +4951,8 @@ function ModuleWorkspacePage({
       <PageHeader title={route.title} eyebrow={route.moduleLabel} copy={route.copy} />
       {previewState && (
         <DatasetPreviewModal
-          allDatasets={datasets}
-          company={companies.find((company) => company.id === previewState.dataset.companyId)}
+          allDatasets={safeDatasets}
+          company={safeCompanies.find((company) => company.id === previewState.dataset.companyId)}
           dataset={previewState.dataset}
           mode={previewState.mode}
           onApprove={approveDataset}
@@ -4953,8 +4973,8 @@ function ModuleWorkspacePage({
             <h2>{pipelineConfig.uploadTitle}</h2>
           </div>
           <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
-            {!companies.some((company) => company.id === selectedCompanyId) && <option value="">Select company</option>}
-            {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+            {!safeCompanies.some((company) => company.id === selectedCompanyId) && <option value="">Select company</option>}
+            {safeCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
           </select>
         </div>
         <div
@@ -4976,7 +4996,7 @@ function ModuleWorkspacePage({
           </div>
         )}
         <div className="workflow-rule-grid" aria-label="Pipeline rules">
-          {pipelineConfig.rules.map((rule) => <span key={rule}>{rule}</span>)}
+          {pipelineRules.map((rule) => <span key={rule}>{rule}</span>)}
         </div>
         <div className="pipeline-stages workflow-stages connected-pipeline-rail sticky-workflow-header">
           {workflowStages.map((stage, index) => (
@@ -5011,7 +5031,7 @@ function ModuleWorkspacePage({
           </div>
         )}
         <p className="persistence-note">{workflowMessage}</p>
-        {!companies.length && (
+        {!safeCompanies.length && (
           <p className="persistence-note warning-note">No company context is available yet. Retry after workspace access loads, or ask an owner to assign a company.</p>
         )}
         {error && lastModuleFile && (
@@ -5056,8 +5076,8 @@ function ModuleWorkspacePage({
                   <small>{new Date(dataset.uploadedAt).toLocaleString()} | {dataset.cleanupStatus ?? 'original'}</small>
                 </span>
                 <span>{workflowStage}</span>
-                <span>{dataset.rows.toLocaleString()} rows</span>
-                <span>{companies.find((company) => company.id === dataset.companyId)?.name ?? selectedCompanyName}</span>
+                <span>{displayNumber(dataset.rows)} rows</span>
+                <span>{safeCompanies.find((company) => company.id === dataset.companyId)?.name ?? selectedCompanyName}</span>
                 <span>{dataset.ownerName ?? dataset.ownerEmail ?? 'Workspace user'}</span>
               </button>
               {expandedDatasetId === dataset.id && (
@@ -5069,7 +5089,7 @@ function ModuleWorkspacePage({
                     </div>
                     <div>
                       <span>Columns</span>
-                      <strong>{dataset.columns.toLocaleString()}</strong>
+                      <strong>{displayNumber(dataset.columns)}</strong>
                     </div>
                     <div>
                       <span>Quality score</span>
@@ -5086,7 +5106,7 @@ function ModuleWorkspacePage({
                     ))}
                   </div>
                   <div className="workflow-history-strip">
-                    {(dataset.cleanupLogs?.length ? dataset.cleanupLogs : ['Uploaded', ...pipelineConfig.qualitySignals]).slice(0, 5).map((entry) => <span key={entry}>{entry}</span>)}
+                    {(asArray(dataset.cleanupLogs).length ? asArray(dataset.cleanupLogs) : ['Uploaded', ...qualitySignals]).slice(0, 5).map((entry) => <span key={entry}>{entry}</span>)}
                   </div>
                   <div className="dataset-row-footer">
                     <details className="dataset-action-menu">
@@ -5243,8 +5263,8 @@ function DatasetPreviewModal({
         </div>
 
         <div className="preview-summary-grid">
-          <div><strong>{dataset.rows.toLocaleString()}</strong><span>Rows</span></div>
-          <div><strong>{dataset.columns.toLocaleString()}</strong><span>Columns</span></div>
+          <div><strong>{displayNumber(dataset.rows)}</strong><span>Rows</span></div>
+          <div><strong>{displayNumber(dataset.columns)}</strong><span>Columns</span></div>
           <div><strong>{validation.missingValues}</strong><span>Missing values</span></div>
           <div><strong>{duplicates.length}</strong><span>Duplicates</span></div>
           <div><strong>{dataset.cleanupMetrics?.failedRows ?? validation.failedRows}</strong><span>Failed rows</span></div>
@@ -5329,8 +5349,8 @@ function DatasetPreviewModal({
 }
 
 function BeforeAfterPreview({ dataset }: { dataset: Dataset }) {
-  const before = dataset.cleanupPreview?.before ?? dataset.preview.slice(0, 5);
-  const after = dataset.cleanupPreview?.after ?? before.map(normalizePreviewRow);
+  const before = asArray(dataset.cleanupPreview?.before).length ? asArray(dataset.cleanupPreview?.before).slice(0, 5) : asArray(dataset.preview).slice(0, 5);
+  const after = asArray(dataset.cleanupPreview?.after).length ? asArray(dataset.cleanupPreview?.after).slice(0, 5) : before.map(normalizePreviewRow);
   const headers = Array.from(new Set([...Object.keys(before[0] ?? {}), ...Object.keys(after[0] ?? {})]));
   return (
     <div className="before-after-grid">
