@@ -2332,6 +2332,55 @@ th {
   grid-template-columns: repeat(auto-fit, minmax(118px, 1fr));
 }
 
+.connected-pipeline-rail {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(96px, 1fr));
+  gap: 0;
+  overflow-x: auto;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+}
+
+.connected-pipeline-rail::before {
+  content: "";
+  position: absolute;
+  left: 44px;
+  right: 44px;
+  top: 38px;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(24, 119, 242, 0.28), rgba(22, 163, 74, 0.28));
+}
+
+.connected-pipeline-rail button {
+  position: relative;
+  min-width: 104px;
+  border-radius: 0;
+  border-left: 0;
+  border-right: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.92);
+}
+
+.connected-pipeline-rail button::after {
+  content: ">";
+  position: absolute;
+  right: -8px;
+  top: 30px;
+  z-index: 2;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: #fff;
+  color: #94a3b8;
+  font-size: 10px;
+  font-weight: 900;
+  line-height: 16px;
+  text-align: center;
+  box-shadow: 0 0 0 1px rgba(15, 23, 42, 0.1);
+}
+
+.connected-pipeline-rail button:last-child::after {
+  display: none;
+}
+
 .sticky-workflow-header {
   position: sticky;
   top: 0;
@@ -2357,6 +2406,7 @@ th {
 .workflow-stages button.stage-running {
   border-color: rgba(24, 119, 242, 0.35);
   background: rgba(24, 119, 242, 0.1);
+  animation: stagePulse 1.4s ease-in-out infinite;
 }
 
 .workflow-stages button.stage-waiting_approval {
@@ -2374,6 +2424,73 @@ th {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   gap: 8px;
+}
+
+@keyframes stagePulse {
+  0%, 100% { box-shadow: inset 0 0 0 1px rgba(24, 119, 242, 0.18); }
+  50% { box-shadow: inset 0 0 0 2px rgba(24, 119, 242, 0.34); }
+}
+
+.stage-detail-drawer {
+  display: grid;
+  grid-template-columns: minmax(220px, 0.8fr) 1.4fr;
+  gap: 14px;
+  align-items: start;
+  border: 1px solid rgba(24, 119, 242, 0.14);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.92);
+  padding: 12px;
+}
+
+.stage-detail-drawer > div:first-child {
+  display: grid;
+  gap: 5px;
+}
+
+.stage-detail-drawer span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.dataset-detail-grid.compact {
+  grid-template-columns: repeat(4, minmax(90px, 1fr));
+}
+
+.sticky-action-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid rgba(15, 23, 42, 0.08);
+  background: rgba(255, 255, 255, 0.94);
+  padding: 8px 0 12px;
+  backdrop-filter: blur(12px);
+}
+
+.sticky-action-toolbar button {
+  white-space: nowrap;
+}
+
+.sticky-action-toolbar button.active {
+  background: #0f172a;
+  color: #fff;
+}
+
+.dataset-table-head {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.5fr) minmax(130px, 0.8fr) minmax(110px, 0.7fr) minmax(160px, 1fr) minmax(150px, 1fr);
+  gap: 10px;
+  padding: 0 12px;
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.compact-tool-panel {
+  min-height: 0;
 }
 
 .workflow-rule-grid span {

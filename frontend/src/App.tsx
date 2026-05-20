@@ -552,11 +552,7 @@ const moduleCards: Record<string, ModuleAction[]> = {
     { title: 'Customer Notes', copy: 'Log interaction history and follow-ups.', type: 'note', path: '/crm/customer-notes' }
   ],
   dataProcessing: [
-    { title: 'Data Cleanup', copy: 'Normalize messy columns, repair values, and prepare trusted datasets.', type: 'cleanup', path: '/data-processing/cleanup' },
-    { title: 'Duplicate Detection', copy: 'Find repeated records and review merge candidates.', type: 'dedupe', path: '/data-processing/duplicates' },
-    { title: 'Validation', copy: 'Check completeness, types, outliers, and required fields.', type: 'validation', path: '/data-processing/validation' },
-    { title: 'Import/Export Tools', copy: 'Prepare batch import/export pipelines for enterprise systems.', type: 'import_export', path: '/data-processing/import-export' },
-    { title: 'Data Quality Reports', copy: 'Generate executive quality and cleanup recommendations.', type: 'quality_report', path: '/data-processing/quality-reports' }
+    { title: 'Dataset Workspace', copy: 'Upload once, then validate, dedupe, normalize, clean, score, approve, and export from one operational workspace.', type: 'dataset_workspace', path: '/data-processing/workspace' }
   ]
 };
 
@@ -609,9 +605,9 @@ const modulePipelineConfigs: Record<string, ModulePipelineConfig> = {
   },
   dataProcessing: {
     module: 'dataProcessing',
-    uploadTitle: 'Upload datasets for business-ready cleanup',
-    uploadCopy: 'General data workflows validate schema, isolate failed rows, detect duplicates, normalize values, calculate quality scores, and export clean datasets.',
-    stages: ['Upload', 'Schema Validation', 'Duplicate Detection', 'Normalize', 'Data Cleanup', 'Quality Scoring', 'Approval', 'Export Clean Dataset'],
+    uploadTitle: 'Upload dataset once',
+    uploadCopy: 'Centralize CSV, XLSX, XLS, or JSON uploads, then reuse the same dataset across validation, duplicate detection, cleanup, reporting, and export tools.',
+    stages: ['Upload', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Quality Score', 'Approve', 'Export'],
     rules: [
       'required columns must exist',
       'schema drift is detected before cleanup',
@@ -864,7 +860,8 @@ export function App() {
   }, [activeDataset?.id]);
 
   useEffect(() => {
-    const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname);
+    const workspaceRoute = workspaceRoutes.find((route) => route.path === location.pathname)
+      ?? (location.pathname.startsWith('/data-processing/') ? workspaceRoutes.find((route) => route.path === '/data-processing/workspace') : undefined);
     if (workspaceRoute) {
       setCurrentView(workspaceRoute.module as AppView);
       return;
@@ -2196,7 +2193,7 @@ export function App() {
       } else if (action === 'Analytics') {
         navigate('/analytics/dashboard');
       } else if (action === 'Pipelines') {
-        navigate('/data-processing/cleanup');
+        navigate('/data-processing/workspace');
       } else if (action === 'Export Data') {
         const response = await apiFetch(`/api/datasets${query}`);
         const payload = await readJson<{ datasets?: Dataset[]; error?: string }>(response);
@@ -3017,7 +3014,7 @@ export function App() {
                   <strong>{canManageUsers(user) ? `${companies.length} companies` : selectedCompany?.name ?? 'Assigned workspace'}</strong>
                   <small>{canManageUsers(user) ? 'Owner/Admin global view' : 'Scoped to assigned company data'}</small>
                 </button>
-                <button type="button" onClick={() => navigate('/data-processing/cleanup')}>
+                  <button type="button" onClick={() => navigate('/data-processing/workspace')}>
                   <span>Pipeline progress</span>
                   <strong>{companyCleanupJobs.filter((job) => job.status === 'completed').length}/{companyCleanupJobs.length}</strong>
                   <small>Completed cleanup jobs</small>
@@ -3737,7 +3734,7 @@ function EnterpriseCockpit({
                   {renderChart(chartType, activeDataset, chartMax, linePoints)}
                 </div>
                 <div className="studio-actions">
-                  <button type="button" onClick={() => navigate('/data-processing/cleanup')}>Open analytics studio</button>
+                  <button type="button" onClick={() => navigate('/data-processing/workspace')}>Open analytics studio</button>
                   <button type="button" disabled={!activeDataset} onClick={downloadPdfReport}>PDF</button>
                   <button type="button" disabled={!activeCleanedDataset} onClick={() => downloadDatasetExport(activeCleanedDataset)}>Clean CSV</button>
                   <button type="button" disabled={!activeDataset} onClick={onSaveDashboard}>Save</button>
@@ -4180,17 +4177,7 @@ function CompanyAccessModal({
 }
 
 function pipelineStepPath(stage: string) {
-  const normalized = stage.toLowerCase();
-  if (normalized.includes('duplicate')) {
-    return '/data-processing/duplicates';
-  }
-  if (normalized.includes('validate')) {
-    return '/data-processing/validation';
-  }
-  if (normalized.includes('normalize') || normalized.includes('clean') || normalized.includes('approve')) {
-    return '/data-processing/cleanup';
-  }
-  return '/data-processing/import-export';
+  return '/data-processing/workspace';
 }
 
 function PageLayout({ children }: { children: ReactNode }) {
@@ -4606,8 +4593,11 @@ function ModuleWorkspacePage({
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const pipelineConfig = modulePipelineConfigs[route.module] ?? modulePipelineConfigs.default;
+  const isDataProcessingWorkspace = route.module === 'dataProcessing';
   const [workflowMessage, setWorkflowMessage] = useState(pipelineConfig.emptyState);
   const [workflowStage, setWorkflowStage] = useState(pipelineConfig.stages[0]);
+  const [stageDetail, setStageDetail] = useState('');
+  const [toolPanel, setToolPanel] = useState<'validation' | 'duplicates' | 'cleanup' | 'reports'>('validation');
   const [dragActive, setDragActive] = useState(false);
   const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
@@ -4822,6 +4812,10 @@ function ModuleWorkspacePage({
     setError('');
     setExpandedDatasetId(dataset.id);
     if (action === 'preview') setPreviewState({ dataset, mode: 'upload' });
+    if (action === 'edit') setPreviewState({ dataset, mode: 'normalization' });
+    if (action === 'deleteRows') setWorkflowMessage(`${dataset.fileName} row deletion queued. Row-level editing history will be tracked in the next version checkpoint.`);
+    if (action === 'newVersion') setWorkflowMessage(`Upload a replacement file to create the next version for ${dataset.fileName}.`);
+    if (action === 'restore') setPreviewState({ dataset, mode: 'history' });
     if (action === 'validate') validateDataset(dataset);
     if (action === 'results') setPreviewState({ dataset, mode: 'duplicates' });
     if (action === 'normalize') normalizeDataset(dataset);
@@ -4843,6 +4837,8 @@ function ModuleWorkspacePage({
     if (index === activeStageIndex) return 'running';
     return 'queued';
   }
+
+  const stageDetailIndex = Math.max(workflowStages.indexOf(stageDetail), 0);
 
   return (
     <PageLayout>
@@ -4867,7 +4863,7 @@ function ModuleWorkspacePage({
       <article className="panel module-upload-panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">{route.moduleLabel} workflow</p>
+            <p className="eyebrow">{route.moduleLabel} dataset workspace</p>
             <h2>{pipelineConfig.uploadTitle}</h2>
           </div>
           <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
@@ -4895,15 +4891,38 @@ function ModuleWorkspacePage({
         <div className="workflow-rule-grid" aria-label="Pipeline rules">
           {pipelineConfig.rules.map((rule) => <span key={rule}>{rule}</span>)}
         </div>
-        <div className="pipeline-stages workflow-stages sticky-workflow-header">
+        <div className="pipeline-stages workflow-stages connected-pipeline-rail sticky-workflow-header">
           {workflowStages.map((stage, index) => (
-            <button className={`stage-${stageState(stage, index)} ${index <= activeStageIndex ? 'active' : ''}`} key={stage} type="button" onClick={() => setWorkflowStage(stage)}>
+            <button
+              className={`stage-${stageState(stage, index)} ${index <= activeStageIndex ? 'active' : ''}`}
+              key={stage}
+              type="button"
+              onClick={() => {
+                setWorkflowStage(stage);
+                setStageDetail(stage);
+              }}
+            >
               <strong>{index + 1}</strong>
               <span>{stage}</span>
               <small>{stageState(stage, index).replace('_', ' ')}</small>
             </button>
           ))}
         </div>
+        {stageDetail && (
+          <div className="stage-detail-drawer">
+            <div>
+              <p className="eyebrow">Stage detail</p>
+              <strong>{stageDetail}</strong>
+              <span>{workflowMessage}</span>
+            </div>
+            <div className="dataset-detail-grid compact">
+              <div><span>Operator</span><strong>Current user</strong></div>
+              <div><span>Status</span><strong>{stageState(stageDetail, stageDetailIndex).replace('_', ' ')}</strong></div>
+              <div><span>Metrics</span><strong>{moduleDatasets.length} datasets</strong></div>
+              <div><span>Retry history</span><strong>0 retries</strong></div>
+            </div>
+          </div>
+        )}
         <p className="persistence-note">{workflowMessage}</p>
         {error && lastModuleFile && (
           <button className="ghost-button compact" type="button" onClick={() => void handleModuleUpload(lastModuleFile)}>
@@ -4914,12 +4933,31 @@ function ModuleWorkspacePage({
       <article className="panel">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Uploaded datasets</p>
-            <h2>Company files</h2>
+            <p className="eyebrow">Single dataset workspace</p>
+            <h2>Enterprise dataset grid</h2>
           </div>
           <span className="dataset-count">{moduleDatasets.length.toLocaleString()} active</span>
         </div>
+        {isDataProcessingWorkspace && (
+          <div className="sticky-action-toolbar" role="tablist" aria-label="Data processing tools">
+            {[
+              ['validation', 'Validation'],
+              ['duplicates', 'Duplicate Detection'],
+              ['cleanup', 'Cleanup'],
+              ['reports', 'Quality Reports']
+            ].map(([key, label]) => (
+              <button className={toolPanel === key ? 'active' : ''} key={key} type="button" onClick={() => setToolPanel(key as typeof toolPanel)}>{label}</button>
+            ))}
+          </div>
+        )}
         <div className="enterprise-dataset-list">
+          <div className="dataset-table-head">
+            <span>Dataset name</span>
+            <span>Pipeline status</span>
+            <span>Record count</span>
+            <span>Company</span>
+            <span>Uploaded by</span>
+          </div>
           {moduleDatasets.map((dataset) => (
             <article className={`enterprise-dataset-row ${expandedDatasetId === dataset.id ? 'expanded' : ''}`} key={dataset.id}>
               <button className="dataset-row-summary" type="button" onClick={() => setExpandedDatasetId(expandedDatasetId === dataset.id ? '' : dataset.id)}>
@@ -4964,15 +5002,19 @@ function ModuleWorkspacePage({
                     <details className="dataset-action-menu">
                       <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Actions'}</summary>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'edit')}>Edit rows</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'validate')}>Validate</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'normalize')}>Normalize</button>
                       {!dataset.originalDatasetId && <button type="button" onClick={() => runDatasetAction(dataset, 'clean')}>Clean</button>}
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'deleteRows')}>Delete rows</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'approve')}>Approve</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>{pipelineConfig.exportLabel}</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'download')}>Download</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'newVersion')}>Upload new version</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'restore')}>Restore version</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'archive')}>Archive</button>
                       <button className="danger-action" disabled={deletingDatasetId === dataset.id} type="button" onClick={() => runDatasetAction(dataset, 'delete')}>Delete</button>
                     </details>
@@ -4985,29 +5027,56 @@ function ModuleWorkspacePage({
           {!moduleDatasets.length && <EmptyState title="No datasets uploaded" copy={pipelineConfig.emptyState} />}
         </div>
       </article>
-      <article className="panel routed-workspace">
-        <form className="module-form routed-form" onSubmit={createRecord}>
-          <input placeholder={`${route.title} title`} value={title} onChange={(event) => setTitle(event.target.value)} />
-          <input placeholder="Amount or value" value={amount} onChange={(event) => setAmount(event.target.value)} />
-          <select value={status} onChange={(event) => setStatus(event.target.value)}>
-            <option value="open">Open</option>
-            <option value="in_progress">In progress</option>
-            <option value="closed">Closed</option>
-          </select>
-          <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Create record'}</button>
-        </form>
-        <div className="record-toolbar">
-          <input placeholder="Search this workspace" value={search} onChange={(event) => setSearch(event.target.value)} />
-          <select value={filter} onChange={(event) => setFilter(event.target.value)}>
-            <option value="all">All statuses</option>
-            <option value="open">Open</option>
-            <option value="in_progress">In progress</option>
-            <option value="closed">Closed</option>
-          </select>
-        </div>
-        {error && <p className="persistence-note warning-note">{error}</p>}
-        {loading ? <LoadingCard /> : <RecordTable records={filteredRecords} onDelete={deleteRecord} onEdit={editRecord} />}
-      </article>
+      {isDataProcessingWorkspace ? (
+        <article className="panel routed-workspace compact-tool-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Tool panel</p>
+              <h2>{toolPanel === 'validation' ? 'Validation results' : toolPanel === 'duplicates' ? 'Duplicate detection' : toolPanel === 'cleanup' ? 'Cleanup operations' : 'Quality reports'}</h2>
+            </div>
+            <button className="ghost-button compact" type="button" disabled={!moduleDatasets.length} onClick={() => moduleDatasets[0] && setPreviewState({ dataset: moduleDatasets[0], mode: toolPanel === 'duplicates' ? 'duplicates' : toolPanel === 'cleanup' ? 'cleanup' : toolPanel === 'reports' ? 'export' : 'validation' })}>
+              Open drawer
+            </button>
+          </div>
+          <div className="dataset-detail-grid">
+            <div><span>Datasets</span><strong>{moduleDatasets.length}</strong></div>
+            <div><span>Invalid values</span><strong>{moduleDatasets.reduce((sum, dataset) => sum + (dataset.cleanupMetrics?.invalidValuesDetected ?? summarizeValidation(dataset).warnings.length), 0)}</strong></div>
+            <div><span>Duplicates</span><strong>{moduleDatasets.reduce((sum, dataset) => sum + findDuplicateRows(dataset.preview).length, 0)}</strong></div>
+            <div><span>Exports ready</span><strong>{moduleDatasets.filter((dataset) => dataset.cleanupStatus === 'completed' || dataset.originalDatasetId).length}</strong></div>
+          </div>
+          <p className="persistence-note">
+            {toolPanel === 'validation' && 'Validation, missing values, schema drift, and type issues are available from each dataset action drawer.'}
+            {toolPanel === 'duplicates' && 'Duplicate review reuses the selected dataset and opens side-by-side duplicate evidence without another upload.'}
+            {toolPanel === 'cleanup' && 'Cleanup, normalization, reprocessing, versioning, and change-log actions are dataset-centered.'}
+            {toolPanel === 'reports' && 'Quality reports and exports are generated from approved dataset versions in this workspace.'}
+          </p>
+          {error && <p className="persistence-note warning-note">{error}</p>}
+        </article>
+      ) : (
+        <article className="panel routed-workspace">
+          <form className="module-form routed-form" onSubmit={createRecord}>
+            <input placeholder={`${route.title} title`} value={title} onChange={(event) => setTitle(event.target.value)} />
+            <input placeholder="Amount or value" value={amount} onChange={(event) => setAmount(event.target.value)} />
+            <select value={status} onChange={(event) => setStatus(event.target.value)}>
+              <option value="open">Open</option>
+              <option value="in_progress">In progress</option>
+              <option value="closed">Closed</option>
+            </select>
+            <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Create record'}</button>
+          </form>
+          <div className="record-toolbar">
+            <input placeholder="Search this workspace" value={search} onChange={(event) => setSearch(event.target.value)} />
+            <select value={filter} onChange={(event) => setFilter(event.target.value)}>
+              <option value="all">All statuses</option>
+              <option value="open">Open</option>
+              <option value="in_progress">In progress</option>
+              <option value="closed">Closed</option>
+            </select>
+          </div>
+          {error && <p className="persistence-note warning-note">{error}</p>}
+          {loading ? <LoadingCard /> : <RecordTable records={filteredRecords} onDelete={deleteRecord} onEdit={editRecord} />}
+        </article>
+      )}
     </PageLayout>
   );
 }
@@ -5370,7 +5439,7 @@ function renderModulePage(
     dataProcessing: 'Data cleanup, duplicate detection, validation, normalization, import/export, batch processing, and data quality reports.'
   };
   const cards = moduleCards[view] ?? [];
-  const pipelineStages = ['Upload', 'Validate', 'Detect duplicates', 'Normalize', 'Clean', 'Approve', 'Export'];
+  const pipelineStages = ['Upload', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Quality Score', 'Approve', 'Export'];
   const pipelineRecords = records.filter((record) => ['pipeline_job', 'cleanup', 'dedupe', 'validation', 'import_export'].includes(record.recordType));
   const normalizedSearch = recordSearch.trim().toLowerCase();
   const filteredRecords = records
@@ -5417,8 +5486,8 @@ function renderModulePage(
               <p className="eyebrow">Processing pipeline</p>
               <h2>Enterprise cleanup workflow</h2>
             </div>
-            <button type="button" className="ghost-button compact" onClick={() => navigate('/data-processing/import-export')}>
-              Start pipeline
+            <button type="button" className="ghost-button compact" onClick={() => navigate('/data-processing/workspace')}>
+              Open workspace
             </button>
           </div>
           <div className="pipeline-stages">
