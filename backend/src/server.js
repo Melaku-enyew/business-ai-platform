@@ -1131,6 +1131,9 @@ app.use('/api', async (req, res, next) => {
   }
 
   try {
+    if (startupError) {
+      startupPromise = beginStartup();
+    }
     if (startupPromise) {
       await startupPromise;
     }
@@ -3096,27 +3099,32 @@ app.use((error, _req, res, _next) => {
   });
 });
 
-startupPromise = initDatabase()
-  .then(removeDemoAccounts)
-  .then(() => promoteAdminEmails(adminEmails))
-  .then(ensureOwnerAccount)
-  .then(importLegacyDatasets)
-  .catch((error) => {
-    startupError = error;
-    console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
-  })
-  .finally(() => {
-    const dbStatus = getDatabaseRuntimeStatus();
-    console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
-    console.log(`PostgreSQL configured: ${dbStatus.usingPostgres ? 'true' : 'false'}`);
-    console.log(`PostgreSQL connected: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
-    console.log(`PostgreSQL tables initialized: ${dbStatus.tablesInitialized ? 'true' : dbStatus.usingPostgres ? 'false' : 'local-mode'}`);
-    if (dbStatus.connectionError) {
-      console.error(`PostgreSQL startup error: ${dbStatus.connectionError}`);
-    }
-    console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
-    console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
-  });
+function beginStartup() {
+  startupError = null;
+  return initDatabase()
+    .then(removeDemoAccounts)
+    .then(() => promoteAdminEmails(adminEmails))
+    .then(ensureOwnerAccount)
+    .then(importLegacyDatasets)
+    .catch((error) => {
+      startupError = error;
+      console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
+    })
+    .finally(() => {
+      const dbStatus = getDatabaseRuntimeStatus();
+      console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
+      console.log(`PostgreSQL configured: ${dbStatus.usingPostgres ? 'true' : 'false'}`);
+      console.log(`PostgreSQL connected: ${dbStatus.usingPostgres && dbStatus.connected ? 'true' : 'false'}${dbStatus.database ? ` (${dbStatus.database})` : ''}`);
+      console.log(`PostgreSQL tables initialized: ${dbStatus.tablesInitialized ? 'true' : dbStatus.usingPostgres ? 'false' : 'local-mode'}`);
+      if (dbStatus.connectionError) {
+        console.error(`PostgreSQL startup error: ${dbStatus.connectionError}`);
+      }
+      console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
+      console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
+    });
+}
+
+startupPromise = beginStartup();
 
 if (process.env.VERCEL !== '1') {
   startupPromise.finally(() => {
