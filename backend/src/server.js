@@ -1105,7 +1105,7 @@ async function deliverEmail({ type, to, subject, text, userId, companyId, replyT
 
 function requireDurableStorage(req, res, next) {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+  if (dbStatus.usingPostgres && !dbStatus.connected) {
     runStartupInBackground(`${req.method} ${req.path}`);
   }
   if (isEphemeralProductionStorage) {
@@ -1137,12 +1137,12 @@ async function requireDatabaseReady(req, res, next) {
     return;
   }
 
-  if (!before.connected || !before.tablesInitialized) {
+  if (!before.connected) {
     await waitForStartupWarmup(`${req.method} ${req.path}`, authDbWaitMs);
   }
 
   const after = getDatabaseRuntimeStatus();
-  if (!after.connected || !after.tablesInitialized) {
+  if (!after.connected) {
     res.status(503).json({
       error: 'PostgreSQL storage is reconnecting. Please retry in a moment.',
       code: 'POSTGRESQL_UNAVAILABLE',
@@ -1394,7 +1394,7 @@ app.use(express.json());
 
 app.get('/api/health', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+  if (dbStatus.usingPostgres && !dbStatus.connected) {
     runStartupInBackground('health');
   }
   res.json({
@@ -1411,11 +1411,11 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/readiness', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+  if (dbStatus.usingPostgres && !dbStatus.connected) {
     runStartupInBackground('readiness');
   }
   const ready = !dbStatus.usingPostgres || dbStatus.hostConfigured;
-  const degraded = Boolean(dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized));
+  const degraded = Boolean(dbStatus.usingPostgres && !dbStatus.connected);
   res.status(ready ? 200 : 503).json({
     ready,
     degraded,
@@ -1482,7 +1482,7 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/config', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+  if (dbStatus.usingPostgres && !dbStatus.connected) {
     runStartupInBackground('config');
   }
   res.cookie?.('metenova_csrf', csrfToken, {
@@ -3383,7 +3383,7 @@ app.use((error, _req, res, _next) => {
 function runStartupInBackground(reason = 'startup') {
   if (startupInFlight && startupPromise) return startupPromise;
   const status = getDatabaseRuntimeStatus();
-  if (status.usingPostgres && status.connected && status.tablesInitialized && !startupError) {
+  if (status.usingPostgres && status.connected && !startupError) {
     return Promise.resolve();
   }
   if (startupRetryTimer) {

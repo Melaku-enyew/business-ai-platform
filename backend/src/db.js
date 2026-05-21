@@ -915,7 +915,7 @@ export async function initDatabase() {
 }
 
 export function getDatabaseRuntimeStatus() {
-  const degraded = Boolean(usingPostgres && (!connected || !tablesInitialized));
+  const degraded = Boolean(usingPostgres && !connected);
   return {
     usingPostgres,
     hostConfigured: Boolean(currentDatabaseUrl()),
