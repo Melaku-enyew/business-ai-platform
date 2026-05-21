@@ -5236,6 +5236,7 @@ function ModuleWorkspacePage({
   const [uploadAnalysis, setUploadAnalysis] = useState<ReturnType<typeof analyzeUploadedDataset> | null>(null);
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
+  const [openActionDatasetId, setOpenActionDatasetId] = useState('');
   const moduleDatasets = useMemo(() => {
     const moduleLabel = moduleLabelForRoute(route.module);
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
@@ -5263,6 +5264,23 @@ function ModuleWorkspacePage({
   useEffect(() => {
     setWorkspaceDatasets((current) => current.filter((dataset) => !safeDatasets.some((entry) => entry.id === dataset.id)));
   }, [safeDatasets]);
+
+  useEffect(() => {
+    const closeMenus = () => setOpenActionDatasetId('');
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpenActionDatasetId('');
+    };
+    document.addEventListener('click', closeMenus);
+    document.addEventListener('keydown', closeOnEscape);
+    return () => {
+      document.removeEventListener('click', closeMenus);
+      document.removeEventListener('keydown', closeOnEscape);
+    };
+  }, []);
+
+  useEffect(() => {
+    setOpenActionDatasetId('');
+  }, [toolPanel, route.path, previewState?.mode]);
 
   async function loadRecords() {
     setLoading(true);
@@ -5899,31 +5917,60 @@ function ModuleWorkspacePage({
                     {(asArray(dataset.cleanupLogs).length ? asArray(dataset.cleanupLogs) : ['Uploaded', ...qualitySignals]).slice(0, 5).map((entry) => <span key={entry}>{entry}</span>)}
                   </div>
                   <div className="dataset-row-footer">
-                    <details className="dataset-action-menu">
-                      <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Select Action'}</summary>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview Rows</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'edit')}>Edit Rows</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'query')}>Query Dataset</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare Versions</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'validate')}>Validate</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'normalize')}>Normalize</button>
-                      {!dataset.originalDatasetId && <button type="button" onClick={() => runDatasetAction(dataset, 'clean')}>Clean</button>}
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'approve')}>Approve</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>Export</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'archive')}>Archive</button>
-                      <button className="danger-action" disabled={deletingDatasetId === dataset.id} type="button" onClick={() => runDatasetAction(dataset, 'delete')}>Delete</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'deleteRows')}>Delete Rows</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'generateReport')}>{generatingReportId === dataset.id ? 'Generating...' : 'Generate Report'}</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'exportPdf')}>Export PDF</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'exportExcel')}>Export Excel</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'sendReport')}>Send Report</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'scheduleReport')}>Schedule Report</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'download')}>Download</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'newVersion')}>Upload New Version</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'restore')}>Restore Version</button>
-                    </details>
+                    <div className={`dataset-action-menu ${openActionDatasetId === dataset.id ? 'open' : ''}`} onClick={(event) => event.stopPropagation()}>
+                      <button
+                        className="dataset-action-trigger"
+                        type="button"
+                        aria-expanded={openActionDatasetId === dataset.id}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          setOpenActionDatasetId((current) => current === dataset.id ? '' : dataset.id);
+                        }}
+                      >
+                        {deletingDatasetId === dataset.id ? 'Deleting...' : 'Select Action'}
+                      </button>
+                      {openActionDatasetId === dataset.id && (
+                        <div className="dataset-action-dropdown">
+                          {[
+                            ['preview', 'Preview Rows'],
+                            ['edit', 'Edit Rows'],
+                            ['query', 'Query Dataset'],
+                            ['compare', 'Compare Versions'],
+                            ['validate', 'Validate'],
+                            ['normalize', 'Normalize'],
+                            ...(!dataset.originalDatasetId ? [['clean', 'Clean']] : []),
+                            ['approve', 'Approve'],
+                            ['export', 'Export'],
+                            ['reprocess', 'Reprocess'],
+                            ['archive', 'Archive'],
+                            ['delete', 'Delete'],
+                            ['results', 'View Results'],
+                            ['deleteRows', 'Delete Rows'],
+                            ['generateReport', generatingReportId === dataset.id ? 'Generating...' : 'Generate Report'],
+                            ['exportPdf', 'Export PDF'],
+                            ['exportExcel', 'Export Excel'],
+                            ['sendReport', 'Send Report'],
+                            ['scheduleReport', 'Schedule Report'],
+                            ['download', 'Download'],
+                            ['newVersion', 'Upload New Version'],
+                            ['restore', 'Restore Version']
+                          ].map(([action, label]) => (
+                            <button
+                              className={action === 'delete' ? 'danger-action' : ''}
+                              disabled={(action === 'delete' && deletingDatasetId === dataset.id) || (action === 'generateReport' && generatingReportId === dataset.id)}
+                              key={action}
+                              type="button"
+                              onClick={() => {
+                                setOpenActionDatasetId('');
+                                runDatasetAction(dataset, action);
+                              }}
+                            >
+                              {label}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                     <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'history' })}>Version history</button>
                   </div>
                 </div>
@@ -6186,6 +6233,7 @@ function HrWorkforceWorkspace({
   const [employeeWorkspaceId, setEmployeeWorkspaceId] = useState('');
   const [employeeTab, setEmployeeTab] = useState('Overview');
   const [savingEmployee, setSavingEmployee] = useState(false);
+  const [employeeFormOpen, setEmployeeFormOpen] = useState(false);
   const [payrollFileName, setPayrollFileName] = useState('');
   const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
@@ -6299,6 +6347,7 @@ function HrWorkforceWorkspace({
         benefits: '',
         notes: ''
       });
+      setEmployeeFormOpen(false);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Employee could not be saved.');
     } finally {
@@ -6763,31 +6812,39 @@ function HrWorkforceWorkspace({
       </div>
 
       <section className="hr-operations-grid">
-        {canManageHr ? <form className="hr-employee-form" onSubmit={saveEmployee}>
-          <div>
-            <p className="eyebrow">Employee management</p>
-            <h2>Create employee</h2>
+        {canManageHr ? <section className={`hr-quick-create ${employeeFormOpen ? 'open' : ''}`}>
+          <div className="quick-create-bar">
+            <div>
+              <p className="eyebrow">Employee Records Dataset</p>
+              <h2>Employee management</h2>
+              <span>Create employees directly into the company HR dataset.</span>
+            </div>
+            <button type="button" onClick={() => setEmployeeFormOpen((open) => !open)}>{employeeFormOpen ? 'Collapse' : '+ Add Employee'}</button>
           </div>
-          <input placeholder="Employee ID" value={employeeForm.employeeId} onChange={(event) => setEmployeeForm((current) => ({ ...current, employeeId: event.target.value }))} />
-          <input placeholder="Full name" value={employeeForm.name} onChange={(event) => setEmployeeForm((current) => ({ ...current, name: event.target.value }))} />
-          <input placeholder="Email" value={employeeForm.email} onChange={(event) => setEmployeeForm((current) => ({ ...current, email: event.target.value }))} />
-          <input placeholder="Phone" value={employeeForm.phone} onChange={(event) => setEmployeeForm((current) => ({ ...current, phone: event.target.value }))} />
-          <input placeholder="Department" value={employeeForm.department} onChange={(event) => setEmployeeForm((current) => ({ ...current, department: event.target.value }))} />
-          <input placeholder="Role / title" value={employeeForm.title} onChange={(event) => setEmployeeForm((current) => ({ ...current, title: event.target.value }))} />
-          <input placeholder="Manager" value={employeeForm.manager} onChange={(event) => setEmployeeForm((current) => ({ ...current, manager: event.target.value }))} />
-          <input type="date" value={employeeForm.hireDate} onChange={(event) => setEmployeeForm((current) => ({ ...current, hireDate: event.target.value }))} />
-          <input placeholder="Salary / pay rate" value={employeeForm.salary} onChange={(event) => setEmployeeForm((current) => ({ ...current, salary: event.target.value }))} />
-          <select value={employeeForm.employmentType} onChange={(event) => setEmployeeForm((current) => ({ ...current, employmentType: event.target.value }))}>
-            <option>Full-time</option>
-            <option>Part-time</option>
-            <option>Contractor</option>
-            <option>Seasonal</option>
-          </select>
-          <input placeholder="Tax details" value={employeeForm.taxDetails} onChange={(event) => setEmployeeForm((current) => ({ ...current, taxDetails: event.target.value }))} />
-          <input placeholder="Benefits" value={employeeForm.benefits} onChange={(event) => setEmployeeForm((current) => ({ ...current, benefits: event.target.value }))} />
-          <textarea placeholder="Employee notes" value={employeeForm.notes} onChange={(event) => setEmployeeForm((current) => ({ ...current, notes: event.target.value }))} />
-          <button type="submit" disabled={savingEmployee}>{savingEmployee ? 'Saving...' : 'Create employee'}</button>
-        </form> : (
+          {employeeFormOpen && (
+            <form className="hr-employee-form" onSubmit={saveEmployee}>
+              <input placeholder="Employee ID" value={employeeForm.employeeId} onChange={(event) => setEmployeeForm((current) => ({ ...current, employeeId: event.target.value }))} />
+              <input placeholder="Full name" value={employeeForm.name} onChange={(event) => setEmployeeForm((current) => ({ ...current, name: event.target.value }))} />
+              <input placeholder="Email" value={employeeForm.email} onChange={(event) => setEmployeeForm((current) => ({ ...current, email: event.target.value }))} />
+              <input placeholder="Phone" value={employeeForm.phone} onChange={(event) => setEmployeeForm((current) => ({ ...current, phone: event.target.value }))} />
+              <input placeholder="Department" value={employeeForm.department} onChange={(event) => setEmployeeForm((current) => ({ ...current, department: event.target.value }))} />
+              <input placeholder="Role / title" value={employeeForm.title} onChange={(event) => setEmployeeForm((current) => ({ ...current, title: event.target.value }))} />
+              <input placeholder="Manager" value={employeeForm.manager} onChange={(event) => setEmployeeForm((current) => ({ ...current, manager: event.target.value }))} />
+              <input type="date" value={employeeForm.hireDate} onChange={(event) => setEmployeeForm((current) => ({ ...current, hireDate: event.target.value }))} />
+              <input placeholder="Salary / pay rate" value={employeeForm.salary} onChange={(event) => setEmployeeForm((current) => ({ ...current, salary: event.target.value }))} />
+              <select value={employeeForm.employmentType} onChange={(event) => setEmployeeForm((current) => ({ ...current, employmentType: event.target.value }))}>
+                <option>Full-time</option>
+                <option>Part-time</option>
+                <option>Contractor</option>
+                <option>Seasonal</option>
+              </select>
+              <input placeholder="Tax details" value={employeeForm.taxDetails} onChange={(event) => setEmployeeForm((current) => ({ ...current, taxDetails: event.target.value }))} />
+              <input placeholder="Benefits" value={employeeForm.benefits} onChange={(event) => setEmployeeForm((current) => ({ ...current, benefits: event.target.value }))} />
+              <textarea placeholder="Employee notes" value={employeeForm.notes} onChange={(event) => setEmployeeForm((current) => ({ ...current, notes: event.target.value }))} />
+              <button type="submit" disabled={savingEmployee}>{savingEmployee ? 'Saving...' : 'Create employee'}</button>
+            </form>
+          )}
+        </section> : (
           <section className="hr-ai-panel">
             <div>
               <p className="eyebrow">Directory access</p>
@@ -7390,10 +7447,16 @@ function DatasetPreviewModal({
   const [selectedColumn, setSelectedColumn] = useState('all');
   const [savingRows, setSavingRows] = useState(false);
   const [editRows, setEditRows] = useState<Record<string, string>[]>(() => datasetPreview(dataset).map((row) => normalizeEditableRow(row)));
+  const [selectedColumns, setSelectedColumns] = useState<string[]>([]);
+  const [hiddenColumns, setHiddenColumns] = useState<string[]>([]);
+  const [selectedRowKeys, setSelectedRowKeys] = useState<string[]>([]);
+  const [columnActionMessage, setColumnActionMessage] = useState('');
+  const [savedQueries, setSavedQueries] = useState<string[]>([]);
   const pageSize = 10;
   const previewRows = getPreviewRows(dataset, mode);
   const activeRows = mode === 'edit' ? editRows : previewRows;
-  const headers = getPreviewHeaders(dataset, activeRows);
+  const allHeaders = getPreviewHeaders(dataset, activeRows);
+  const headers = allHeaders.filter((header) => !hiddenColumns.includes(header) && (!selectedColumns.length || mode !== 'query' || selectedColumn !== 'selected_only' || selectedColumns.includes(header)));
   const columnTypes = inferColumnTypes(dataset.preview, dataset.headers);
   const validation = summarizeValidation(dataset);
   const duplicates = findDuplicateRows(datasetPreview(dataset));
@@ -7432,6 +7495,10 @@ function DatasetPreviewModal({
     setSelectedColumn('all');
     setSortColumn(datasetHeaders(dataset)[0] ?? '');
     setEditRows(datasetPreview(dataset).map((row) => normalizeEditableRow(row)));
+    setSelectedColumns([]);
+    setHiddenColumns([]);
+    setSelectedRowKeys([]);
+    setColumnActionMessage('');
   }, [dataset.id, mode]);
 
   function sortBy(header: string) {
@@ -7446,6 +7513,118 @@ function DatasetPreviewModal({
     const sourceIndex = editRows.findIndex((row) => row === sourceRow);
     if (sourceIndex < 0) return;
     setEditRows((current) => current.map((row, index) => index === sourceIndex ? { ...row, [header]: value } : row));
+  }
+
+  function rowKey(row: Record<string, string>) {
+    return JSON.stringify(row);
+  }
+
+  function toggleRow(row: Record<string, string>) {
+    const key = rowKey(row);
+    setSelectedRowKeys((current) => current.includes(key) ? current.filter((entry) => entry !== key) : [...current, key]);
+  }
+
+  function toggleColumn(header: string) {
+    setSelectedColumns((current) => current.includes(header) ? current.filter((entry) => entry !== header) : [...current, header]);
+  }
+
+  function mutateRows(mutator: (row: Record<string, string>) => Record<string, string>) {
+    setEditRows((current) => current.map(mutator));
+  }
+
+  function runColumnAction(action: string) {
+    const columns = selectedColumns.length ? selectedColumns : selectedColumn !== 'all' && selectedColumn !== 'selected_only' ? [selectedColumn] : [];
+    if (!columns.length && !['export_selected_columns', 'create_calculated'].includes(action)) {
+      setColumnActionMessage('Select one or more columns before running a column action.');
+      return;
+    }
+    if (action === 'show_selected') {
+      setHiddenColumns(allHeaders.filter((header) => !columns.includes(header)));
+      setColumnActionMessage(`Showing ${columns.length} selected column${columns.length === 1 ? '' : 's'}.`);
+      return;
+    }
+    if (action === 'hide_selected') {
+      setHiddenColumns((current) => [...new Set([...current, ...columns])]);
+      setColumnActionMessage(`Hidden ${columns.length} column${columns.length === 1 ? '' : 's'}.`);
+      return;
+    }
+    if (action === 'show_all') {
+      setHiddenColumns([]);
+      setSelectedColumns([]);
+      setSelectedColumn('all');
+      setColumnActionMessage('All columns restored.');
+      return;
+    }
+    if (action === 'rename') {
+      const source = columns[0];
+      const nextName = window.prompt('Rename column', source)?.trim();
+      if (!nextName) return;
+      mutateRows((row) => {
+        const next = { ...row, [nextName]: row[source] ?? '' };
+        delete next[source];
+        return next;
+      });
+      setSelectedColumns([nextName]);
+      setColumnActionMessage(`${source} renamed to ${nextName}. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'delete') {
+      mutateRows((row) => Object.fromEntries(Object.entries(row).filter(([key]) => !columns.includes(key))));
+      setHiddenColumns((current) => [...new Set([...current, ...columns])]);
+      setColumnActionMessage(`${columns.join(', ')} deleted from the edit buffer. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'duplicate') {
+      mutateRows((row) => columns.reduce((next, column) => ({ ...next, [`${column}_copy`]: row[column] ?? '' }), row));
+      setColumnActionMessage(`${columns.join(', ')} duplicated. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'normalize') {
+      mutateRows((row) => columns.reduce((next, column) => ({ ...next, [column]: String(next[column] ?? '').trim().replace(/\s+/g, ' ') }), row));
+      setColumnActionMessage(`${columns.join(', ')} normalized. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'replace') {
+      const findValue = window.prompt('Find value') ?? '';
+      const replaceValue = window.prompt('Replace with') ?? '';
+      mutateRows((row) => columns.reduce((next, column) => ({ ...next, [column]: String(next[column] ?? '').replaceAll(findValue, replaceValue) }), row));
+      setColumnActionMessage(`Replacement applied to ${columns.join(', ')}. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'bulk_edit') {
+      const value = window.prompt('Set selected column values to') ?? '';
+      mutateRows((row) => columns.reduce((next, column) => ({ ...next, [column]: value }), row));
+      setColumnActionMessage(`Bulk edit applied to ${columns.join(', ')}. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'calculated') {
+      const name = window.prompt('Calculated column name', 'calculated_value')?.trim();
+      if (!name) return;
+      mutateRows((row) => ({ ...row, [name]: columns.map((column) => row[column] ?? '').join(' ') }));
+      setColumnActionMessage(`${name} calculated from ${columns.join(', ')}. Save edited rows to persist.`);
+      return;
+    }
+    if (action === 'export_columns') {
+      const exportRows = filteredRows.map((row) => Object.fromEntries(columns.map((column) => [column, row[column] ?? ''])));
+      const csv = [columns.map(csvEscape).join(','), ...exportRows.map((row) => columns.map((column) => csvEscape(row[column] ?? '')).join(','))].join('\n');
+      downloadText(csv, `${dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '')}-columns.csv`, 'text/csv');
+      setColumnActionMessage(`Exported ${columns.length} selected column${columns.length === 1 ? '' : 's'}.`);
+      return;
+    }
+    setColumnActionMessage(`${action} staged for selected columns.`);
+  }
+
+  function deleteSelectedRows() {
+    const selected = new Set(selectedRowKeys);
+    setEditRows((current) => current.filter((row) => !selected.has(rowKey(row))));
+    setSelectedRowKeys([]);
+    setColumnActionMessage('Selected rows removed from the edit buffer. Save edited rows to persist.');
+  }
+
+  function saveQuery() {
+    const label = `${selectedColumn}: ${filter || 'all values'}`;
+    setSavedQueries((current) => [...new Set([label, ...current])].slice(0, 5));
+    setColumnActionMessage(`Saved query: ${label}`);
   }
 
   async function saveEditedRows() {
@@ -7528,22 +7707,69 @@ function DatasetPreviewModal({
           <input placeholder="Search rows, values, employee names, projects, invoices..." value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }} />
           <select value={selectedColumn} onChange={(event) => { setSelectedColumn(event.target.value); setPage(1); }}>
             <option value="all">All columns</option>
-            {headers.map((header) => <option key={header} value={header}>{header}</option>)}
+            <option value="selected_only">Selected columns only</option>
+            {allHeaders.map((header) => <option key={header} value={header}>{header}</option>)}
           </select>
+          <button className="ghost-button compact" type="button" onClick={saveQuery}>Save query</button>
           <button className="ghost-button compact" type="button" onClick={exportFilteredRows}>Export filtered</button>
           <button className="ghost-button compact" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
           <span>Page {page} of {pageCount}</span>
           <button className="ghost-button compact" type="button" disabled={page >= pageCount} onClick={() => setPage((current) => Math.min(current + 1, pageCount))}>Next</button>
         </div>
+        <div className="column-management-panel">
+          <div>
+            <strong>Column Actions</strong>
+            <span>{selectedColumns.length ? `${selectedColumns.length} selected` : 'Select columns from the header row to enable actions.'}</span>
+          </div>
+          <div className="column-action-row">
+            <button type="button" onClick={() => runColumnAction('show_selected')}>Show selected</button>
+            <button type="button" onClick={() => runColumnAction('hide_selected')}>Hide selected</button>
+            <button type="button" onClick={() => runColumnAction('show_all')}>Show all</button>
+            <button type="button" onClick={() => runColumnAction('rename')}>Rename</button>
+            <button type="button" onClick={() => runColumnAction('bulk_edit')}>Edit values</button>
+            <button type="button" onClick={() => runColumnAction('replace')}>Replace values</button>
+            <button type="button" onClick={() => runColumnAction('normalize')}>Normalize</button>
+            <button type="button" onClick={() => runColumnAction('duplicate')}>Duplicate</button>
+            <button type="button" onClick={() => runColumnAction('delete')}>Delete column</button>
+            <button type="button" onClick={() => runColumnAction('calculated')}>Calculated column</button>
+            <button type="button" onClick={() => runColumnAction('export_columns')}>Export selected columns</button>
+          </div>
+          <div className="column-chip-row">
+            {allHeaders.map((header) => (
+              <button className={selectedColumns.includes(header) ? 'active' : hiddenColumns.includes(header) ? 'muted-chip' : ''} key={header} type="button" onClick={() => toggleColumn(header)}>
+                {header}
+              </button>
+            ))}
+          </div>
+          <div className="inline-actions">
+            <button className="ghost-button compact" type="button" disabled={!selectedRowKeys.length} onClick={deleteSelectedRows}>Delete selected rows</button>
+            <button className="ghost-button compact" type="button" disabled={!selectedRowKeys.length} onClick={() => setColumnActionMessage(`${selectedRowKeys.length} selected rows approved for review.`)}>Approve selected rows</button>
+            <button className="ghost-button compact" type="button" disabled={!selectedRowKeys.length} onClick={exportFilteredRows}>Export selected/filter rows</button>
+          </div>
+          {Boolean(savedQueries.length) && <span>Saved queries: {savedQueries.join(' | ')}</span>}
+          {columnActionMessage && <span>{columnActionMessage}</span>}
+        </div>
 
         <div className="table-wrap preview-table-wrap">
           <table className="preview-table">
             <thead>
-              <tr>{headers.map((header) => <th key={header}><button type="button" onClick={() => sortBy(header)}>{header}{sortColumn === header ? ` ${sortDirection === 'asc' ? 'up' : 'down'}` : ''}</button></th>)}</tr>
+              <tr>
+                <th>Select</th>
+                {headers.map((header) => (
+                  <th className={selectedColumns.includes(header) ? 'selected-column' : ''} key={header}>
+                    <label className="column-select-label">
+                      <input checked={selectedColumns.includes(header)} type="checkbox" onChange={() => toggleColumn(header)} />
+                      <button type="button" onClick={() => sortBy(header)}>{header}{sortColumn === header ? ` ${sortDirection === 'asc' ? 'up' : 'down'}` : ''}</button>
+                    </label>
+                  </th>
+                ))}
+              </tr>
             </thead>
             <tbody>
               {pagedRows.map((row, rowIndex) => (
-                <tr key={`${rowIndex}-${page}`}>{headers.map((header) => (
+                <tr className={selectedRowKeys.includes(rowKey(row)) ? 'selected-row' : ''} key={`${rowIndex}-${page}`}>
+                  <td><input checked={selectedRowKeys.includes(rowKey(row))} type="checkbox" onChange={() => toggleRow(row)} /></td>
+                  {headers.map((header) => (
                   <td className={cellClass(row[header], header)} key={header}>
                     {mode === 'edit' ? (
                       <input
@@ -7555,7 +7781,7 @@ function DatasetPreviewModal({
                   </td>
                 ))}</tr>
               ))}
-              {!pagedRows.length && <tr><td colSpan={headers.length || 1}>No preview rows match this filter.</td></tr>}
+              {!pagedRows.length && <tr><td colSpan={(headers.length || 1) + 1}>No preview rows match this filter.</td></tr>}
             </tbody>
           </table>
         </div>

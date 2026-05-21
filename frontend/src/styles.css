@@ -2886,6 +2886,7 @@ th {
 .hr-workforce-workspace,
 .hr-operations-grid,
 .hr-ai-panel,
+.hr-quick-create,
 .hr-employee-form,
 .employee-profile-drawer,
 .employee-tab-panel {
@@ -2922,8 +2923,36 @@ th {
   grid-template-columns: minmax(320px, 1.2fr) minmax(280px, 0.8fr);
 }
 
+.hr-quick-create {
+  border: 1px solid color-mix(in srgb, var(--line-strong) 85%, transparent);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.quick-create-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.quick-create-bar h2 {
+  margin: 2px 0;
+}
+
+.quick-create-bar span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.hr-quick-create.open {
+  box-shadow: var(--shadow);
+}
+
 .hr-employee-form {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  animation: card-rise 0.18s ease;
 }
 
 .hr-employee-form > div,
@@ -3223,9 +3252,8 @@ th {
   position: relative;
 }
 
-.dataset-action-menu summary {
+.dataset-action-trigger {
   cursor: pointer;
-  list-style: none;
   border: 1px solid rgba(24, 119, 242, 0.28);
   border-radius: 8px;
   background: var(--accent-wash);
@@ -3235,29 +3263,32 @@ th {
   padding: 9px 12px;
 }
 
-.dataset-action-menu summary::-webkit-details-marker {
-  display: none;
-}
-
-.dataset-action-menu[open] {
+.dataset-action-menu.open {
   z-index: 20;
 }
 
-.dataset-action-menu[open] summary {
+.dataset-action-menu.open .dataset-action-trigger {
   background: var(--accent);
   color: #ffffff;
 }
 
-.dataset-action-menu[open]::after {
-  content: "";
-  position: fixed;
-  inset: 0;
-  z-index: -1;
+.dataset-action-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 30;
+  min-width: 210px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel);
+  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.18);
+  animation: dropdown-rise 0.16s ease;
 }
 
-.dataset-action-menu button {
+.dataset-action-dropdown button {
   display: block;
-  width: 180px;
+  width: 100%;
   border: 0;
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
   background: var(--panel);
@@ -3267,31 +3298,24 @@ th {
   text-align: left;
 }
 
-.dataset-action-menu button:hover {
+.dataset-action-dropdown button:hover {
   background: rgba(24, 119, 242, 0.07);
 }
 
-.dataset-action-menu[open] button:first-of-type {
-  margin-top: 6px;
-}
-
-.dataset-action-menu[open] button {
-  box-shadow: 0 18px 45px rgba(15, 23, 42, 0.14);
-}
-
-.dataset-action-menu[open] button {
-  position: relative;
-}
-
-.dataset-action-menu[open] button:first-of-type {
-  border-top-left-radius: 8px;
-  border-top-right-radius: 8px;
-}
-
-.dataset-action-menu[open] button:last-of-type {
+.dataset-action-dropdown button:last-of-type {
   border-bottom: 0;
-  border-bottom-left-radius: 8px;
-  border-bottom-right-radius: 8px;
+}
+
+@keyframes dropdown-rise {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
 }
 
 .ops-command-center {
@@ -3921,6 +3945,71 @@ th {
   color: var(--text);
   font-weight: 700;
   padding: 7px 8px;
+}
+
+.column-management-panel {
+  display: grid;
+  gap: 10px;
+  margin: 12px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.column-management-panel strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.column-management-panel span {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.column-action-row,
+.column-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.column-action-row button,
+.column-chip-row button {
+  width: auto;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 10px;
+}
+
+.column-chip-row button.active,
+.preview-table th.selected-column {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+  background: color-mix(in srgb, var(--accent-wash) 70%, var(--panel));
+}
+
+.column-chip-row button.muted-chip {
+  opacity: 0.58;
+  text-decoration: line-through;
+}
+
+.column-select-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.column-select-label input,
+.preview-table td input[type='checkbox'] {
+  width: auto;
+}
+
+.preview-table tr.selected-row td {
+  background: color-mix(in srgb, var(--accent-wash) 58%, var(--panel));
 }
 
 .cell-warning {
