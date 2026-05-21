@@ -3057,6 +3057,66 @@ th {
   color: #64748b;
 }
 
+.attendance-ops-workspace {
+  display: grid;
+  gap: 14px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.78);
+  padding: 12px;
+}
+
+.attendance-control-bar,
+.attendance-entry-form {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  align-items: end;
+}
+
+.attendance-control-bar label {
+  display: grid;
+  gap: 5px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.attendance-control-bar input,
+.attendance-entry-form input,
+.attendance-entry-form select {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.compact-attendance-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+.attendance-board {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: 10px;
+}
+
+.attendance-card {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.attendance-card span {
+  color: #64748b;
+  font-size: 12px;
+}
+
 .employee-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -3072,7 +3132,10 @@ th {
 
 @media (max-width: 760px) {
   .leave-workflow-grid,
-  .leave-balance-strip {
+  .leave-balance-strip,
+  .attendance-control-bar,
+  .attendance-entry-form,
+  .compact-attendance-grid {
     grid-template-columns: 1fr;
   }
 

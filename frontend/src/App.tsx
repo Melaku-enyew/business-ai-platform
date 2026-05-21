@@ -4718,6 +4718,7 @@ function RoutedPages(props: {
                 setDatasets={props.setDatasets}
                 setReports={props.setReports}
                 setSelectedCompanyId={props.setSelectedCompanyId}
+                user={props.user}
                 uploadDataset={props.uploadDataset}
               />
             </WorkspaceErrorBoundary>
@@ -4726,6 +4727,32 @@ function RoutedPages(props: {
           path={route.path}
         />
       ))}
+      <Route
+        path="/hr/leave"
+        element={(
+          <WorkspaceErrorBoundary label="Leave Management">
+            <ModuleWorkspacePage
+              apiFetch={props.apiFetch}
+              archiveDatasetRecord={props.archiveDatasetRecord}
+              companies={props.companies}
+              datasets={props.datasets}
+              deleteDatasetRecord={props.deleteDatasetRecord}
+              deletingDatasetId={props.deletingDatasetId}
+              downloadDatasetExport={props.downloadDatasetExport}
+              reports={props.reports}
+              route={workspaceRoutes.find((route) => route.path === '/hr/leave-management') ?? { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave', path: '/hr/leave', module: 'hr', moduleLabel: 'HR & Workforce' }}
+              selectedCompanyId={props.selectedCompanyId}
+              setActiveDataset={props.setActiveDataset}
+              setCleanupJobs={props.setCleanupJobs}
+              setDatasets={props.setDatasets}
+              setReports={props.setReports}
+              setSelectedCompanyId={props.setSelectedCompanyId}
+              user={props.user}
+              uploadDataset={props.uploadDataset}
+            />
+          </WorkspaceErrorBoundary>
+        )}
+      />
       <Route
         path="/data-processing/*"
         element={(
@@ -4746,6 +4773,7 @@ function RoutedPages(props: {
               setDatasets={props.setDatasets}
               setReports={props.setReports}
               setSelectedCompanyId={props.setSelectedCompanyId}
+              user={props.user}
               uploadDataset={props.uploadDataset}
             />
           </WorkspaceErrorBoundary>
@@ -4990,6 +5018,7 @@ function ModuleWorkspacePage({
   setDatasets,
   setReports,
   setSelectedCompanyId,
+  user,
   uploadDataset
 }: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
@@ -5007,6 +5036,7 @@ function ModuleWorkspacePage({
   setDatasets: Dispatch<SetStateAction<Dataset[]>>;
   setReports: Dispatch<SetStateAction<ReportHistoryItem[]>>;
   setSelectedCompanyId: (companyId: string) => void;
+  user: User | null;
   uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
 }) {
   const safeCompanies = asArray(companies);
@@ -5074,7 +5104,7 @@ function ModuleWorkspacePage({
       if (!response.ok) {
         throw new Error(payload.error || 'Could not load records.');
       }
-      setRecords((payload.records ?? []).filter((record) => record.recordType === route.type));
+      setRecords((payload.records ?? []).filter((record) => route.module === 'hr' || record.recordType === route.type));
     } catch (loadError) {
       setError(loadError instanceof Error ? loadError.message : 'Could not load records.');
     } finally {
@@ -5633,6 +5663,7 @@ function ModuleWorkspacePage({
           apiFetch={apiFetch}
           company={selectedCompany}
           records={filteredRecords}
+          route={route}
           selectedCompanyId={selectedCompanyId}
           setError={setError}
           setRecords={setRecords}
@@ -5818,6 +5849,7 @@ function HrWorkforceWorkspace({
   apiFetch,
   company,
   records,
+  route,
   selectedCompanyId,
   setError,
   setRecords,
@@ -5826,6 +5858,7 @@ function HrWorkforceWorkspace({
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   company: Company | null;
   records: ModuleRecord[];
+  route: WorkspaceRoute;
   selectedCompanyId: string;
   setError: (message: string) => void;
   setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
@@ -5853,6 +5886,10 @@ function HrWorkforceWorkspace({
   const [payrollFileName, setPayrollFileName] = useState('');
   const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
+  const [attendanceTab, setAttendanceTab] = useState(route.type === 'attendance' ? 'Live Workforce' : 'Dashboard');
+  const [attendanceDate, setAttendanceDate] = useState(() => new Date().toISOString().slice(0, 10));
+  const [payPeriod, setPayPeriod] = useState(() => new Date().toISOString().slice(0, 7));
+  const [timeEntryForm, setTimeEntryForm] = useState({ employeeRecordId: '', startTime: '09:00', endTime: '17:00', breakMinutes: '30', status: 'present', shift: 'Day shift', location: 'On-site' });
   const [leaveForm, setLeaveForm] = useState({
     employeeRecordId: '',
     startDate: '',
@@ -5868,6 +5905,7 @@ function HrWorkforceWorkspace({
   const archivedEmployees = records.filter((record) => record.recordType === 'employee' && record.status === 'archived');
   const payrollRecords = records.filter((record) => record.recordType === 'payroll');
   const attendanceRecords = records.filter((record) => record.recordType === 'attendance');
+  const shiftRecords = records.filter((record) => record.recordType === 'shift');
   const leaveRequests = records.filter((record) => record.recordType === 'leave_request');
   const documents = records.filter((record) => record.recordType === 'document' || record.recordType === 'paystub');
   const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
@@ -5888,6 +5926,11 @@ function HrWorkforceWorkspace({
   const ptoRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'pto').length;
   const sickRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'sick').length;
   const pendingHrApprovals = leaveRequests.filter((record) => record.status === 'pending_approval');
+
+  useEffect(() => {
+    if (route.type === 'attendance') setAttendanceTab('Live Workforce');
+    if (route.type === 'leave') setAttendanceTab('Leave Calendar');
+  }, [route.type]);
 
   async function createHrRecord(recordType: string, title: string, status: string, metadata: Record<string, unknown>, amount?: number | null) {
     const response = await apiFetch('/api/modules/hr/records', {
@@ -6103,6 +6146,153 @@ function HrWorkforceWorkspace({
     }
   }
 
+  function calculateWorkedHours(startTime: string, endTime: string, breakMinutes: string | number) {
+    if (!startTime || !endTime) return 0;
+    const [startHour, startMinute] = startTime.split(':').map(Number);
+    const [endHour, endMinute] = endTime.split(':').map(Number);
+    const start = startHour * 60 + startMinute;
+    const end = endHour * 60 + endMinute;
+    const minutes = Math.max(end - start - Number(breakMinutes || 0), 0);
+    return Math.round((minutes / 60) * 100) / 100;
+  }
+
+  function attendanceForEmployee(employee: ModuleRecord) {
+    const employeeId = employee.metadata?.employeeId;
+    return attendanceRecords.filter((record) => record.metadata?.employeeRecordId === employee.id || record.metadata?.employeeId === employeeId);
+  }
+
+  function weeklyHoursForEmployee(employee: ModuleRecord) {
+    const weekPrefix = attendanceDate.slice(0, 8);
+    return attendanceForEmployee(employee)
+      .filter((record) => String(record.metadata?.date ?? '').startsWith(weekPrefix))
+      .reduce((sum, record) => sum + Number(record.metadata?.hours ?? 0), 0);
+  }
+
+  async function clockEmployee(employee: ModuleRecord, action: 'in' | 'out') {
+    try {
+      const now = new Date();
+      if (action === 'in') {
+        await createHrRecord('attendance', `${employee.title} clock in`, 'clocked_in', {
+          employeeRecordId: employee.id,
+          employeeId: employee.metadata?.employeeId,
+          employeeName: employee.title,
+          date: now.toISOString().slice(0, 10),
+          clockIn: now.toISOString(),
+          shift: 'Live shift',
+          location: 'On-site',
+          approvalStatus: 'unapproved',
+          lateArrival: now.getHours() > 9 || (now.getHours() === 9 && now.getMinutes() > 10),
+          missingPunch: false,
+          payrollReady: false
+        });
+        return;
+      }
+      const openShift = attendanceForEmployee(employee).find((record) => record.status === 'clocked_in');
+      if (!openShift) {
+        setError('No open clock-in record was found for this employee.');
+        return;
+      }
+      const start = new Date(String(openShift.metadata?.clockIn ?? now.toISOString()));
+      const hours = Math.max(Math.round(((now.getTime() - start.getTime()) / 3600000) * 100) / 100, 0);
+      await updateHrRecord(openShift, {
+        status: 'completed',
+        metadata: {
+          ...(openShift.metadata ?? {}),
+          clockOut: now.toISOString(),
+          hours,
+          overtimeHours: Math.max(hours - 8, 0),
+          missingPunch: false,
+          payrollReady: true,
+          approvalStatus: hours > 10 ? 'manager_review' : 'approved'
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Clock action failed.');
+    }
+  }
+
+  async function saveTimeEntry(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    const employee = employees.find((entry) => entry.id === timeEntryForm.employeeRecordId) ?? selectedEmployee;
+    if (!employee) {
+      setError('Select an employee for the time entry.');
+      return;
+    }
+    const hours = calculateWorkedHours(timeEntryForm.startTime, timeEntryForm.endTime, timeEntryForm.breakMinutes);
+    try {
+      await createHrRecord('attendance', `${employee.title} ${attendanceDate} time entry`, timeEntryForm.status, {
+        employeeRecordId: employee.id,
+        employeeId: employee.metadata?.employeeId,
+        employeeName: employee.title,
+        date: attendanceDate,
+        startTime: timeEntryForm.startTime,
+        endTime: timeEntryForm.endTime,
+        breakMinutes: Number(timeEntryForm.breakMinutes || 0),
+        hours,
+        overtimeHours: Math.max(hours - 8, 0),
+        status: timeEntryForm.status,
+        shift: timeEntryForm.shift,
+        location: timeEntryForm.location,
+        approvalStatus: hours > 10 ? 'manager_review' : 'unapproved',
+        missingPunch: !timeEntryForm.startTime || !timeEntryForm.endTime,
+        payrollReady: false,
+        payPeriod
+      });
+      setTimeEntryForm((current) => ({ ...current, employeeRecordId: employee.id }));
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Time entry could not be saved.');
+    }
+  }
+
+  async function assignShift(employee: ModuleRecord) {
+    const shift = window.prompt('Shift name', 'Day shift 9:00 AM - 5:00 PM')?.trim();
+    if (!shift) return;
+    try {
+      await createHrRecord('shift', `${employee.title} ${shift}`, 'scheduled', {
+        employeeRecordId: employee.id,
+        employeeId: employee.metadata?.employeeId,
+        employeeName: employee.title,
+        date: attendanceDate,
+        shift,
+        recurring: 'weekly',
+        location: 'On-site',
+        department: employee.metadata?.department,
+        approvalStatus: 'scheduled'
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Shift could not be assigned.');
+    }
+  }
+
+  function exportPayrollTimesheet() {
+    const rows = [
+      ['Employee ID', 'Employee Name', 'Regular Hours', 'Overtime Hours', 'PTO Hours', 'Sick Leave Hours', 'Unpaid Hours', 'Gross Pay Estimate', 'Deductions', 'Tax Placeholder', 'Approval Status', 'Pay Period'],
+      ...employees.map((employee) => {
+        const employeeAttendance = attendanceForEmployee(employee);
+        const regular = employeeAttendance.reduce((sum, record) => sum + Math.min(Number(record.metadata?.hours ?? 0), 8), 0);
+        const overtime = employeeAttendance.reduce((sum, record) => sum + Number(record.metadata?.overtimeHours ?? 0), 0);
+        const pto = leaveRequests.filter((record) => record.status === 'approved' && record.metadata?.employeeRecordId === employee.id && record.metadata?.leaveType === 'pto').reduce((sum, record) => sum + Number(record.metadata?.requestedHours ?? 0), 0);
+        const sick = leaveRequests.filter((record) => record.status === 'approved' && record.metadata?.employeeRecordId === employee.id && record.metadata?.leaveType === 'sick').reduce((sum, record) => sum + Number(record.metadata?.requestedHours ?? 0), 0);
+        const rate = Number(employee.metadata?.salary ?? employee.amount ?? 0) / 2080;
+        return [
+          String(employee.metadata?.employeeId ?? ''),
+          employee.title,
+          regular.toFixed(2),
+          overtime.toFixed(2),
+          pto.toFixed(2),
+          sick.toFixed(2),
+          '0',
+          (Math.max(rate, 0) * (regular + overtime * 1.5)).toFixed(2),
+          'TODO payroll deductions',
+          'TODO tax withholding',
+          employeeAttendance.some((record) => record.metadata?.approvalStatus !== 'approved') ? 'needs_review' : 'approved',
+          payPeriod
+        ];
+      })
+    ];
+    downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), `payroll-timesheet-${payPeriod}.csv`, 'text/csv');
+  }
+
   async function uploadPayroll(file: File, attachAsPaystub = false) {
     setPayrollFileName(file.name);
     try {
@@ -6269,6 +6459,29 @@ function HrWorkforceWorkspace({
       </section>
       {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
 
+      {route.type === 'attendance' && (
+        <AttendanceOperationsWorkspace
+          attendanceDate={attendanceDate}
+          attendanceRecords={attendanceRecords}
+          attendanceTab={attendanceTab}
+          canManage={canManageHr}
+          clockEmployee={clockEmployee}
+          employees={employees}
+          exportPayrollTimesheet={exportPayrollTimesheet}
+          leaveRequests={leaveRequests}
+          payPeriod={payPeriod}
+          saveTimeEntry={saveTimeEntry}
+          setAttendanceDate={setAttendanceDate}
+          setAttendanceTab={setAttendanceTab}
+          setPayPeriod={setPayPeriod}
+          setTimeEntryForm={setTimeEntryForm}
+          shiftRecords={shiftRecords}
+          timeEntryForm={timeEntryForm}
+          weeklyHoursForEmployee={weeklyHoursForEmployee}
+          assignShift={assignShift}
+        />
+      )}
+
       <section className="hr-employee-table">
         <div className="dataset-table-head">
           <span>Employee</span>
@@ -6325,6 +6538,142 @@ function HrWorkforceWorkspace({
         />
       )}
     </article>
+  );
+}
+
+function AttendanceOperationsWorkspace({
+  assignShift,
+  attendanceDate,
+  attendanceRecords,
+  attendanceTab,
+  canManage,
+  clockEmployee,
+  employees,
+  exportPayrollTimesheet,
+  leaveRequests,
+  payPeriod,
+  saveTimeEntry,
+  setAttendanceDate,
+  setAttendanceTab,
+  setPayPeriod,
+  setTimeEntryForm,
+  shiftRecords,
+  timeEntryForm,
+  weeklyHoursForEmployee
+}: {
+  assignShift: (employee: ModuleRecord) => void;
+  attendanceDate: string;
+  attendanceRecords: ModuleRecord[];
+  attendanceTab: string;
+  canManage: boolean;
+  clockEmployee: (employee: ModuleRecord, action: 'in' | 'out') => void;
+  employees: ModuleRecord[];
+  exportPayrollTimesheet: () => void;
+  leaveRequests: ModuleRecord[];
+  payPeriod: string;
+  saveTimeEntry: (event: FormEvent<HTMLFormElement>) => void;
+  setAttendanceDate: (value: string) => void;
+  setAttendanceTab: (value: string) => void;
+  setPayPeriod: (value: string) => void;
+  setTimeEntryForm: Dispatch<SetStateAction<{ employeeRecordId: string; startTime: string; endTime: string; breakMinutes: string; status: string; shift: string; location: string }>>;
+  shiftRecords: ModuleRecord[];
+  timeEntryForm: { employeeRecordId: string; startTime: string; endTime: string; breakMinutes: string; status: string; shift: string; location: string };
+  weeklyHoursForEmployee: (employee: ModuleRecord) => number;
+}) {
+  const dailyRecords = attendanceRecords.filter((record) => record.metadata?.date === attendanceDate);
+  const openShifts = attendanceRecords.filter((record) => record.status === 'clocked_in');
+  const missingPunches = attendanceRecords.filter((record) => record.metadata?.missingPunch === true || record.status === 'clocked_in').length;
+  const overtimeEmployees = employees.filter((employee) => weeklyHoursForEmployee(employee) > 40);
+  const approvedLeave = leaveRequests.filter((request) => request.status === 'approved');
+  const tabs = ['Dashboard', 'Live Workforce', 'Daily Time Entry', 'Weekly Timesheets', 'Payroll Preparation', 'Scheduling', 'Leave Calendar', 'Attendance Analytics'];
+  return (
+    <section className="attendance-ops-workspace">
+      <div className="employee-tabs sticky-tabs">
+        {tabs.map((tab) => <button className={attendanceTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setAttendanceTab(tab)}>{tab}</button>)}
+      </div>
+      <div className="attendance-control-bar">
+        <label>Date <input type="date" value={attendanceDate} onChange={(event) => setAttendanceDate(event.target.value)} /></label>
+        <label>Pay period <input type="month" value={payPeriod} onChange={(event) => setPayPeriod(event.target.value)} /></label>
+        <button type="button" onClick={exportPayrollTimesheet}>Export payroll-ready CSV</button>
+      </div>
+      <div className="hr-dashboard-grid compact-attendance-grid">
+        <div><span>Clocked in</span><strong>{openShifts.length}</strong></div>
+        <div><span>Daily entries</span><strong>{dailyRecords.length}</strong></div>
+        <div><span>Missing punches</span><strong>{missingPunches}</strong></div>
+        <div><span>Over 40 hours</span><strong>{overtimeEmployees.length}</strong></div>
+        <div><span>Approved leave</span><strong>{approvedLeave.length}</strong></div>
+        <div><span>Scheduled shifts</span><strong>{shiftRecords.length}</strong></div>
+      </div>
+      {attendanceTab === 'Live Workforce' && (
+        <div className="attendance-board">
+          {employees.map((employee) => {
+            const openShift = openShifts.find((record) => record.metadata?.employeeRecordId === employee.id);
+            return (
+              <article className="attendance-card" key={employee.id}>
+                <div>
+                  <strong>{employee.title}</strong>
+                  <span>{String(employee.metadata?.department ?? 'Unassigned')} | {openShift ? 'Working now' : 'Available'}</span>
+                </div>
+                <div className="inline-actions">
+                  <button type="button" onClick={() => clockEmployee(employee, 'in')} disabled={Boolean(openShift)}>Clock In</button>
+                  <button className="ghost-button compact" type="button" onClick={() => clockEmployee(employee, 'out')} disabled={!openShift}>Clock Out</button>
+                  {canManage && <button className="ghost-button compact" type="button" onClick={() => assignShift(employee)}>Assign Shift</button>}
+                </div>
+              </article>
+            );
+          })}
+          {!employees.length && <p className="muted">Create employees before running live workforce operations.</p>}
+        </div>
+      )}
+      {attendanceTab === 'Daily Time Entry' && (
+        <form className="attendance-entry-form" onSubmit={saveTimeEntry}>
+          <select value={timeEntryForm.employeeRecordId} onChange={(event) => setTimeEntryForm((current) => ({ ...current, employeeRecordId: event.target.value }))}>
+            <option value="">Select employee</option>
+            {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.title}</option>)}
+          </select>
+          <input type="time" value={timeEntryForm.startTime} onChange={(event) => setTimeEntryForm((current) => ({ ...current, startTime: event.target.value }))} />
+          <input type="time" value={timeEntryForm.endTime} onChange={(event) => setTimeEntryForm((current) => ({ ...current, endTime: event.target.value }))} />
+          <input placeholder="Break minutes" value={timeEntryForm.breakMinutes} onChange={(event) => setTimeEntryForm((current) => ({ ...current, breakMinutes: event.target.value }))} />
+          <select value={timeEntryForm.status} onChange={(event) => setTimeEntryForm((current) => ({ ...current, status: event.target.value }))}>
+            {['present', 'absent', 'PTO', 'sick', 'holiday', 'remote'].map((status) => <option key={status} value={status}>{status}</option>)}
+          </select>
+          <input placeholder="Shift" value={timeEntryForm.shift} onChange={(event) => setTimeEntryForm((current) => ({ ...current, shift: event.target.value }))} />
+          <select value={timeEntryForm.location} onChange={(event) => setTimeEntryForm((current) => ({ ...current, location: event.target.value }))}>
+            <option>On-site</option>
+            <option>Remote</option>
+            <option>Hybrid</option>
+          </select>
+          <button type="submit">Save time entry</button>
+        </form>
+      )}
+      {attendanceTab === 'Weekly Timesheets' && (
+        <div className="record-list">
+          {employees.map((employee) => {
+            const hours = weeklyHoursForEmployee(employee);
+            return <div key={employee.id}><strong>{employee.title}</strong><span>{hours.toFixed(2)} weekly hours | overtime {Math.max(hours - 40, 0).toFixed(2)} | {hours > 40 ? 'manager review' : 'normal'}</span></div>;
+          })}
+        </div>
+      )}
+      {attendanceTab === 'Payroll Preparation' && (
+        <div className="employee-tab-panel">
+          <h3>Payroll-ready summary</h3>
+          <p>Exports include employee ID, regular hours, overtime hours, PTO, sick leave, unpaid hours, gross pay estimate, deductions placeholders, tax placeholders, approval status, and pay period.</p>
+          <button type="button" onClick={exportPayrollTimesheet}>Download payroll summary</button>
+        </div>
+      )}
+      {attendanceTab === 'Scheduling' && <EmployeeRecordList title="Shift schedule" records={shiftRecords} empty="No shifts assigned yet." />}
+      {attendanceTab === 'Leave Calendar' && <LeaveRequestList canManage={canManage} onDecide={() => undefined} records={leaveRequests} />}
+      {attendanceTab === 'Attendance Analytics' && (
+        <div className="hr-ai-panel">
+          {[
+            missingPunches ? `${missingPunches} missing punch or open clock-in records detected.` : 'No missing punches detected.',
+            overtimeEmployees.length ? `${overtimeEmployees.length} employees are over 40 hours this week.` : 'No excessive overtime detected.',
+            leaveRequests.some((request) => request.status === 'pending_approval') ? 'Unapproved leave may affect payroll preparation.' : 'Leave approvals are aligned with attendance.',
+            'Natural searches: show missing punches this week, employees over 45 hours, who is absent today, show overtime by department, show PTO next week.'
+          ].map((item) => <div className="ai-insight-chip" key={item}><strong>{item}</strong><span>AI attendance intelligence</span></div>)}
+        </div>
+      )}
+    </section>
   );
 }
 
