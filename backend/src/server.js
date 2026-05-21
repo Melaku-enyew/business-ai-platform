@@ -2606,6 +2606,96 @@ function sanitizeModuleRecordsForUser(user, moduleName, records) {
     });
 }
 
+async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRecord) {
+  if (moduleName !== 'hr' || !companyId) return null;
+  const datasetConfig = hrDatasetConfigForRecord(changedRecord);
+  if (!datasetConfig) return null;
+  const moduleRecords = await listModuleRecords(user, 'hr');
+  const datasetRecords = moduleRecords.filter((record) => {
+    if (record.companyId !== companyId) return false;
+    if (datasetConfig.leaveType) return record.recordType === 'leave_request' && record.metadata?.leaveType === datasetConfig.leaveType;
+    return datasetConfig.recordTypes.includes(record.recordType);
+  });
+  const rows = datasetRecords.map((record) => moduleRecordToDatasetRow(record, datasetConfig));
+  const headers = datasetConfig.headers;
+  const summary = summarizeCsv(headers, rows);
+  const dataset = {
+    id: `module-hr-${companyId}-${datasetConfig.key}`,
+    fileName: datasetConfig.name,
+    fileType: 'module-dataset',
+    uploadedAt: new Date().toISOString(),
+    rows: rows.length,
+    columns: headers.length,
+    headers,
+    preview: rows.slice(0, 25),
+    records: rows,
+    userId: user.id,
+    companyId,
+    cleanupStatus: 'completed',
+    pipelineStatus: 'completed',
+    status: 'completed',
+    qualityScore: datasetConfig.qualityScore(rows),
+    validationResults: [],
+    duplicateResults: [],
+    cleanupResults: [],
+    cleanupLogs: [`${datasetConfig.name} synced from HR operational workflows.`],
+    cleanupMetrics: { totalCleanedRows: rows.length },
+    futureAiReady: true,
+    ...summary
+  };
+  await saveDataset(dataset);
+  return dataset;
+}
+
+function hrDatasetConfigForRecord(record) {
+  if (record.recordType === 'employee') return { key: 'employees', name: 'Employee Records Dataset', recordTypes: ['employee'], headers: ['employeeId', 'name', 'department', 'title', 'status', 'manager', 'employmentType', 'hireDate', 'email'], qualityScore: (rows) => rows.length ? 96 : 0 };
+  if (record.recordType === 'attendance' || record.recordType === 'shift') return { key: 'attendance', name: 'Attendance Dataset', recordTypes: ['attendance', 'shift'], headers: ['employeeId', 'employeeName', 'date', 'status', 'shift', 'startTime', 'endTime', 'hours', 'overtimeHours', 'approvalStatus'], qualityScore: (rows) => rows.some((row) => row.approvalStatus === 'manager_review') ? 84 : 94 };
+  if (record.recordType === 'leave_request' && record.metadata?.leaveType === 'pto') return { key: 'pto', name: 'PTO Dataset', leaveType: 'pto', recordTypes: ['leave_request'], headers: ['employeeId', 'employeeName', 'startDate', 'endDate', 'requestedHours', 'status', 'manager', 'emergency', 'remainingBalanceAfter'], qualityScore: (rows) => rows.some((row) => row.status === 'pending_approval') ? 88 : 96 };
+  if (record.recordType === 'leave_request' && record.metadata?.leaveType === 'sick') return { key: 'sick-leave', name: 'Sick Leave Dataset', leaveType: 'sick', recordTypes: ['leave_request'], headers: ['employeeId', 'employeeName', 'startDate', 'endDate', 'requestedHours', 'status', 'manager', 'emergency', 'remainingBalanceAfter'], qualityScore: (rows) => rows.some((row) => row.status === 'pending_approval') ? 88 : 96 };
+  if (record.recordType === 'payroll' || record.recordType === 'paystub') return { key: 'payroll', name: 'Payroll Dataset', recordTypes: ['payroll', 'paystub'], headers: ['employeeId', 'employeeName', 'fileName', 'fileType', 'status', 'uploadedAt', 'duplicatePayrollDetection', 'missingEmployeeDetection', 'overtimeWarnings'], qualityScore: (rows) => rows.some((row) => Number(row.duplicatePayrollDetection) > 0 || Number(row.missingEmployeeDetection) > 0) ? 78 : 95 };
+  if (record.recordType === 'hiring') return { key: 'hiring', name: 'Hiring Dataset', recordTypes: ['hiring'], headers: ['candidate', 'status', 'department', 'manager', 'updatedAt'], qualityScore: (rows) => rows.length ? 92 : 0 };
+  if (record.recordType === 'performance') return { key: 'performance', name: 'Performance Dataset', recordTypes: ['performance'], headers: ['employeeId', 'employeeName', 'status', 'reviewCycle', 'manager', 'updatedAt'], qualityScore: (rows) => rows.length ? 92 : 0 };
+  return null;
+}
+
+function moduleRecordToDatasetRow(record, config) {
+  const metadata = record.metadata ?? {};
+  const row = {
+    employeeId: metadata.employeeId ?? '',
+    employeeName: metadata.employeeName ?? record.title,
+    name: record.title,
+    department: metadata.department ?? '',
+    title: metadata.title ?? '',
+    status: record.status,
+    manager: metadata.manager ?? '',
+    employmentType: metadata.employmentType ?? '',
+    hireDate: metadata.hireDate ?? '',
+    email: metadata.email ?? '',
+    date: metadata.date ?? '',
+    shift: metadata.shift ?? '',
+    startTime: metadata.startTime ?? '',
+    endTime: metadata.endTime ?? '',
+    hours: metadata.hours ?? '',
+    overtimeHours: metadata.overtimeHours ?? '',
+    approvalStatus: metadata.approvalStatus ?? record.status,
+    startDate: metadata.startDate ?? '',
+    endDate: metadata.endDate ?? '',
+    requestedHours: metadata.requestedHours ?? '',
+    emergency: metadata.emergency === true ? 'yes' : 'no',
+    remainingBalanceAfter: metadata.remainingBalanceAfter ?? '',
+    fileName: metadata.fileName ?? '',
+    fileType: metadata.fileType ?? '',
+    uploadedAt: metadata.uploadedAt ?? record.createdAt,
+    duplicatePayrollDetection: metadata.validation?.duplicatePayrollDetection ?? 0,
+    missingEmployeeDetection: metadata.validation?.missingEmployeeDetection ?? 0,
+    overtimeWarnings: metadata.validation?.overtimeWarnings ?? 0,
+    candidate: record.title,
+    reviewCycle: metadata.reviewCycle ?? '',
+    updatedAt: record.updatedAt
+  };
+  return Object.fromEntries(config.headers.map((header) => [header, String(row[header] ?? '')]));
+}
+
 app.post('/api/modules/:module/records', requireDurableStorage, async (req, res, next) => {
   try {
     const title = String(req.body?.title || '').trim();
@@ -2634,7 +2724,8 @@ app.post('/api/modules/:module/records', requireDurableStorage, async (req, res,
       metadata: req.body?.metadata ?? {}
     });
     await audit(req, 'module.record_created', req.params.module, record.id, { recordType });
-    res.status(201).json({ record });
+    const dataset = await syncModuleDatasetForRecord(req.params.module, companyId, req.user, record);
+    res.status(201).json({ record, dataset: dataset ? publicDataset(dataset) : undefined });
   } catch (error) {
     next(error);
   }
@@ -2653,7 +2744,8 @@ async function updateModuleRecordHandler(req, res, next) {
       return;
     }
     await audit(req, 'module.record_updated', req.params.module, record.id, { status: record.status });
-    res.json({ record });
+    const dataset = await syncModuleDatasetForRecord(req.params.module, record.companyId, req.user, record);
+    res.json({ record, dataset: dataset ? publicDataset(dataset) : undefined });
   } catch (error) {
     next(error);
   }

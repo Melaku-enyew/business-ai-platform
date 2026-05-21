@@ -3810,6 +3810,21 @@ function EnterpriseCockpit({
         <button type="button" onClick={() => navigate('/data-processing/workspace')}>Open Enterprise Data Hub</button>
       </div>
 
+      <div className="company-module-dataset-registry">
+        {[
+          ['HR datasets', companyDatasets.filter((dataset) => /^Employee Records|^Attendance|^PTO|^Sick Leave|^Payroll|^Hiring|^Performance/i.test(dataset.fileName))],
+          ['Finance datasets', companyDatasets.filter((dataset) => /invoice|expense|payment|tax|gl/i.test(dataset.fileName))],
+          ['Engineering datasets', companyDatasets.filter((dataset) => /project|task|ticket|deployment|resource/i.test(dataset.fileName))],
+          ['CRM datasets', companyDatasets.filter((dataset) => /lead|customer|opportunit|contract|sales/i.test(dataset.fileName))]
+        ].map(([label, datasets]) => (
+          <div key={String(label)}>
+            <span>{String(label)}</span>
+            <strong>{(datasets as Dataset[]).length}</strong>
+            <small>{(datasets as Dataset[])[0]?.fileName ?? 'No module dataset yet'}</small>
+          </div>
+        ))}
+      </div>
+
       <div className="cockpit-kpis">
         {kpis.map((kpi) => (
           <button className="cockpit-kpi" key={kpi.key} type="button" onClick={() => setDrillPanel({ title: kpi.label, kind: kpi.kind })}>
@@ -5285,11 +5300,13 @@ function ModuleWorkspacePage({
   }
 
   function approveDataset(dataset: Dataset) {
-    setActiveDataset(dataset);
+    const approvedDataset = { ...dataset, cleanupStatus: 'completed', pipelineStatus: 'completed', status: 'completed' };
+    setDatasets((current) => [approvedDataset, ...current.filter((entry) => entry.id !== dataset.id)]);
+    setActiveDataset(approvedDataset);
     setExpandedDatasetId(dataset.id);
     setWorkflowStage(workflowStages.find((stage) => /export/i.test(stage)) ?? workflowStages.at(-1) ?? workflowStages[0]);
-    setWorkflowMessage(`${dataset.fileName} approved for export and reporting.`);
-    setPreviewState({ dataset, mode: 'approval' });
+    setWorkflowMessage(`${dataset.fileName} approved. Dataset status is COMPLETED and ready for export.`);
+    setPreviewState({ dataset: approvedDataset, mode: 'approval' });
   }
 
   function reportsForDataset(dataset: Dataset) {
@@ -5424,7 +5441,7 @@ function ModuleWorkspacePage({
           }}
         />
       )}
-      <article className="panel module-upload-panel">
+      {isDataProcessingWorkspace ? <article className="panel module-upload-panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">{route.moduleLabel} dataset workspace</p>
@@ -5520,7 +5537,20 @@ function ModuleWorkspacePage({
             Retry upload
           </button>
         )}
-      </article>
+      </article> : (
+        <article className="panel module-dataset-ribbon">
+          <div>
+            <p className="eyebrow">{route.moduleLabel} datasets</p>
+            <h2>{route.title} writes into module-owned datasets</h2>
+            <span>Large uploads live in Enterprise Data Hub. This workspace uses quick actions, operational records, and synced module datasets.</span>
+          </div>
+          <div className="dataset-preview-strip">
+            <span>{moduleDatasets.length} linked datasets</span>
+            <span>{filteredRecords.length} operational records</span>
+            <span>{selectedCompanyName}</span>
+          </div>
+        </article>
+      )}
       <article className="panel">
         <div className="panel-header">
           <div>
@@ -5601,7 +5631,7 @@ function ModuleWorkspacePage({
                   </div>
                   <div className="dataset-row-footer">
                     <details className="dataset-action-menu">
-                      <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Actions'}</summary>
+                      <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Select Action'}</summary>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'edit')}>Edit rows</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'validate')}>Validate</button>
@@ -5666,6 +5696,7 @@ function ModuleWorkspacePage({
           route={route}
           selectedCompanyId={selectedCompanyId}
           setError={setError}
+          setDatasets={setDatasets}
           setRecords={setRecords}
           user={user}
         />
@@ -5852,6 +5883,7 @@ function HrWorkforceWorkspace({
   route,
   selectedCompanyId,
   setError,
+  setDatasets,
   setRecords,
   user
 }: {
@@ -5861,6 +5893,7 @@ function HrWorkforceWorkspace({
   route: WorkspaceRoute;
   selectedCompanyId: string;
   setError: (message: string) => void;
+  setDatasets: Dispatch<SetStateAction<Dataset[]>>;
   setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
   user: User | null;
 }) {
@@ -5938,9 +5971,10 @@ function HrWorkforceWorkspace({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ title, status, recordType, companyId: selectedCompanyId, amount, metadata })
     });
-    const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+    const payload = await readJson<{ record?: ModuleRecord; dataset?: Dataset; error?: string }>(response);
     if (!response.ok || !payload.record) throw new Error(payload.error || 'HR record could not be saved.');
     setRecords((current) => [payload.record as ModuleRecord, ...current]);
+    if (payload.dataset) setDatasets((current) => [normalizeDatasetForClient(payload.dataset as Dataset), ...current.filter((dataset) => dataset.id !== payload.dataset?.id)]);
     return payload.record;
   }
 
@@ -5950,9 +5984,10 @@ function HrWorkforceWorkspace({
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates)
     });
-    const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+    const payload = await readJson<{ record?: ModuleRecord; dataset?: Dataset; error?: string }>(response);
     if (!response.ok || !payload.record) throw new Error(payload.error || 'HR record update failed.');
     setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
+    if (payload.dataset) setDatasets((current) => [normalizeDatasetForClient(payload.dataset as Dataset), ...current.filter((dataset) => dataset.id !== payload.dataset?.id)]);
     return payload.record;
   }
 

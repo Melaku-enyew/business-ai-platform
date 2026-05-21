@@ -52,8 +52,9 @@
 body {
   margin: 0;
   background: var(--bg);
-  font-size: 15px;
-  line-height: 1.45;
+  color: var(--text);
+  font-size: 16px;
+  line-height: 1.52;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -2654,9 +2655,10 @@ th {
 }
 
 .enterprise-report-panel {
-  border: 1px solid rgba(79, 70, 229, 0.22);
+  border: 1px solid rgba(31, 122, 140, 0.35);
   border-radius: 10px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.96));
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
+  box-shadow: 0 18px 42px rgba(31, 122, 140, 0.09);
   padding: 14px;
   display: grid;
   gap: 12px;
@@ -2679,8 +2681,8 @@ th {
 .report-kpi-grid span,
 .report-intelligence-grid p,
 .ai-insight-chip span {
-  color: #64748b;
-  font-size: 12px;
+  color: var(--muted);
+  font-size: 13px;
 }
 
 .approval-status {
@@ -2734,14 +2736,19 @@ th {
 }
 
 .ai-insight-chip {
-  border-left: 3px solid #4f46e5;
-  padding: 5px 0 5px 8px;
+  border: 1px solid rgba(31, 122, 140, 0.22);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  background: rgba(31, 122, 140, 0.07);
+  padding: 10px 12px;
   margin-bottom: 6px;
 }
 
 .ai-insight-chip strong {
   display: block;
-  font-size: 13px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 850;
 }
 
 .report-action-row {
@@ -2760,6 +2767,43 @@ th {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.company-module-dataset-registry,
+.module-dataset-ribbon {
+  display: grid;
+  gap: 12px;
+  border: 1px solid rgba(15, 23, 42, 0.1);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.company-module-dataset-registry {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.company-module-dataset-registry div {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.company-module-dataset-registry span,
+.company-module-dataset-registry small,
+.module-dataset-ribbon span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 750;
+}
+
+.company-module-dataset-registry strong {
+  display: block;
+  color: var(--text);
+  font-size: 22px;
 }
 
 .company-dataset-selector,
@@ -3184,8 +3228,8 @@ th {
   list-style: none;
   border: 1px solid rgba(24, 119, 242, 0.28);
   border-radius: 8px;
-  background: rgba(24, 119, 242, 0.08);
-  color: #1d4ed8;
+  background: var(--accent-wash);
+  color: var(--accent);
   font-size: 13px;
   font-weight: 800;
   padding: 9px 12px;
@@ -3200,7 +3244,7 @@ th {
 }
 
 .dataset-action-menu[open] summary {
-  background: #1877f2;
+  background: var(--accent);
   color: #ffffff;
 }
 
@@ -3216,8 +3260,8 @@ th {
   width: 180px;
   border: 0;
   border-bottom: 1px solid rgba(15, 23, 42, 0.08);
-  background: #ffffff;
-  color: #0f172a;
+  background: var(--panel);
+  color: var(--text);
   font-weight: 700;
   padding: 10px 12px;
   text-align: left;
