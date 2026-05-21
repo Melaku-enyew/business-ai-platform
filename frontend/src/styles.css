@@ -3966,6 +3966,25 @@ th {
   padding: 14px;
 }
 
+.dataset-merge-preview {
+  display: grid;
+  gap: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line-strong));
+  border-radius: 10px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-wash) 52%, var(--panel)), var(--panel));
+  padding: 14px;
+}
+
+.dataset-merge-preview strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
+.dataset-merge-preview span {
+  color: var(--muted);
+  font-weight: 750;
+}
+
 .dashboard-dataset-browser .compact-table > div {
   grid-template-columns: minmax(0, 1.5fr) minmax(130px, 0.55fr) max-content max-content;
   border-color: var(--line-strong);

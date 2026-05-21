@@ -514,6 +514,19 @@ function validateModuleUpload(parsed, moduleName) {
       missing
     };
   }
+  if (moduleName === 'hr') {
+    const hasEmployeeShape = hasAny(['employee_id', 'employeeid']) && hasAny(['employee_name', 'name', 'full_name']);
+    const hasTimesheetShape = hasAny(['work_date', 'date']) && hasAny(['hours', 'total_hours', 'regular_hours']);
+    const hasPayrollShape = hasAny(['payroll_period', 'gross_pay', 'net_pay', 'pay_rate']);
+    const missing = [];
+    if (!hasEmployeeShape && !hasTimesheetShape && !hasPayrollShape) missing.push('employee_id or timesheet/payroll fields');
+    return {
+      stage: 'HR Dataset Classification',
+      result: missing.length ? `warnings: missing ${missing.join(', ')}` : 'passed',
+      missing,
+      detectedType: hasTimesheetShape ? 'Timesheet dataset' : hasPayrollShape ? 'Payroll dataset' : hasEmployeeShape ? 'Employee dataset' : 'Unknown dataset'
+    };
+  }
   if (moduleName === 'dataProcessing') {
     return {
       stage: 'Schema Validation',
@@ -2649,7 +2662,13 @@ async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRe
 
 function hrDatasetConfigForRecord(record) {
   if (record.recordType === 'employee') return { key: 'employees', name: 'Employee Records Dataset', recordTypes: ['employee'], headers: ['employeeId', 'name', 'department', 'title', 'status', 'manager', 'employmentType', 'hireDate', 'email'], qualityScore: (rows) => rows.length ? 96 : 0 };
-  if (record.recordType === 'attendance' || record.recordType === 'shift') return { key: 'attendance', name: 'Attendance Dataset', recordTypes: ['attendance', 'shift'], headers: ['employeeId', 'employeeName', 'date', 'status', 'shift', 'startTime', 'endTime', 'hours', 'overtimeHours', 'approvalStatus'], qualityScore: (rows) => rows.some((row) => row.approvalStatus === 'manager_review') ? 84 : 94 };
+  if (record.recordType === 'attendance' || record.recordType === 'shift' || record.recordType === 'timesheet') return {
+    key: 'timesheets',
+    name: 'Timesheet Dataset',
+    recordTypes: ['attendance', 'shift', 'timesheet'],
+    headers: ['employeeId', 'employeeName', 'workDate', 'startTime', 'endTime', 'totalHours', 'overtimeHours', 'PTOHours', 'sickLeaveHours', 'department', 'manager', 'approvalStatus', 'payrollPeriod', 'projectCode', 'taskCode', 'workType', 'location', 'notes'],
+    qualityScore: (rows) => rows.some((row) => ['manager_review', 'pending_approval', 'rejected'].includes(String(row.approvalStatus))) ? 84 : 94
+  };
   if (record.recordType === 'leave_request' && record.metadata?.leaveType === 'pto') return { key: 'pto', name: 'PTO Dataset', leaveType: 'pto', recordTypes: ['leave_request'], headers: ['employeeId', 'employeeName', 'startDate', 'endDate', 'requestedHours', 'status', 'manager', 'emergency', 'remainingBalanceAfter'], qualityScore: (rows) => rows.some((row) => row.status === 'pending_approval') ? 88 : 96 };
   if (record.recordType === 'leave_request' && record.metadata?.leaveType === 'sick') return { key: 'sick-leave', name: 'Sick Leave Dataset', leaveType: 'sick', recordTypes: ['leave_request'], headers: ['employeeId', 'employeeName', 'startDate', 'endDate', 'requestedHours', 'status', 'manager', 'emergency', 'remainingBalanceAfter'], qualityScore: (rows) => rows.some((row) => row.status === 'pending_approval') ? 88 : 96 };
   if (record.recordType === 'payroll' || record.recordType === 'paystub') return { key: 'payroll', name: 'Payroll Dataset', recordTypes: ['payroll', 'paystub'], headers: ['employeeId', 'employeeName', 'fileName', 'fileType', 'status', 'uploadedAt', 'duplicatePayrollDetection', 'missingEmployeeDetection', 'overtimeWarnings'], qualityScore: (rows) => rows.some((row) => Number(row.duplicatePayrollDetection) > 0 || Number(row.missingEmployeeDetection) > 0) ? 78 : 95 };
@@ -2672,11 +2691,21 @@ function moduleRecordToDatasetRow(record, config) {
     hireDate: metadata.hireDate ?? '',
     email: metadata.email ?? '',
     date: metadata.date ?? '',
+    workDate: metadata.workDate ?? metadata.date ?? '',
     shift: metadata.shift ?? '',
     startTime: metadata.startTime ?? '',
     endTime: metadata.endTime ?? '',
     hours: metadata.hours ?? '',
+    totalHours: metadata.totalHours ?? metadata.hours ?? '',
     overtimeHours: metadata.overtimeHours ?? '',
+    PTOHours: metadata.PTOHours ?? metadata.ptoHours ?? '',
+    sickLeaveHours: metadata.sickLeaveHours ?? '',
+    payrollPeriod: metadata.payrollPeriod ?? metadata.payPeriod ?? '',
+    projectCode: metadata.projectCode ?? '',
+    taskCode: metadata.taskCode ?? '',
+    workType: metadata.workType ?? '',
+    location: metadata.location ?? '',
+    notes: metadata.notes ?? metadata.note ?? '',
     approvalStatus: metadata.approvalStatus ?? record.status,
     startDate: metadata.startDate ?? '',
     endDate: metadata.endDate ?? '',
