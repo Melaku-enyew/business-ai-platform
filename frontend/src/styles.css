@@ -252,6 +252,20 @@ button {
   gap: 10px;
 }
 
+.nav-group {
+  display: grid;
+  gap: 6px;
+}
+
+.nav-group > span {
+  color: rgba(238, 244, 255, 0.52);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  padding: 10px 10px 0;
+  text-transform: uppercase;
+}
+
 .sidebar a {
   color: #b8c4d8;
   text-decoration: none;
@@ -319,6 +333,27 @@ button {
 .top-actions {
   gap: 10px;
   position: relative;
+}
+
+.global-company-selector {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.global-company-selector select {
+  min-width: 220px;
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+  text-transform: none;
+  font-weight: 700;
 }
 
 .eyebrow {
@@ -2715,6 +2750,93 @@ th {
 
 .report-action-row button {
   width: auto;
+}
+
+.company-dataset-selector,
+.incremental-update-panel,
+.module-business-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.company-dataset-selector,
+.incremental-update-panel,
+.module-business-dashboard {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.86);
+  padding: 14px;
+}
+
+.company-dataset-selector {
+  margin: 12px 0;
+}
+
+.company-dataset-selector div,
+.incremental-update-panel div {
+  display: grid;
+  gap: 3px;
+}
+
+.company-dataset-selector select,
+.incremental-update-panel select,
+.module-intelligence-grid input {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.company-ops-matrix,
+.governance-grid,
+.module-feature-grid,
+.module-intelligence-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 10px;
+}
+
+.company-ops-matrix article,
+.governance-grid div,
+.module-intelligence-grid article {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 12px;
+}
+
+.company-ops-matrix span,
+.governance-grid span,
+.module-business-header span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.company-ops-matrix strong,
+.governance-grid strong {
+  display: block;
+  margin: 3px 0;
+}
+
+.module-business-dashboard {
+  display: grid;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.module-feature-grid span {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.74);
+  color: #334155;
+  font-size: 12px;
+  font-weight: 800;
+  padding: 7px 10px;
 }
 
 .dataset-detail-grid span,

@@ -432,6 +432,7 @@ const LEGACY_AUTH_TOKEN_KEY = 'authToken';
 const SESSION_ACTIVITY_KEY = 'metenovaLastActivityAt';
 const LOGOUT_BROADCAST_KEY = 'metenovaLogoutAt';
 const STARTUP_ERROR_KEY = 'metenovaStartupError';
+const SELECTED_COMPANY_STORAGE_KEY = 'metenovaSelectedCompanyId';
 const DEFAULT_AUTH_MESSAGE = 'Sign in to access your dashboards and datasets.';
 
 function apiUrl(path: string) {
@@ -489,20 +490,19 @@ function isStartupRecoveryMessage(message: string) {
   return message.startsWith('Backend startup is not ready') || message.startsWith('PostgreSQL storage is reconnecting') || message.startsWith('Database is reconnecting');
 }
 
-const moduleNav: Array<{ view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
-  { view: 'dashboard', label: 'Dashboard', icon: 'DB' },
-  { view: 'assistant', label: 'Business Assistant', icon: 'BA' },
-  { view: 'companies', label: 'Companies', icon: 'CO' },
-  { view: 'accounting', label: 'Accounting', icon: 'AC' },
-  { view: 'engineering', label: 'Engineering', icon: 'EN' },
-  { view: 'hr', label: 'HR', icon: 'HR' },
-  { view: 'crm', label: 'CRM', icon: 'CR' },
-  { view: 'dataProcessing', label: 'Data Processing', icon: 'DP' },
-  { view: 'analytics', label: 'Analytics', icon: 'AN' },
-  { view: 'reports', label: 'Reports', icon: 'RP' },
-  { view: 'adminUsers', label: 'Admin Panel', icon: 'AD', adminOnly: true },
-  { view: 'settings', label: 'Settings', icon: 'ST' },
-  { view: 'contact', label: 'Contact Us', icon: 'CS' }
+const moduleNav: Array<{ group: string; view: AppView; label: string; icon: string; adminOnly?: boolean }> = [
+  { group: 'Core Workspace', view: 'dashboard', label: 'Dashboard', icon: 'DB' },
+  { group: 'Core Workspace', view: 'companies', label: 'Companies', icon: 'CO' },
+  { group: 'Core Workspace', view: 'assistant', label: 'Business Assistant', icon: 'BA' },
+  { group: 'Operations', view: 'hr', label: 'HR & Workforce', icon: 'HR' },
+  { group: 'Operations', view: 'accounting', label: 'Finance & Accounting', icon: 'FA' },
+  { group: 'Operations', view: 'engineering', label: 'Engineering & Projects', icon: 'EP' },
+  { group: 'Operations', view: 'crm', label: 'CRM & Sales', icon: 'CS' },
+  { group: 'Data & Intelligence', view: 'dataProcessing', label: 'Enterprise Data Hub', icon: 'DH' },
+  { group: 'Data & Intelligence', view: 'analytics', label: 'Analytics', icon: 'AN' },
+  { group: 'Administration', view: 'adminUsers', label: 'Admin Center', icon: 'AD', adminOnly: true },
+  { group: 'Administration', view: 'settings', label: 'Settings', icon: 'ST' },
+  { group: 'Administration', view: 'contact', label: 'Contact Us', icon: 'CU' }
 ];
 
 const sampleCompanies: Company[] = [
@@ -626,11 +626,11 @@ const moduleCards: Record<string, ModuleAction[]> = {
 };
 
 const moduleLabels: Record<string, string> = {
-  accounting: 'Accounting',
-  engineering: 'Engineering',
-  hr: 'HR',
-  crm: 'CRM',
-  dataProcessing: 'Data Processing'
+  accounting: 'Finance & Accounting',
+  engineering: 'Engineering & Projects',
+  hr: 'HR & Workforce',
+  crm: 'CRM & Sales',
+  dataProcessing: 'Enterprise Data Hub'
 };
 
 const workspaceRoutes: WorkspaceRoute[] = Object.entries(moduleCards).flatMap(([module, cards]) =>
@@ -786,7 +786,7 @@ export function App() {
   const [companiesLoading, setCompaniesLoading] = useState(false);
   const [companiesError, setCompaniesError] = useState('');
   const [companySaving, setCompanySaving] = useState(false);
-  const [selectedCompanyId, setSelectedCompanyId] = useState(sampleCompanies[0]?.id ?? '');
+  const [selectedCompanyId, setSelectedCompanyId] = useState(() => localStorage.getItem(SELECTED_COMPANY_STORAGE_KEY) || sampleCompanies[0]?.id || '');
   const [companyFormOpen, setCompanyFormOpen] = useState(false);
   const [companyForm, setCompanyForm] = useState<CompanyFormValues>({
     name: '',
@@ -927,6 +927,12 @@ export function App() {
       void loadCompanyWorkspace(selectedCompanyId);
     }
   }, [selectedCompanyId, user?.id]);
+
+  useEffect(() => {
+    if (selectedCompanyId) {
+      localStorage.setItem(SELECTED_COMPANY_STORAGE_KEY, selectedCompanyId);
+    }
+  }, [selectedCompanyId]);
 
   useEffect(() => {
     if (activeDataset) {
@@ -2492,6 +2498,10 @@ export function App() {
       navigate('/analytics/dashboard');
       return;
     }
+    if (view === 'dataProcessing') {
+      navigate('/data-processing/workspace');
+      return;
+    }
     if (view === 'reports') {
       navigate('/reports/history');
       return;
@@ -2594,19 +2604,26 @@ export function App() {
           <span>Metenova AI</span>
         </div>
         <nav aria-label="Primary">
-          {moduleNav
-            .filter((item) => !item.adminOnly || canManageUsers(user))
-            .map((item) => (
-              <button
-              className={currentView === item.view ? 'active' : ''}
-              key={item.view}
-              type="button"
-              onClick={() => item.view === 'settings' ? openSettings() : openView(item.view)}
-            >
-                <span className="nav-icon">{item.icon}</span>
-                {item.label}
-              </button>
-            ))}
+          {['Core Workspace', 'Operations', 'Data & Intelligence', 'Administration'].map((group) => {
+            const items = moduleNav.filter((item) => item.group === group && (!item.adminOnly || canManageUsers(user)));
+            if (!items.length) return null;
+            return (
+              <div className="nav-group" key={group}>
+                <span>{group}</span>
+                {items.map((item) => (
+                  <button
+                    className={currentView === item.view ? 'active' : ''}
+                    key={item.view}
+                    type="button"
+                    onClick={() => item.view === 'settings' ? openSettings() : openView(item.view)}
+                  >
+                    <span className="nav-icon">{item.icon}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            );
+          })}
         </nav>
       </aside>
 
@@ -2614,9 +2631,15 @@ export function App() {
         <header className="topbar">
           <div>
             <p className="eyebrow">Operations command center</p>
-            <h1>Business workflow performance</h1>
+            <h1>{selectedCompany?.name ?? 'Company'} business operating system</h1>
           </div>
           <div className="top-actions">
+            <label className="global-company-selector">
+              Company
+              <select value={effectiveCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
+                {uploadCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
+              </select>
+            </label>
             <button className="ghost-button" type="button" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
               {theme === 'light' ? 'Dark' : 'Light'} mode
             </button>
@@ -2668,7 +2691,7 @@ export function App() {
             apiFetch={apiFetch}
             auditLogs={auditLogs}
             canManage={canManageUsers(user)}
-            companies={companies}
+            companies={uploadCompanies}
             companiesError={companiesError}
             companiesLoading={companiesLoading}
             companyForm={companyForm}
@@ -3071,7 +3094,7 @@ export function App() {
               chartMax={chartMax}
               chartType={chartType}
               cleanupJobs={companyCleanupJobs}
-              companies={companies}
+              companies={uploadCompanies}
               companyDashboards={companyDashboards}
               companyDatasets={companyDatasets}
               companyReports={companyReports}
@@ -3709,7 +3732,7 @@ function EnterpriseCockpit({
   user: User | null;
   workflows: Workflow[];
 }) {
-  const tabs = ['Overview', 'Operations', 'Pipelines', 'Connectors', 'Approvals', 'Analytics', 'Reports', 'Governance'];
+  const tabs = ['Overview', 'Operations', 'Pipelines', 'Approvals', 'Analytics', 'Reports', 'Governance'];
   const [activeTab, setActiveTab] = useState('Overview');
   const [drillPanel, setDrillPanel] = useState<{ title: string; kind: string } | null>(null);
   const [search, setSearch] = useState('');
@@ -3771,6 +3794,19 @@ function EnterpriseCockpit({
         ))}
       </div>
 
+      <div className="company-dataset-selector">
+        <div>
+          <p className="eyebrow">Company dataset registry</p>
+          <strong>{selectedCompany?.name ?? 'Selected company'} datasets</strong>
+          <span>{companyDatasets.length} datasets connected to dashboard, analytics, reports, pipelines, and governance.</span>
+        </div>
+        <select value={activeDataset?.id ?? ''} onChange={(event) => onSelectDataset(companyDatasets.find((dataset) => dataset.id === event.target.value) ?? null)}>
+          <option value="">Company overview</option>
+          {companyDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+        </select>
+        <button type="button" onClick={() => navigate('/data-processing/workspace')}>Open Enterprise Data Hub</button>
+      </div>
+
       <div className="cockpit-kpis">
         {kpis.map((kpi) => (
           <button className="cockpit-kpi" key={kpi.key} type="button" onClick={() => setDrillPanel({ title: kpi.label, kind: kpi.kind })}>
@@ -3786,6 +3822,11 @@ function EnterpriseCockpit({
         <div className="cockpit-main">
           {showSection('Operations') && (
             <CockpitSection title="Real-time operations" count={`${cleanupJobs.length} jobs`} collapsed={collapsed.Operations} onToggle={() => toggleSection('Operations')}>
+              <CompanyOperationsMatrix
+                companyDatasets={companyDatasets}
+                companyReports={companyReports}
+                selectedCompany={selectedCompany}
+              />
               <div className="workflow-map">
                 {['Connector Trigger', 'Queued', 'Running', 'Waiting Approval', 'Export', 'Audit'].map((node, index) => (
                   <button className={index <= 2 ? 'completed' : index === 3 ? 'waiting' : 'queued'} key={node} type="button" onClick={() => setDrillPanel({ title: node, kind: 'timeline' })}>
@@ -3820,6 +3861,7 @@ function EnterpriseCockpit({
 
           {showSection('Pipelines') && (
             <CockpitSection title="Pipeline queue" count={`${enterpriseOps.schedules.length} schedules`} collapsed={collapsed.Pipelines} onToggle={() => toggleSection('Pipelines')}>
+              <CompanyPipelineRegistry cleanupJobs={cleanupJobs} companyDatasets={companyDatasets} />
               <div className="timeline-list">
                 {enterpriseOps.schedules.slice(0, 5).map((schedule) => (
                   <button key={schedule.id} type="button" onClick={() => setDrillPanel({ title: schedule.name, kind: 'timeline' })}>
@@ -3870,6 +3912,11 @@ function EnterpriseCockpit({
 
           {showSection('Governance') && (
             <CockpitSection title="Governance" count={`${enterpriseOps.accessRequests.length} access requests`} collapsed={collapsed.Governance} onToggle={() => toggleSection('Governance')}>
+              <CompanyGovernancePanel
+                companyDatasets={companyDatasets}
+                companyReports={companyReports}
+                roleLabel={roleLabel}
+              />
               <div className="cockpit-mini-grid">
                 <div><strong>{canManageUsers ? companies.length : 1}</strong><span>Visible companies</span></div>
                 <div><strong>{enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length}</strong><span>Pending access requests</span></div>
@@ -3962,6 +4009,77 @@ function renderDrillContent(kind: string, context: {
     return <div className="timeline-list">{context.notifications.map((notification) => <button key={notification.id} type="button"><strong>{notification.title}</strong><span>{notification.message}</span></button>)}</div>;
   }
   return <div className="timeline-list">{context.cleanupJobs.map((job) => <button key={job.id} type="button"><strong>{job.status}</strong><span>{job.logs?.[0] ?? 'Pipeline execution'} | {new Date(job.updatedAt).toLocaleString()}</span></button>)}</div>;
+}
+
+function CompanyOperationsMatrix({
+  companyDatasets,
+  companyReports,
+  selectedCompany
+}: {
+  companyDatasets: Dataset[];
+  companyReports: ReportHistoryItem[];
+  selectedCompany?: Company;
+}) {
+  const operations = [
+    ['Employees', 'HR & Workforce', 'Employee profiles, documents, paystubs, PTO, onboarding, performance reviews'],
+    ['Invoices', 'Finance & Accounting', 'Invoices, expenses, vendor payments, taxes, budgets, reconciliation'],
+    ['Projects', 'Engineering & Projects', 'Projects, milestones, dependencies, resources, work orders'],
+    ['Customers', 'CRM & Sales', 'Customers, leads, opportunities, contracts, support tickets, follow-ups'],
+    ['Datasets', 'Enterprise Data Hub', `${companyDatasets.length} active datasets connected to modules`],
+    ['Reports', 'Company reports', `${companyReports.length} generated reports and exports`]
+  ];
+  return (
+    <div className="company-ops-matrix">
+      {operations.map(([title, module, copy]) => (
+        <article key={title}>
+          <span>{module}</span>
+          <strong>{title}</strong>
+          <p>{copy}</p>
+          <small>{selectedCompany?.name ?? 'Company'} scoped</small>
+        </article>
+      ))}
+    </div>
+  );
+}
+
+function CompanyPipelineRegistry({ cleanupJobs, companyDatasets }: { cleanupJobs: CleanupJob[]; companyDatasets: Dataset[] }) {
+  const rows = companyDatasets.slice(0, 6).map((dataset) => ({
+    id: dataset.id,
+    name: dataset.fileName,
+    status: dataset.pipelineStatus ?? dataset.cleanupStatus ?? 'uploaded',
+    detail: `${dataset.rows} rows | quality ${dataset.qualityScore ?? 0}%`
+  }));
+  return (
+    <div className="compact-table">
+      {rows.map((row) => (
+        <div key={row.id}>
+          <span><strong>{row.name}</strong><small>{row.detail}</small></span>
+          <span>{row.status}</span>
+          <span>{cleanupJobs.filter((job) => job.originalDatasetId === row.id || job.cleanedDatasetId === row.id).length} jobs</span>
+        </div>
+      ))}
+      {!rows.length && <p className="muted">Upload a dataset to create company pipeline history.</p>}
+    </div>
+  );
+}
+
+function CompanyGovernancePanel({
+  companyDatasets,
+  companyReports,
+  roleLabel
+}: {
+  companyDatasets: Dataset[];
+  companyReports: ReportHistoryItem[];
+  roleLabel: string;
+}) {
+  return (
+    <div className="governance-grid">
+      <div><span>Data lineage</span><strong>{companyDatasets.length}</strong><small>datasets tracked</small></div>
+      <div><span>Report history</span><strong>{companyReports.length}</strong><small>exports and reports</small></div>
+      <div><span>Access role</span><strong>{roleLabel}</strong><small>company-scoped permissions</small></div>
+      <div><span>Change history</span><strong>Active</strong><small>upload, cleanup, archive, delete logs</small></div>
+    </div>
+  );
 }
 
 function renderCleanupPanel(
@@ -4904,6 +5022,8 @@ function ModuleWorkspacePage({
   const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
+  const [updateMode, setUpdateMode] = useState('new_dataset');
+  const [updateTargetDatasetId, setUpdateTargetDatasetId] = useState('');
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
   const moduleDatasets = useMemo(() => {
@@ -5036,7 +5156,10 @@ function ModuleWorkspacePage({
       }
       setUploadProgress(100);
       setWorkflowStage(workflowStages[1] ?? workflowStages[0]);
-      setWorkflowMessage(`${dataset.fileName} uploaded to ${selectedCompanyName}. ${workflowStages[1] ?? 'Validation'} is ready.`);
+      const updateContext = updateMode === 'new_dataset'
+        ? 'created as a new dataset'
+        : `${updateMode.replaceAll('_', ' ')} queued against ${moduleDatasets.find((item) => item.id === updateTargetDatasetId)?.fileName ?? 'selected dataset'}`;
+      setWorkflowMessage(`${dataset.fileName} uploaded to ${selectedCompanyName}, ${updateContext}. ${workflowStages[1] ?? 'Validation'} is ready.`);
       setActiveDataset(dataset);
       setWorkspaceDatasets((current) => [dataset, ...current.filter((entry) => entry.id !== dataset.id)]);
       setExpandedDatasetId(dataset.id);
@@ -5286,6 +5409,29 @@ function ModuleWorkspacePage({
             <span style={{ width: `${uploadProgress}%` }} />
           </div>
         )}
+        {isDataProcessingWorkspace && (
+          <div className="incremental-update-panel">
+            <div>
+              <p className="eyebrow">Incremental dataset updates</p>
+              <strong>How do you want to process this upload?</strong>
+              <span>Compare before applying, append rows, merge matching records, replace, or create a version checkpoint.</span>
+            </div>
+            <select value={updateMode} onChange={(event) => setUpdateMode(event.target.value)}>
+              <option value="new_dataset">Create new dataset</option>
+              <option value="append_rows">Append rows</option>
+              <option value="merge_matching_records">Merge/update matching records</option>
+              <option value="replace_existing">Replace existing dataset</option>
+              <option value="new_version">Upload as new version</option>
+              <option value="compare_before_apply">Compare before applying</option>
+              <option value="ignore_duplicate_rows">Ignore duplicate rows</option>
+              <option value="replace_duplicate_rows">Replace duplicate rows</option>
+            </select>
+            <select value={updateTargetDatasetId} onChange={(event) => setUpdateTargetDatasetId(event.target.value)} disabled={updateMode === 'new_dataset' || !moduleDatasets.length}>
+              <option value="">Select target dataset</option>
+              {moduleDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+            </select>
+          </div>
+        )}
         <div className="workflow-rule-grid" aria-label="Pipeline rules">
           {pipelineRules.map((rule) => <span key={rule}>{rule}</span>)}
         </div>
@@ -5470,6 +5616,11 @@ function ModuleWorkspacePage({
         </article>
       ) : (
         <article className="panel routed-workspace">
+          <ModuleBusinessDashboard
+            records={filteredRecords}
+            route={route}
+            selectedCompany={selectedCompany}
+          />
           <form className="module-form routed-form" onSubmit={createRecord}>
             <input placeholder={`${route.title} title`} value={title} onChange={(event) => setTitle(event.target.value)} />
             <input placeholder="Amount or value" value={amount} onChange={(event) => setAmount(event.target.value)} />
@@ -5568,6 +5719,73 @@ function EnterpriseReportPanel({
         <button className="ghost-button compact" type="button" onClick={onSchedule}>Schedule Report</button>
       </div>
       {latestReport && <p className="persistence-note">Latest report: {latestReport.title} - {new Date(latestReport.createdAt).toLocaleString()}</p>}
+    </section>
+  );
+}
+
+function ModuleBusinessDashboard({ records, route, selectedCompany }: { records: ModuleRecord[]; route: WorkspaceRoute; selectedCompany: Company | null }) {
+  const [calculatorInput, setCalculatorInput] = useState('1000');
+  const moduleFeatures: Record<string, string[]> = {
+    hr: ['Employee directory', 'Paystubs', 'Attendance', 'PTO and benefits', 'Onboarding', 'Org chart', 'Performance reviews', 'HR reports'],
+    accounting: ['Invoices', 'Expenses', 'Vendor payments', 'Payroll accounting', 'Taxes', 'Budgets', 'Reconciliation', 'Financial reports'],
+    engineering: ['Projects', 'Milestones', 'Tasks', 'Dependencies', 'Resource planning', 'Schedules', 'Work orders', 'Project reports'],
+    crm: ['Customer profiles', 'Leads', 'Opportunities', 'Contracts', 'Communication history', 'Support tickets', 'Follow-up reminders', 'Sales reports']
+  };
+  const aiExamples: Record<string, string[]> = {
+    hr: ['Missing employee IDs', 'Duplicate employees', 'Payroll inconsistencies', 'Missing paystubs', 'Overtime risk', 'Turnover risk'],
+    accounting: ['Duplicate invoices', 'Negative invoice amounts', 'Missing PO', 'Late payments', 'Tax risk', 'Unusual expenses'],
+    engineering: ['Project delay risk', 'Resource conflict', 'Missing owner', 'Schedule overlap', 'Dependency conflict', 'Milestone risk'],
+    crm: ['Sales forecast', 'Customer churn risk', 'Stalled opportunities', 'Missing follow-ups', 'Contract risk', 'Revenue scoring']
+  };
+  const amount = Number(calculatorInput || 0);
+  const calculatorRows = route.module === 'accounting'
+    ? [
+      ['Invoice total', amount * 1.06],
+      ['Tax estimate', amount * 0.06],
+      ['Payroll cost', amount * 1.18],
+      ['Margin at 35%', amount * 0.35],
+      ['Budget variance at 8%', amount * 0.08],
+      ['Cash flow reserve', amount * 0.22]
+    ]
+    : [];
+  return (
+    <section className="module-business-dashboard">
+      <div className="module-business-header">
+        <div>
+          <p className="eyebrow">{route.moduleLabel}</p>
+          <h2>{route.title} operations</h2>
+          <span>{selectedCompany?.name ?? 'Selected company'} workspace: records, approvals, reports, AI insights, and operational history.</span>
+        </div>
+        <strong>{records.length} records</strong>
+      </div>
+      <div className="module-feature-grid">
+        {(moduleFeatures[route.module] ?? []).map((feature) => <span key={feature}>{feature}</span>)}
+      </div>
+      <div className="module-intelligence-grid">
+        <article>
+          <h3>AI intelligence</h3>
+          {(aiExamples[route.module] ?? ['Operational summary', 'Anomaly alerts', 'Approval recommendations']).map((item) => (
+            <div className="ai-insight-chip" key={item}>
+              <strong>{item}</strong>
+              <span>Ready for company-scoped analysis as module data grows.</span>
+            </div>
+          ))}
+        </article>
+        <article>
+          <h3>Approval queue</h3>
+          <p>{records.filter((record) => record.status !== 'closed').length} open items are available for manager review.</p>
+          <p>Reports, approvals, pipelines, and exports live inside this module and the company dashboard.</p>
+        </article>
+        {route.module === 'accounting' && (
+          <article>
+            <h3>Finance calculators</h3>
+            <input value={calculatorInput} onChange={(event) => setCalculatorInput(event.target.value)} aria-label="Calculator amount" />
+            {calculatorRows.map(([label, value]) => (
+              <p key={label}><strong>{label}:</strong> ${Number(value).toLocaleString(undefined, { maximumFractionDigits: 2 })}</p>
+            ))}
+          </article>
+        )}
+      </div>
     </section>
   );
 }
