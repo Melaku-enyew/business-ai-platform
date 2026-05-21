@@ -86,7 +86,7 @@ type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
 type UserRole = 'owner' | 'admin' | 'manager' | 'employee' | 'viewer';
-type PreviewMode = 'upload' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history';
+type PreviewMode = 'upload' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history' | 'edit' | 'query';
 type AppView =
   | 'dashboard'
   | 'assistant'
@@ -3739,6 +3739,8 @@ function EnterpriseCockpit({
   const [activeTab, setActiveTab] = useState('Overview');
   const [drillPanel, setDrillPanel] = useState<{ title: string; kind: string } | null>(null);
   const [search, setSearch] = useState('');
+  const [datasetRegistryQuery, setDatasetRegistryQuery] = useState('');
+  const [datasetRegistryModule, setDatasetRegistryModule] = useState('all');
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem('metenovaCockpitCollapsed') || '{}');
@@ -3770,6 +3772,20 @@ function EnterpriseCockpit({
     { key: 'ai', label: 'AI alerts', value: enterpriseOps.intelligence.length, detail: 'Anomaly and risk insights', kind: 'ai' }
   ];
   const showSection = (section: string) => !collapsed[section] && (activeTab === 'Overview' || activeTab === section);
+  const moduleGroups = [
+    ['HR', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'HR')],
+    ['Finance', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Finance')],
+    ['Engineering', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Engineering')],
+    ['CRM', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'CRM')]
+  ] as Array<[string, Dataset[]]>;
+  const registryDatasets = companyDatasets
+    .filter((dataset) => datasetRegistryModule === 'all' || classifyDatasetModule(dataset) === datasetRegistryModule)
+    .filter((dataset) => !datasetRegistryQuery.trim() || [
+      dataset.fileName,
+      dataset.ownerEmail,
+      dataset.cleanupStatus,
+      ...asArray(dataset.headers)
+    ].join(' ').toLowerCase().includes(datasetRegistryQuery.toLowerCase()));
 
   return (
     <section className="dashboard-cockpit" aria-label="Enterprise operations cockpit">
@@ -3811,18 +3827,37 @@ function EnterpriseCockpit({
       </div>
 
       <div className="company-module-dataset-registry">
-        {[
-          ['HR datasets', companyDatasets.filter((dataset) => /^Employee Records|^Attendance|^PTO|^Sick Leave|^Payroll|^Hiring|^Performance/i.test(dataset.fileName))],
-          ['Finance datasets', companyDatasets.filter((dataset) => /invoice|expense|payment|tax|gl/i.test(dataset.fileName))],
-          ['Engineering datasets', companyDatasets.filter((dataset) => /project|task|ticket|deployment|resource/i.test(dataset.fileName))],
-          ['CRM datasets', companyDatasets.filter((dataset) => /lead|customer|opportunit|contract|sales/i.test(dataset.fileName))]
-        ].map(([label, datasets]) => (
+        {moduleGroups.map(([label, datasets]) => (
           <div key={String(label)}>
-            <span>{String(label)}</span>
-            <strong>{(datasets as Dataset[]).length}</strong>
-            <small>{(datasets as Dataset[])[0]?.fileName ?? 'No module dataset yet'}</small>
+            <span>{label} datasets</span>
+            <strong>{datasets.length}</strong>
+            <small>{datasets[0]?.fileName ?? 'No module dataset yet'}</small>
           </div>
         ))}
+      </div>
+
+      <div className="dashboard-dataset-browser">
+        <div className="record-toolbar">
+          <input placeholder="Search datasets, columns, owners, status..." value={datasetRegistryQuery} onChange={(event) => setDatasetRegistryQuery(event.target.value)} />
+          <select value={datasetRegistryModule} onChange={(event) => setDatasetRegistryModule(event.target.value)}>
+            <option value="all">All modules</option>
+            <option value="HR">HR</option>
+            <option value="Finance">Finance</option>
+            <option value="Engineering">Engineering</option>
+            <option value="CRM">CRM</option>
+          </select>
+        </div>
+        <div className="compact-table">
+          {registryDatasets.slice(0, 8).map((dataset) => (
+            <div key={dataset.id}>
+              <span><strong>{dataset.fileName}</strong><small>{classifyDatasetModule(dataset)} | {dataset.rows} rows | {dataset.cleanupStatus ?? dataset.status ?? 'uploaded'}</small></span>
+              <span>{dataset.ownerEmail ?? dataset.ownerName ?? 'Workspace'}</span>
+              <button type="button" onClick={() => onSelectDataset(dataset)}>Preview rows</button>
+              <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Open module</button>
+            </div>
+          ))}
+          {!registryDatasets.length && <div><span><strong>No datasets match the current filters.</strong><small>Try another module, status, owner, or column query.</small></span></div>}
+        </div>
       </div>
 
       <div className="cockpit-kpis">
@@ -4310,6 +4345,52 @@ function normalizeDatasetForClient(dataset: Dataset): Dataset {
   };
 }
 
+function classifyDatasetModule(dataset: Dataset | null | undefined) {
+  const fileName = String(dataset?.fileName ?? dataset?.name ?? '').toLowerCase();
+  const fileType = String(dataset?.fileType ?? '').toLowerCase();
+  const headers = datasetHeaders(dataset).join(' ').toLowerCase();
+  const haystack = `${fileName} ${fileType} ${headers}`;
+  const exactHrDatasets = [
+    'employee records dataset',
+    'attendance dataset',
+    'pto dataset',
+    'sick leave dataset',
+    'payroll dataset',
+    'hiring dataset',
+    'performance dataset'
+  ];
+
+  if (exactHrDatasets.some((name) => fileName === name || fileName.startsWith(`${name} `))) return 'HR';
+  if (/\b(invoice|expense|payment|tax|gl|ledger|accounting|finance|budget|vendor|reconciliation)\b/.test(haystack)) return 'Finance';
+  if (/\b(project|task|ticket|deployment|engineering|sprint|milestone|predecessor|successor|work order|resource planning)\b/.test(haystack)) return 'Engineering';
+  if (/\b(lead|customer|opportunit|contract|sales|crm|pipeline|account)\b/.test(haystack)) return 'CRM';
+  if (/\b(employee|attendance|pto|sick|payroll|hiring|performance|paystub|benefits|onboarding)\b/.test(haystack)) return 'HR';
+  return 'Enterprise Data Hub';
+}
+
+function moduleLabelForRoute(moduleName: string) {
+  if (moduleName === 'hr') return 'HR';
+  if (moduleName === 'accounting') return 'Finance';
+  if (moduleName === 'engineering') return 'Engineering';
+  if (moduleName === 'crm') return 'CRM';
+  return 'Enterprise Data Hub';
+}
+
+function moduleWorkspacePathForDataset(dataset: Dataset | null | undefined) {
+  const module = classifyDatasetModule(dataset);
+  const fileName = String(dataset?.fileName ?? '').toLowerCase();
+  if (module === 'HR') {
+    if (/attendance|timesheet|shift/.test(fileName)) return '/hr/attendance';
+    if (/pto|sick|leave/.test(fileName)) return '/hr/leave';
+    if (/hiring|onboarding/.test(fileName)) return '/hr/hiring';
+    return '/hr/employees';
+  }
+  if (module === 'Finance') return '/accounting/invoices';
+  if (module === 'Engineering') return '/engineering/projects';
+  if (module === 'CRM') return '/crm/clients';
+  return '/data-processing/workspace';
+}
+
 function roleLabel(role?: string) {
   const labels: Record<string, string> = {
     owner: 'Owner / Super Admin',
@@ -4340,6 +4421,10 @@ function getPreviewHeaders(dataset: Dataset, rows?: Record<string, string>[]) {
   const headers = asArray(dataset.headers);
   const previewRows = asArray(rows);
   return headers.length ? headers : Array.from(new Set(previewRows.flatMap((row) => Object.keys(row ?? {}))));
+}
+
+function normalizeEditableRow(row: Record<string, string>) {
+  return Object.fromEntries(Object.entries(row ?? {}).map(([key, value]) => [key, String(value ?? '')]));
 }
 
 function inferColumnTypes(rows: Record<string, string>[] | undefined, headers: string[] | undefined) {
@@ -4455,7 +4540,7 @@ function stageStatusForMode(mode: PreviewMode, dataset: Dataset) {
   if (dataset.cleanupStatus === 'failed') return 'failed';
   if (mode === 'upload' || mode === 'validation' || mode === 'duplicates' || mode === 'normalization') return 'completed';
   if (mode === 'cleanup' && dataset.cleanupStatus !== 'completed') return 'running';
-  if (mode === 'export' || mode === 'approval' || mode === 'cleanup' || mode === 'compare') return 'completed';
+  if (mode === 'export' || mode === 'approval' || mode === 'cleanup' || mode === 'compare' || mode === 'edit' || mode === 'query') return 'completed';
   return 'queued';
 }
 
@@ -5085,15 +5170,17 @@ function ModuleWorkspacePage({
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
   const moduleDatasets = useMemo(() => {
+    const moduleLabel = moduleLabelForRoute(route.module);
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
     const unique = new Map<string, Dataset>();
     merged.forEach((dataset) => {
-      if (dataset?.id && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
+      const belongsToModule = isDataProcessingWorkspace || classifyDatasetModule(dataset) === moduleLabel;
+      if (dataset?.id && belongsToModule && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
         unique.set(dataset.id, dataset);
       }
     });
     return [...unique.values()].sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-  }, [safeDatasets, selectedCompanyId, workspaceDatasets]);
+  }, [isDataProcessingWorkspace, route.module, safeDatasets, selectedCompanyId, workspaceDatasets]);
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
   const selectedCompany = safeCompanies.find((company) => company.id === selectedCompanyId) ?? safeCompanies[0] ?? null;
   const selectedCompanyName = selectedCompany?.name ?? 'No company selected';
@@ -5299,14 +5386,59 @@ function ModuleWorkspacePage({
     setPreviewState({ dataset, mode: 'normalization' });
   }
 
-  function approveDataset(dataset: Dataset) {
-    const approvedDataset = { ...dataset, cleanupStatus: 'completed', pipelineStatus: 'completed', status: 'completed' };
-    setDatasets((current) => [approvedDataset, ...current.filter((entry) => entry.id !== dataset.id)]);
-    setActiveDataset(approvedDataset);
+  async function saveDatasetRows(dataset: Dataset, records: Record<string, string>[]) {
+    const headers = getPreviewHeaders(dataset, records);
+    const response = await apiFetch(`/api/datasets/${dataset.id}/records`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        headers,
+        records,
+        status: dataset.cleanupStatus ?? dataset.status ?? 'uploaded',
+        pipelineStatus: dataset.cleanupStatus ?? dataset.pipelineStatus ?? 'uploaded'
+      })
+    });
+    const payload = await readJson<{ dataset?: Dataset; error?: string }>(response);
+    if (!response.ok || !payload.dataset) {
+      throw new Error(payload.error || 'Dataset rows could not be saved.');
+    }
+    const normalized = normalizeDatasetForClient(payload.dataset);
+    setDatasets((current) => [normalized, ...current.filter((entry) => entry.id !== normalized.id)]);
+    setWorkspaceDatasets((current) => [normalized, ...current.filter((entry) => entry.id !== normalized.id)]);
+    setActiveDataset(normalized);
+    setExpandedDatasetId(normalized.id);
+    setPreviewState({ dataset: normalized, mode: 'edit' });
+    setWorkflowMessage(`${normalized.fileName} rows saved and synced to the company dataset registry.`);
+  }
+
+  async function approveDataset(dataset: Dataset) {
+    const localApprovedDataset = { ...dataset, cleanupStatus: 'completed', pipelineStatus: 'completed', status: 'completed' };
+    setDatasets((current) => [localApprovedDataset, ...current.filter((entry) => entry.id !== dataset.id)]);
+    setWorkspaceDatasets((current) => [localApprovedDataset, ...current.filter((entry) => entry.id !== dataset.id)]);
+    setActiveDataset(localApprovedDataset);
     setExpandedDatasetId(dataset.id);
     setWorkflowStage(workflowStages.find((stage) => /export/i.test(stage)) ?? workflowStages.at(-1) ?? workflowStages[0]);
     setWorkflowMessage(`${dataset.fileName} approved. Dataset status is COMPLETED and ready for export.`);
-    setPreviewState({ dataset: approvedDataset, mode: 'approval' });
+    setPreviewState({ dataset: localApprovedDataset, mode: 'approval' });
+    try {
+      const response = await apiFetch(`/api/datasets/${dataset.id}/status`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'completed' })
+      });
+      const payload = await readJson<{ dataset?: Dataset; error?: string }>(response);
+      if (!response.ok || !payload.dataset) {
+        throw new Error(payload.error || 'Approval status could not be saved.');
+      }
+      const approvedDataset = normalizeDatasetForClient(payload.dataset);
+      setDatasets((current) => [approvedDataset, ...current.filter((entry) => entry.id !== approvedDataset.id)]);
+      setWorkspaceDatasets((current) => [approvedDataset, ...current.filter((entry) => entry.id !== approvedDataset.id)]);
+      setActiveDataset(approvedDataset);
+      setPreviewState({ dataset: approvedDataset, mode: 'approval' });
+    } catch (approvalError) {
+      const message = approvalError instanceof Error ? approvalError.message : 'Approval status could not be saved.';
+      setWorkflowMessage(`${dataset.fileName} approved locally. ${message}`);
+    }
   }
 
   function reportsForDataset(dataset: Dataset) {
@@ -5388,7 +5520,8 @@ function ModuleWorkspacePage({
     setError('');
     setExpandedDatasetId(dataset.id);
     if (action === 'preview') setPreviewState({ dataset, mode: 'upload' });
-    if (action === 'edit') setPreviewState({ dataset, mode: 'normalization' });
+    if (action === 'edit') setPreviewState({ dataset, mode: 'edit' });
+    if (action === 'query') setPreviewState({ dataset, mode: 'query' });
     if (action === 'deleteRows') setWorkflowMessage(`${dataset.fileName} row deletion queued. Row-level editing history will be tracked in the next version checkpoint.`);
     if (action === 'newVersion') setWorkflowMessage(`Upload a replacement file to create the next version for ${dataset.fileName}.`);
     if (action === 'restore') setPreviewState({ dataset, mode: 'history' });
@@ -5397,7 +5530,7 @@ function ModuleWorkspacePage({
     if (action === 'normalize') normalizeDataset(dataset);
     if (action === 'clean') void cleanDatasetFromModule(dataset);
     if (action === 'compare') setPreviewState({ dataset, mode: 'compare' });
-    if (action === 'approve') approveDataset(dataset);
+    if (action === 'approve') void approveDataset(dataset);
     if (action === 'generateReport') void generateDatasetReport(dataset);
     if (action === 'exportPdf') exportReportPdf(dataset);
     if (action === 'exportExcel') exportReportExcel(dataset);
@@ -5434,6 +5567,7 @@ function ModuleWorkspacePage({
           onClose={() => setPreviewState(null)}
           onDownload={downloadDatasetExport}
           onReprocess={cleanDatasetFromModule}
+          onSaveRows={saveDatasetRows}
           onRestore={(dataset) => {
             setActiveDataset(dataset);
             setPreviewState({ dataset, mode: 'upload' });
@@ -5632,27 +5766,28 @@ function ModuleWorkspacePage({
                   <div className="dataset-row-footer">
                     <details className="dataset-action-menu">
                       <summary>{deletingDatasetId === dataset.id ? 'Deleting...' : 'Select Action'}</summary>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'edit')}>Edit rows</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'preview')}>Preview Rows</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'edit')}>Edit Rows</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'query')}>Query Dataset</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare Versions</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'validate')}>Validate</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'normalize')}>Normalize</button>
                       {!dataset.originalDatasetId && <button type="button" onClick={() => runDatasetAction(dataset, 'clean')}>Clean</button>}
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'deleteRows')}>Delete rows</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'compare')}>Compare</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'approve')}>Approve</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>Export</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'archive')}>Archive</button>
+                      <button className="danger-action" disabled={deletingDatasetId === dataset.id} type="button" onClick={() => runDatasetAction(dataset, 'delete')}>Delete</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'results')}>View Results</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'deleteRows')}>Delete Rows</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'generateReport')}>{generatingReportId === dataset.id ? 'Generating...' : 'Generate Report'}</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'exportPdf')}>Export PDF</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'exportExcel')}>Export Excel</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'sendReport')}>Send Report</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'scheduleReport')}>Schedule Report</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'export')}>{pipelineConfig.exportLabel}</button>
                       <button type="button" onClick={() => runDatasetAction(dataset, 'download')}>Download</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'reprocess')}>Reprocess</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'newVersion')}>Upload new version</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'restore')}>Restore version</button>
-                      <button type="button" onClick={() => runDatasetAction(dataset, 'archive')}>Archive</button>
-                      <button className="danger-action" disabled={deletingDatasetId === dataset.id} type="button" onClick={() => runDatasetAction(dataset, 'delete')}>Delete</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'newVersion')}>Upload New Version</button>
+                      <button type="button" onClick={() => runDatasetAction(dataset, 'restore')}>Restore Version</button>
                     </details>
                     <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'history' })}>Version history</button>
                   </div>
@@ -7006,31 +7141,42 @@ function DatasetPreviewModal({
   onClose,
   onDownload,
   onReprocess,
+  onSaveRows,
   onRestore
 }: {
   allDatasets: Dataset[];
   company?: Company;
   dataset: Dataset;
   mode: PreviewMode;
-  onApprove: (dataset: Dataset) => void;
+  onApprove: (dataset: Dataset) => void | Promise<void>;
   onClose: () => void;
   onDownload: (dataset: Dataset | null) => void;
   onReprocess: (dataset: Dataset) => void;
+  onSaveRows: (dataset: Dataset, records: Record<string, string>[]) => Promise<void>;
   onRestore: (dataset: Dataset) => void;
 }) {
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState('');
   const [sortColumn, setSortColumn] = useState(datasetHeaders(dataset)[0] ?? '');
   const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
+  const [selectedColumn, setSelectedColumn] = useState('all');
+  const [savingRows, setSavingRows] = useState(false);
+  const [editRows, setEditRows] = useState<Record<string, string>[]>(() => datasetPreview(dataset).map((row) => normalizeEditableRow(row)));
   const pageSize = 10;
   const previewRows = getPreviewRows(dataset, mode);
-  const headers = getPreviewHeaders(dataset, previewRows);
+  const activeRows = mode === 'edit' ? editRows : previewRows;
+  const headers = getPreviewHeaders(dataset, activeRows);
   const columnTypes = inferColumnTypes(dataset.preview, dataset.headers);
   const validation = summarizeValidation(dataset);
   const duplicates = findDuplicateRows(datasetPreview(dataset));
   const versionHistory = getDatasetVersions(allDatasets, dataset);
-  const filteredRows = previewRows
-    .filter((row) => !filter.trim() || Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(filter.toLowerCase())))
+  const filteredRows = [...activeRows]
+    .filter((row) => {
+      if (!filter.trim()) return true;
+      const query = filter.toLowerCase();
+      if (selectedColumn !== 'all') return String(row[selectedColumn] ?? '').toLowerCase().includes(query);
+      return Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(query));
+    })
     .sort((a, b) => {
       const left = String(a[sortColumn] ?? '');
       const right = String(b[sortColumn] ?? '');
@@ -7047,13 +7193,49 @@ function DatasetPreviewModal({
     approval: 'Approval Preview',
     export: 'Export Preview',
     compare: 'Before / After Compare',
-    history: 'Version History'
+    history: 'Version History',
+    edit: 'Edit Rows',
+    query: 'Query Dataset'
   }[mode];
+
+  useEffect(() => {
+    setPage(1);
+    setFilter('');
+    setSelectedColumn('all');
+    setSortColumn(datasetHeaders(dataset)[0] ?? '');
+    setEditRows(datasetPreview(dataset).map((row) => normalizeEditableRow(row)));
+  }, [dataset.id, mode]);
 
   function sortBy(header: string) {
     setSortDirection((current) => sortColumn === header && current === 'asc' ? 'desc' : 'asc');
     setSortColumn(header);
     setPage(1);
+  }
+
+  function updateEditCell(rowIndex: number, header: string, value: string) {
+    const absoluteIndex = (page - 1) * pageSize + rowIndex;
+    const sourceRow = filteredRows[absoluteIndex];
+    const sourceIndex = editRows.findIndex((row) => row === sourceRow);
+    if (sourceIndex < 0) return;
+    setEditRows((current) => current.map((row, index) => index === sourceIndex ? { ...row, [header]: value } : row));
+  }
+
+  async function saveEditedRows() {
+    setSavingRows(true);
+    try {
+      await onSaveRows(dataset, editRows);
+    } finally {
+      setSavingRows(false);
+    }
+  }
+
+  function exportFilteredRows() {
+    const exportHeaders = headers.length ? headers : Array.from(new Set(filteredRows.flatMap((row) => Object.keys(row))));
+    const csv = [
+      exportHeaders.map(csvEscape).join(','),
+      ...filteredRows.map((row) => exportHeaders.map((header) => csvEscape(row[header] ?? '')).join(','))
+    ].join('\n');
+    downloadText(csv, `${dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '')}-filtered.csv`, 'text/csv');
   }
 
   return (
@@ -7114,8 +7296,13 @@ function DatasetPreviewModal({
           </div>
         )}
 
-        <div className="record-toolbar preview-toolbar">
-          <input placeholder="Filter preview rows" value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }} />
+        <div className="record-toolbar preview-toolbar preview-query-builder">
+          <input placeholder="Search rows, values, employee names, projects, invoices..." value={filter} onChange={(event) => { setFilter(event.target.value); setPage(1); }} />
+          <select value={selectedColumn} onChange={(event) => { setSelectedColumn(event.target.value); setPage(1); }}>
+            <option value="all">All columns</option>
+            {headers.map((header) => <option key={header} value={header}>{header}</option>)}
+          </select>
+          <button className="ghost-button compact" type="button" onClick={exportFilteredRows}>Export filtered</button>
           <button className="ghost-button compact" type="button" disabled={page <= 1} onClick={() => setPage((current) => Math.max(current - 1, 1))}>Previous</button>
           <span>Page {page} of {pageCount}</span>
           <button className="ghost-button compact" type="button" disabled={page >= pageCount} onClick={() => setPage((current) => Math.min(current + 1, pageCount))}>Next</button>
@@ -7128,7 +7315,17 @@ function DatasetPreviewModal({
             </thead>
             <tbody>
               {pagedRows.map((row, rowIndex) => (
-                <tr key={`${rowIndex}-${page}`}>{headers.map((header) => <td className={cellClass(row[header], header)} key={header}>{String(row[header] ?? '')}</td>)}</tr>
+                <tr key={`${rowIndex}-${page}`}>{headers.map((header) => (
+                  <td className={cellClass(row[header], header)} key={header}>
+                    {mode === 'edit' ? (
+                      <input
+                        className="editable-cell-input"
+                        value={String(row[header] ?? '')}
+                        onChange={(event) => updateEditCell(rowIndex, header, event.target.value)}
+                      />
+                    ) : String(row[header] ?? '')}
+                  </td>
+                ))}</tr>
               ))}
               {!pagedRows.length && <tr><td colSpan={headers.length || 1}>No preview rows match this filter.</td></tr>}
             </tbody>
@@ -7146,7 +7343,8 @@ function DatasetPreviewModal({
 
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={() => onReprocess(dataset.originalDatasetId ? allDatasets.find((entry) => entry.id === dataset.originalDatasetId) ?? dataset : dataset)}>Reprocess</button>
-          <button className="ghost-button" type="button" onClick={() => onApprove(dataset)}>Approve</button>
+          {mode === 'edit' && <button className="ghost-button" disabled={savingRows} type="button" onClick={() => void saveEditedRows()}>{savingRows ? 'Saving rows...' : 'Save edited rows'}</button>}
+          <button className="ghost-button" type="button" onClick={() => void onApprove(dataset)}>Approve</button>
           <button type="button" onClick={() => onDownload(dataset)}>Download</button>
         </div>
       </section>

@@ -3049,6 +3049,40 @@ app.get('/api/datasets/:id/cleanup-jobs', async (req, res, next) => {
   }
 });
 
+app.put('/api/datasets/:id/records', requireDurableStorage, async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    const records = Array.isArray(req.body?.records) ? req.body.records.map((row) => Object.fromEntries(Object.entries(row ?? {}).map(([key, value]) => [key, String(value ?? '')]))) : null;
+    if (!records) {
+      res.status(400).json({ error: 'Records array is required.' });
+      return;
+    }
+    const headers = Array.isArray(req.body?.headers) && req.body.headers.length ? req.body.headers.map(String) : Array.from(new Set(records.flatMap((row) => Object.keys(row))));
+    const summary = summarizeCsv(headers, records);
+    const saved = await saveDataset({
+      ...dataset,
+      headers,
+      records,
+      preview: records.slice(0, 25),
+      rows: records.length,
+      columns: headers.length,
+      cleanupStatus: String(req.body?.status || dataset.cleanupStatus || 'uploaded'),
+      pipelineStatus: String(req.body?.pipelineStatus || dataset.pipelineStatus || dataset.cleanupStatus || 'uploaded'),
+      status: String(req.body?.status || dataset.status || dataset.cleanupStatus || 'uploaded'),
+      cleanupLogs: [...(dataset.cleanupLogs ?? []), `Rows edited by ${req.user.email} at ${new Date().toISOString()}`],
+      ...summary
+    });
+    await audit(req, 'dataset.rows_updated', 'dataset', dataset.id, { rows: records.length });
+    res.json({ dataset: publicDataset(saved) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/cleanup-jobs', async (req, res, next) => {
   try {
     const companyId = requestedCompanyId(req);
@@ -3085,6 +3119,28 @@ app.post('/api/datasets/:id/archive', requireRole('manager'), requireDurableStor
       metadata: { datasetId: dataset.id }
     });
     res.json({ dataset: publicDataset(archived) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/datasets/:id/status', requireDurableStorage, async (req, res, next) => {
+  try {
+    const dataset = await getDataset(req.params.id, req.user);
+    if (!dataset) {
+      res.status(404).json({ error: 'Dataset not found.' });
+      return;
+    }
+    const status = String(req.body?.status || 'completed').toLowerCase();
+    const saved = await saveDataset({
+      ...dataset,
+      cleanupStatus: status,
+      pipelineStatus: status,
+      status,
+      cleanupLogs: [...(dataset.cleanupLogs ?? []), `Status changed to ${status} by ${req.user.email} at ${new Date().toISOString()}`]
+    });
+    await audit(req, 'dataset.status_updated', 'dataset', dataset.id, { status });
+    res.json({ dataset: publicDataset(saved) });
   } catch (error) {
     next(error);
   }
