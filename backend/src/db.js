@@ -16,6 +16,7 @@ const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || 3)
 const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || 1500);
 const postgresRetryMaxDelayMs = Number(process.env.POSTGRES_RETRY_MAX_DELAY_MS || 12000);
 const isVercelRuntime = process.env.VERCEL === '1';
+const postgresAttemptTimeoutMs = Number(process.env.POSTGRES_ATTEMPT_TIMEOUT_MS || (isVercelRuntime ? 12000 : 10000));
 const sampleCompanies = [
   {
     id: 'company-brightpath-logistics',
@@ -136,14 +137,26 @@ async function getPool() {
   if (!connected) {
     warmingUp = true;
     lastConnectStartedAt = Date.now();
-    await connectWithRetry(async () => {
-      const client = await pool.connect();
-      try {
-        await client.query('SELECT 1;');
-      } finally {
-        client.release();
-      }
-    }, 'PostgreSQL');
+    try {
+      await connectWithRetry(async () => {
+        const client = await pool.connect();
+        try {
+          await client.query('SELECT 1;');
+        } finally {
+          client.release();
+        }
+      }, 'PostgreSQL');
+    } catch (error) {
+      connected = false;
+      warmingUp = true;
+      lastConnectionError = error instanceof Error ? error.message : 'Unknown PostgreSQL connection error.';
+      const stalePool = pool;
+      pool = null;
+      await withTimeout(stalePool.end(), 2000, 'Timed out closing stale PostgreSQL pool.').catch((closeError) => {
+        console.warn(`PostgreSQL pool reset warning: ${closeError instanceof Error ? closeError.message : 'Unknown close error'}`);
+      });
+      throw error;
+    }
     connected = true;
     warmingUp = false;
     lastConnectDurationMs = Date.now() - lastConnectStartedAt;
@@ -3664,6 +3677,14 @@ function sleep(ms) {
   });
 }
 
+function withTimeout(promise, ms, message) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(message)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
 async function connectWithRetry(connect, label) {
   let lastError;
   const attempts = Math.max(postgresConnectRetries, 1);
@@ -3671,7 +3692,11 @@ async function connectWithRetry(connect, label) {
     connectAttemptCount += 1;
     const attemptStartedAt = Date.now();
     try {
-      const result = await connect();
+      const result = await withTimeout(
+        connect(),
+        postgresAttemptTimeoutMs,
+        `${label} connection attempt timed out after ${postgresAttemptTimeoutMs}ms.`
+      );
       if (attempt > 1) {
         console.log(`${label} connection recovered`, {
           attempt,
