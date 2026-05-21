@@ -14,6 +14,7 @@ const defaultCompanyId = 'metenova-default-company';
 const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
 const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || 3);
 const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || 1500);
+const postgresRetryMaxDelayMs = Number(process.env.POSTGRES_RETRY_MAX_DELAY_MS || 12000);
 const isVercelRuntime = process.env.VERCEL === '1';
 const sampleCompanies = [
   {
@@ -54,6 +55,12 @@ let connected = false;
 let tablesInitialized = false;
 let lastConnectionError = null;
 let activeConnectionFingerprint = null;
+let warmingUp = false;
+let connectAttemptCount = 0;
+let lastConnectDurationMs = null;
+let lastSuccessfulConnectAt = null;
+let lastConnectStartedAt = null;
+let coldStartStartedAt = Date.now();
 
 const devUser = {
   id: 'local-dev-user',
@@ -120,12 +127,15 @@ async function getPool() {
     });
     pool.on('error', (error) => {
       connected = false;
+      warmingUp = true;
       lastConnectionError = error instanceof Error ? error.message : 'PostgreSQL pool error.';
       console.error(`PostgreSQL pool error: ${lastConnectionError}`);
     });
   }
 
   if (!connected) {
+    warmingUp = true;
+    lastConnectStartedAt = Date.now();
     await connectWithRetry(async () => {
       const client = await pool.connect();
       try {
@@ -135,6 +145,9 @@ async function getPool() {
       }
     }, 'PostgreSQL');
     connected = true;
+    warmingUp = false;
+    lastConnectDurationMs = Date.now() - lastConnectStartedAt;
+    lastSuccessfulConnectAt = new Date().toISOString();
     lastConnectionError = null;
   }
 
@@ -902,6 +915,7 @@ export async function initDatabase() {
 }
 
 export function getDatabaseRuntimeStatus() {
+  const degraded = Boolean(usingPostgres && (!connected || !tablesInitialized));
   return {
     usingPostgres,
     hostConfigured: Boolean(currentDatabaseUrl()),
@@ -912,12 +926,20 @@ export function getDatabaseRuntimeStatus() {
     connected,
     tablesInitialized,
     connectionError: lastConnectionError,
-    retries: postgresConnectRetries
+    retries: postgresConnectRetries,
+    degraded,
+    warmingUp: Boolean(warmingUp || degraded),
+    connectAttemptCount,
+    lastConnectDurationMs,
+    lastSuccessfulConnectAt,
+    lastConnectStartedAt: lastConnectStartedAt ? new Date(lastConnectStartedAt).toISOString() : null,
+    coldStartDurationMs: Date.now() - coldStartStartedAt
   };
 }
 
 export function clearDatabaseRuntimeFailure() {
   lastConnectionError = null;
+  warmingUp = false;
   if (!usingPostgres) tablesInitialized = false;
 }
 
@@ -3646,13 +3668,32 @@ async function connectWithRetry(connect, label) {
   let lastError;
   const attempts = Math.max(postgresConnectRetries, 1);
   for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    connectAttemptCount += 1;
+    const attemptStartedAt = Date.now();
     try {
-      return await connect();
+      const result = await connect();
+      if (attempt > 1) {
+        console.log(`${label} connection recovered`, {
+          attempt,
+          attempts,
+          connectAttemptCount,
+          durationMs: Date.now() - attemptStartedAt,
+          coldStartDurationMs: Date.now() - coldStartStartedAt
+        });
+      }
+      return result;
     } catch (error) {
       lastError = error;
+      warmingUp = true;
       lastConnectionError = error instanceof Error ? error.message : 'Unknown PostgreSQL connection error.';
-      console.error(`${label} connection attempt ${attempt}/${attempts} failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
-      if (attempt < attempts) await sleep(postgresRetryDelayMs);
+      const retryDelayMs = Math.min(postgresRetryDelayMs * 2 ** (attempt - 1), postgresRetryMaxDelayMs);
+      console.error(`${label} connection attempt ${attempt}/${attempts} failed: ${lastConnectionError}`, {
+        retryDelayMs: attempt < attempts ? retryDelayMs : 0,
+        connectAttemptCount,
+        durationMs: Date.now() - attemptStartedAt,
+        coldStartDurationMs: Date.now() - coldStartStartedAt
+      });
+      if (attempt < attempts) await sleep(retryDelayMs);
     }
   }
   throw lastError;

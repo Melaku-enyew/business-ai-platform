@@ -100,6 +100,13 @@ const scryptAsync = promisify(scrypt);
 const app = express();
 let startupPromise;
 let startupError = null;
+let startupInFlight = false;
+let startupRetryTimer = null;
+let startupRetryCount = 0;
+let lastStartupRecoveredAt = null;
+const authDbWaitMs = Number(process.env.AUTH_DB_WAIT_MS || 5000);
+const startupRetryBaseMs = Number(process.env.STARTUP_RETRY_BASE_MS || 2500);
+const startupRetryMaxMs = Number(process.env.STARTUP_RETRY_MAX_MS || 30000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 15 * 1024 * 1024);
 const maxSpreadsheetRows = Number(process.env.MAX_SPREADSHEET_ROWS || 10000);
 const upload = multer({
@@ -1111,7 +1118,11 @@ function requireDurableStorage(req, res, next) {
   if (dbStatus.usingPostgres && !dbStatus.connected) {
     res.status(503).json({
       error: 'PostgreSQL storage is reconnecting. Please retry in a moment.',
-      code: 'POSTGRESQL_UNAVAILABLE'
+      code: 'POSTGRESQL_UNAVAILABLE',
+      degraded: true,
+      warmingUp: true,
+      database: dbStatus,
+      requestId: req.requestId
     });
     return;
   }
@@ -1127,7 +1138,7 @@ async function requireDatabaseReady(req, res, next) {
   }
 
   if (!before.connected || !before.tablesInitialized) {
-    await runStartupInBackground(`${req.method} ${req.path}`);
+    await waitForStartupWarmup(`${req.method} ${req.path}`, authDbWaitMs);
   }
 
   const after = getDatabaseRuntimeStatus();
@@ -1142,6 +1153,16 @@ async function requireDatabaseReady(req, res, next) {
   }
 
   next();
+}
+
+async function waitForStartupWarmup(reason, timeoutMs) {
+  const startup = runStartupInBackground(reason);
+  let timeoutId;
+  const timeout = new Promise((resolve) => {
+    timeoutId = setTimeout(resolve, timeoutMs);
+  });
+  await Promise.race([startup.catch(() => undefined), timeout]);
+  clearTimeout(timeoutId);
 }
 
 async function canManageTargetUser(actor, target) {
@@ -1381,6 +1402,9 @@ app.get('/api/health', (_req, res) => {
     service: 'metenova-business-platform',
     timestamp: new Date().toISOString(),
     uptimeSeconds: Math.round(process.uptime()),
+    degraded: dbStatus.degraded,
+    warmingUp: dbStatus.warmingUp,
+    startup: getStartupRuntimeStatus(),
     database: dbStatus
   });
 });
@@ -1390,10 +1414,14 @@ app.get('/api/readiness', (_req, res) => {
   if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
     runStartupInBackground('readiness');
   }
-  const ready = !dbStatus.usingPostgres || (dbStatus.connected && dbStatus.tablesInitialized);
+  const ready = !dbStatus.usingPostgres || dbStatus.hostConfigured;
+  const degraded = Boolean(dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized));
   res.status(ready ? 200 : 503).json({
     ready,
+    degraded,
+    warmingUp: Boolean(degraded || dbStatus.warmingUp),
     database: dbStatus,
+    startup: getStartupRuntimeStatus(),
     emailConfigured,
     durableStorage: !isEphemeralProductionStorage,
     timestamp: new Date().toISOString()
@@ -1454,6 +1482,9 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/config', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
+    runStartupInBackground('config');
+  }
   res.cookie?.('metenova_csrf', csrfToken, {
     httpOnly: false,
     sameSite: 'strict',
@@ -1462,8 +1493,10 @@ app.get('/api/config', (_req, res) => {
   res.json({
     authDisabled,
     storage: usingPostgres ? 'postgresql' : 'local-development',
-    durableStorage: dbStatus.usingPostgres && dbStatus.connected,
+    durableStorage: !isEphemeralProductionStorage,
     postgresqlConnected: dbStatus.usingPostgres && dbStatus.connected,
+    degraded: dbStatus.degraded,
+    warmingUp: dbStatus.warmingUp,
     emailConfigured,
     sessionTimeoutMinutes: Math.max(sessionTtlMinutes, 5),
     sessionWarningSeconds: warningSeconds,
@@ -3348,13 +3381,22 @@ app.use((error, _req, res, _next) => {
 });
 
 function runStartupInBackground(reason = 'startup') {
-  if (startupPromise && !startupError) return startupPromise;
+  if (startupInFlight && startupPromise) return startupPromise;
+  const status = getDatabaseRuntimeStatus();
+  if (status.usingPostgres && status.connected && status.tablesInitialized && !startupError) {
+    return Promise.resolve();
+  }
+  if (startupRetryTimer) {
+    clearTimeout(startupRetryTimer);
+    startupRetryTimer = null;
+  }
   startupPromise = beginStartup(reason);
   return startupPromise;
 }
 
 function beginStartup(reason = 'startup') {
   startupError = null;
+  startupInFlight = true;
   const startedAt = Date.now();
   const initialStatus = getDatabaseRuntimeStatus();
   console.log('[Metenova Startup] database bootstrap requested', {
@@ -3371,13 +3413,17 @@ function beginStartup(reason = 'startup') {
     .then(importLegacyDatasets)
     .then(() => {
       startupError = null;
+      startupRetryCount = 0;
+      lastStartupRecoveredAt = new Date().toISOString();
       clearDatabaseRuntimeFailure();
     })
     .catch((error) => {
       startupError = error;
       console.error(`PostgreSQL startup failed: ${error instanceof Error ? error.message : 'Unknown database error'}`);
+      scheduleStartupRetry(reason);
     })
     .finally(() => {
+      startupInFlight = false;
       const dbStatus = getDatabaseRuntimeStatus();
       console.log(`Environment loaded: ${process.env.VERCEL === '1' ? 'vercel-production' : process.env.NODE_ENV || 'local'}`);
       console.log(`PostgreSQL configured: ${dbStatus.usingPostgres ? 'true' : 'false'}`);
@@ -3390,7 +3436,44 @@ function beginStartup(reason = 'startup') {
       console.log(`Email configured: ${emailConfigured ? 'true' : 'false'}`);
       console.log('RESEND CONFIGURED:', Boolean(process.env.RESEND_API_KEY));
       console.log(`Startup duration: ${Date.now() - startedAt}ms`);
+      console.log('[Metenova Startup] runtime diagnostics', {
+        reason,
+        startupInFlight,
+        startupRetryCount,
+        lastStartupRecoveredAt,
+        dbConnectDurationMs: dbStatus.lastConnectDurationMs,
+        dbConnectAttemptCount: dbStatus.connectAttemptCount,
+        dbColdStartDurationMs: dbStatus.coldStartDurationMs,
+        degraded: dbStatus.degraded,
+        warmingUp: dbStatus.warmingUp
+      });
     });
+}
+
+function scheduleStartupRetry(reason) {
+  if (startupRetryTimer) return;
+  startupRetryCount += 1;
+  const retryDelayMs = Math.min(startupRetryBaseMs * 2 ** Math.min(startupRetryCount - 1, 6), startupRetryMaxMs);
+  console.warn('[Metenova Startup] scheduling database warmup retry', {
+    reason,
+    startupRetryCount,
+    retryDelayMs
+  });
+  startupRetryTimer = setTimeout(() => {
+    startupRetryTimer = null;
+    runStartupInBackground(`retry:${reason}`);
+  }, retryDelayMs);
+  startupRetryTimer.unref?.();
+}
+
+function getStartupRuntimeStatus() {
+  return {
+    inFlight: startupInFlight,
+    retryCount: startupRetryCount,
+    retryScheduled: Boolean(startupRetryTimer),
+    lastError: startupError instanceof Error ? startupError.message : startupError ? String(startupError) : null,
+    lastRecoveredAt: lastStartupRecoveredAt
+  };
 }
 
 runStartupInBackground('module-load');
