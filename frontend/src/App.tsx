@@ -227,11 +227,14 @@ type SystemStatus = {
 
 type ModuleRecord = {
   id: string;
+  companyId?: string;
+  userId?: string;
   module: string;
   recordType: string;
   title: string;
   status: string;
   amount?: number | null;
+  metadata?: Record<string, unknown>;
   ownerEmail?: string;
   createdAt: string;
   updatedAt: string;
@@ -4385,6 +4388,16 @@ function findDuplicateRows(rows: Record<string, string>[]) {
     .map(([key, count]) => ({ key, count, confidence: 98 }));
 }
 
+function findRepeatedValues(values: string[]) {
+  const seen = new Set<string>();
+  const duplicates = new Set<string>();
+  values.forEach((value) => {
+    if (seen.has(value)) duplicates.add(value);
+    seen.add(value);
+  });
+  return [...duplicates];
+}
+
 function normalizePreviewRow(row: Record<string, string>) {
   return Object.fromEntries(Object.entries(asObject(row)).map(([key, value]) => [standardizeColumnName(key), normalizePreviewValue(String(value ?? ''))]));
 }
@@ -5320,6 +5333,7 @@ function ModuleWorkspacePage({
   }
 
   const filteredRecords = records
+    .filter((record) => !selectedCompanyId || record.companyId === selectedCompanyId)
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
 
@@ -5614,6 +5628,15 @@ function ModuleWorkspacePage({
           </p>
           {error && <p className="persistence-note warning-note">{error}</p>}
         </article>
+      ) : route.module === 'hr' ? (
+        <HrWorkforceWorkspace
+          apiFetch={apiFetch}
+          company={selectedCompany}
+          records={filteredRecords}
+          selectedCompanyId={selectedCompanyId}
+          setError={setError}
+          setRecords={setRecords}
+        />
       ) : (
         <article className="panel routed-workspace">
           <ModuleBusinessDashboard
@@ -5787,6 +5810,439 @@ function ModuleBusinessDashboard({ records, route, selectedCompany }: { records:
         )}
       </div>
     </section>
+  );
+}
+
+function HrWorkforceWorkspace({
+  apiFetch,
+  company,
+  records,
+  selectedCompanyId,
+  setError,
+  setRecords
+}: {
+  apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  company: Company | null;
+  records: ModuleRecord[];
+  selectedCompanyId: string;
+  setError: (message: string) => void;
+  setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
+}) {
+  const [employeeForm, setEmployeeForm] = useState({
+    employeeId: '',
+    name: '',
+    email: '',
+    phone: '',
+    department: '',
+    title: '',
+    manager: '',
+    hireDate: '',
+    salary: '',
+    employmentType: 'Full-time',
+    taxDetails: '',
+    benefits: '',
+    notes: ''
+  });
+  const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [employeeTab, setEmployeeTab] = useState('Overview');
+  const [savingEmployee, setSavingEmployee] = useState(false);
+  const [payrollFileName, setPayrollFileName] = useState('');
+  const employees = records.filter((record) => record.recordType === 'employee' && record.status !== 'archived');
+  const archivedEmployees = records.filter((record) => record.recordType === 'employee' && record.status === 'archived');
+  const payrollRecords = records.filter((record) => record.recordType === 'payroll');
+  const attendanceRecords = records.filter((record) => record.recordType === 'attendance');
+  const documents = records.filter((record) => record.recordType === 'document' || record.recordType === 'paystub');
+  const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
+  const selectedEmployeePayroll = payrollRecords.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
+  const selectedEmployeeAttendance = attendanceRecords.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
+  const selectedEmployeeDocs = documents.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
+  const duplicateEmployeeIds = findRepeatedValues(employees.map((employee) => String(employee.metadata?.employeeId ?? '').trim()).filter(Boolean));
+  const employeesMissingIds = employees.filter((employee) => !String(employee.metadata?.employeeId ?? '').trim()).length;
+  const missingPaystubs = employees.filter((employee) => !documents.some((doc) => doc.recordType === 'paystub' && (doc.metadata?.employeeRecordId === employee.id || doc.metadata?.employeeId === employee.metadata?.employeeId))).length;
+  const overtimeWarnings = attendanceRecords.filter((record) => Number(record.metadata?.overtimeHours ?? 0) > 8).length;
+  const pendingOnboarding = employees.filter((employee) => employee.status === 'onboarding').length;
+  const ptoRequests = attendanceRecords.filter((record) => record.status === 'pto_requested').length;
+
+  async function createHrRecord(recordType: string, title: string, status: string, metadata: Record<string, unknown>, amount?: number | null) {
+    const response = await apiFetch('/api/modules/hr/records', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, status, recordType, companyId: selectedCompanyId, amount, metadata })
+    });
+    const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+    if (!response.ok || !payload.record) throw new Error(payload.error || 'HR record could not be saved.');
+    setRecords((current) => [payload.record as ModuleRecord, ...current]);
+    return payload.record;
+  }
+
+  async function updateHrRecord(record: ModuleRecord, updates: Partial<ModuleRecord>) {
+    const response = await apiFetch(`/api/modules/hr/records/${record.id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(updates)
+    });
+    const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+    if (!response.ok || !payload.record) throw new Error(payload.error || 'HR record update failed.');
+    setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
+    return payload.record;
+  }
+
+  async function saveEmployee(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!employeeForm.name.trim()) {
+      setError('Employee name is required.');
+      return;
+    }
+    setSavingEmployee(true);
+    setError('');
+    try {
+      await createHrRecord('employee', employeeForm.name.trim(), employeeForm.hireDate ? 'active' : 'onboarding', {
+        employeeId: employeeForm.employeeId.trim(),
+        email: employeeForm.email.trim(),
+        phone: employeeForm.phone.trim(),
+        department: employeeForm.department.trim(),
+        title: employeeForm.title.trim(),
+        manager: employeeForm.manager.trim(),
+        hireDate: employeeForm.hireDate,
+        salary: Number(employeeForm.salary || 0),
+        employmentType: employeeForm.employmentType,
+        taxDetails: employeeForm.taxDetails.trim(),
+        benefits: employeeForm.benefits.trim(),
+        notes: employeeForm.notes.trim()
+      }, Number(employeeForm.salary || 0));
+      setEmployeeForm({
+        employeeId: '',
+        name: '',
+        email: '',
+        phone: '',
+        department: '',
+        title: '',
+        manager: '',
+        hireDate: '',
+        salary: '',
+        employmentType: 'Full-time',
+        taxDetails: '',
+        benefits: '',
+        notes: ''
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Employee could not be saved.');
+    } finally {
+      setSavingEmployee(false);
+    }
+  }
+
+  async function editEmployee(employee: ModuleRecord) {
+    const nextName = window.prompt('Employee name', employee.title)?.trim();
+    if (!nextName) return;
+    const nextTitle = window.prompt('Role/title', String(employee.metadata?.title ?? ''))?.trim() ?? String(employee.metadata?.title ?? '');
+    const nextDepartment = window.prompt('Department', String(employee.metadata?.department ?? ''))?.trim() ?? String(employee.metadata?.department ?? '');
+    try {
+      await updateHrRecord(employee, {
+        title: nextName,
+        metadata: { ...(employee.metadata ?? {}), title: nextTitle, department: nextDepartment }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Employee update failed.');
+    }
+  }
+
+  async function archiveEmployee(employee: ModuleRecord) {
+    if (!window.confirm(`Archive ${employee.title}?`)) return;
+    try {
+      await updateHrRecord(employee, { status: 'archived', metadata: { ...(employee.metadata ?? {}), archivedAt: new Date().toISOString() } });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Employee archive failed.');
+    }
+  }
+
+  async function addAttendance(type: 'attendance' | 'pto_requested' | 'sick_leave') {
+    if (!selectedEmployee) return;
+    try {
+      await createHrRecord('attendance', `${selectedEmployee.title} ${type.replace('_', ' ')}`, type, {
+        employeeRecordId: selectedEmployee.id,
+        employeeId: selectedEmployee.metadata?.employeeId,
+        date: new Date().toISOString().slice(0, 10),
+        hours: type === 'attendance' ? 8 : 0,
+        overtimeHours: type === 'attendance' ? 0 : 0,
+        note: type === 'pto_requested' ? 'PTO request awaiting manager review' : type === 'sick_leave' ? 'Sick leave logged' : 'Attendance logged'
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Attendance record failed.');
+    }
+  }
+
+  async function uploadPayroll(file: File, attachAsPaystub = false) {
+    setPayrollFileName(file.name);
+    try {
+      const title = attachAsPaystub && selectedEmployee ? `${selectedEmployee.title} paystub - ${file.name}` : `Payroll import - ${file.name}`;
+      await createHrRecord(attachAsPaystub ? 'paystub' : 'payroll', title, 'pending_validation', {
+        employeeRecordId: attachAsPaystub ? selectedEmployee?.id : null,
+        employeeId: attachAsPaystub ? selectedEmployee?.metadata?.employeeId : null,
+        fileName: file.name,
+        fileType: file.name.split('.').pop()?.toLowerCase(),
+        uploadedAt: new Date().toISOString(),
+        validation: {
+          duplicatePayrollDetection: duplicateEmployeeIds.length,
+          missingHoursDetection: attendanceRecords.filter((record) => Number(record.metadata?.hours ?? 0) <= 0).length,
+          overtimeWarnings
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Payroll upload failed.');
+    }
+  }
+
+  function exportHrReport(kind: string) {
+    const lines = [
+      `Metenova AI HR ${kind} Report`,
+      `Company: ${company?.name ?? 'Selected company'}`,
+      `Employees: ${employees.length}`,
+      `Active: ${employees.filter((employee) => employee.status === 'active').length}`,
+      `Pending onboarding: ${pendingOnboarding}`,
+      `Payroll alerts: ${duplicateEmployeeIds.length + missingPaystubs + overtimeWarnings}`,
+      `Missing paystubs: ${missingPaystubs}`,
+      `PTO requests: ${ptoRequests}`,
+      '',
+      'AI insights',
+      ...hrInsightItems().map((item) => `- ${item}`)
+    ];
+    downloadPdf(lines, `hr-${kind.toLowerCase().replace(/\s+/g, '-')}-report.pdf`);
+  }
+
+  function exportHrExcel(kind: string) {
+    const rows = [
+      ['Employee ID', 'Name', 'Department', 'Title', 'Status', 'Manager', 'Salary'],
+      ...employees.map((employee) => [
+        String(employee.metadata?.employeeId ?? ''),
+        employee.title,
+        String(employee.metadata?.department ?? ''),
+        String(employee.metadata?.title ?? ''),
+        employee.status,
+        String(employee.metadata?.manager ?? ''),
+        String(employee.metadata?.salary ?? employee.amount ?? '')
+      ])
+    ];
+    downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), `hr-${kind.toLowerCase().replace(/\s+/g, '-')}.csv`, 'text/csv');
+  }
+
+  function hrInsightItems() {
+    return [
+      employeesMissingIds ? `${employeesMissingIds} employees are missing employee IDs.` : 'Employee ID coverage is healthy.',
+      duplicateEmployeeIds.length ? `${duplicateEmployeeIds.length} duplicate employee IDs detected.` : 'No duplicate employee IDs detected.',
+      overtimeWarnings ? `${overtimeWarnings} overtime spike warnings need review.` : 'No overtime spikes detected.',
+      missingPaystubs ? `${missingPaystubs} employees are missing paystubs.` : 'Paystub coverage looks complete.',
+      ptoRequests ? `${ptoRequests} PTO requests need manager review.` : 'No PTO conflicts are currently pending.',
+      pendingOnboarding > 3 ? 'Turnover/onboarding risk is elevated due to pending starts.' : 'Turnover risk is stable.'
+    ];
+  }
+
+  return (
+    <article className="panel routed-workspace hr-workforce-workspace">
+      <div className="hr-dashboard-grid">
+        {[
+          ['Total employees', employees.length],
+          ['Active employees', employees.filter((employee) => employee.status === 'active').length],
+          ['Pending onboarding', pendingOnboarding],
+          ['Payroll alerts', duplicateEmployeeIds.length + missingPaystubs + overtimeWarnings],
+          ['Attendance records', attendanceRecords.length],
+          ['Missing paystubs', missingPaystubs],
+          ['PTO requests', ptoRequests],
+          ['HR AI insights', hrInsightItems().filter((item) => !/healthy|No |stable|complete/i.test(item)).length]
+        ].map(([label, value]) => (
+          <div key={label}>
+            <span>{label}</span>
+            <strong>{value}</strong>
+          </div>
+        ))}
+      </div>
+
+      <section className="hr-operations-grid">
+        <form className="hr-employee-form" onSubmit={saveEmployee}>
+          <div>
+            <p className="eyebrow">Employee management</p>
+            <h2>Create employee</h2>
+          </div>
+          <input placeholder="Employee ID" value={employeeForm.employeeId} onChange={(event) => setEmployeeForm((current) => ({ ...current, employeeId: event.target.value }))} />
+          <input placeholder="Full name" value={employeeForm.name} onChange={(event) => setEmployeeForm((current) => ({ ...current, name: event.target.value }))} />
+          <input placeholder="Email" value={employeeForm.email} onChange={(event) => setEmployeeForm((current) => ({ ...current, email: event.target.value }))} />
+          <input placeholder="Phone" value={employeeForm.phone} onChange={(event) => setEmployeeForm((current) => ({ ...current, phone: event.target.value }))} />
+          <input placeholder="Department" value={employeeForm.department} onChange={(event) => setEmployeeForm((current) => ({ ...current, department: event.target.value }))} />
+          <input placeholder="Role / title" value={employeeForm.title} onChange={(event) => setEmployeeForm((current) => ({ ...current, title: event.target.value }))} />
+          <input placeholder="Manager" value={employeeForm.manager} onChange={(event) => setEmployeeForm((current) => ({ ...current, manager: event.target.value }))} />
+          <input type="date" value={employeeForm.hireDate} onChange={(event) => setEmployeeForm((current) => ({ ...current, hireDate: event.target.value }))} />
+          <input placeholder="Salary / pay rate" value={employeeForm.salary} onChange={(event) => setEmployeeForm((current) => ({ ...current, salary: event.target.value }))} />
+          <select value={employeeForm.employmentType} onChange={(event) => setEmployeeForm((current) => ({ ...current, employmentType: event.target.value }))}>
+            <option>Full-time</option>
+            <option>Part-time</option>
+            <option>Contractor</option>
+            <option>Seasonal</option>
+          </select>
+          <input placeholder="Tax details" value={employeeForm.taxDetails} onChange={(event) => setEmployeeForm((current) => ({ ...current, taxDetails: event.target.value }))} />
+          <input placeholder="Benefits" value={employeeForm.benefits} onChange={(event) => setEmployeeForm((current) => ({ ...current, benefits: event.target.value }))} />
+          <textarea placeholder="Employee notes" value={employeeForm.notes} onChange={(event) => setEmployeeForm((current) => ({ ...current, notes: event.target.value }))} />
+          <button type="submit" disabled={savingEmployee}>{savingEmployee ? 'Saving...' : 'Create employee'}</button>
+        </form>
+
+        <section className="hr-ai-panel">
+          <div>
+            <p className="eyebrow">HR AI insights</p>
+            <h2>Workforce risk monitor</h2>
+          </div>
+          {hrInsightItems().map((item) => (
+            <div className="ai-insight-chip" key={item}>
+              <strong>{item}</strong>
+              <span>Company-scoped HR intelligence</span>
+            </div>
+          ))}
+        </section>
+      </section>
+
+      <section className="hr-toolbar">
+        <label>
+          Upload payroll file
+          <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], false)} />
+        </label>
+        <label>
+          Attach paystub to selected employee
+          <input accept=".pdf,.csv,.xlsx,.xls,.json" type="file" disabled={!selectedEmployee} onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], true)} />
+        </label>
+        <button type="button" onClick={() => void addAttendance('attendance')} disabled={!selectedEmployee}>Log attendance</button>
+        <button type="button" onClick={() => void addAttendance('pto_requested')} disabled={!selectedEmployee}>Request PTO</button>
+        <button type="button" onClick={() => void addAttendance('sick_leave')} disabled={!selectedEmployee}>Sick leave</button>
+        <button type="button" onClick={() => exportHrReport('Employee')}>Employee report PDF</button>
+        <button type="button" onClick={() => exportHrExcel('Workforce')}>Export Excel</button>
+      </section>
+      {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
+
+      <section className="hr-employee-table">
+        <div className="dataset-table-head">
+          <span>Employee</span>
+          <span>Department</span>
+          <span>Role</span>
+          <span>Status</span>
+          <span>Manager</span>
+        </div>
+        {employees.map((employee) => (
+          <article className={`enterprise-dataset-row ${selectedEmployee?.id === employee.id ? 'expanded' : ''}`} key={employee.id}>
+            <button className="dataset-row-summary" type="button" onClick={() => { setSelectedEmployeeId(employee.id); setEmployeeTab('Overview'); }}>
+              <span><strong>{employee.title}</strong><small>{String(employee.metadata?.employeeId ?? 'No employee ID')} | {String(employee.metadata?.email ?? 'No email')}</small></span>
+              <span>{String(employee.metadata?.department ?? 'Unassigned')}</span>
+              <span>{String(employee.metadata?.title ?? 'No title')}</span>
+              <span>{employee.status}</span>
+              <span>{String(employee.metadata?.manager ?? 'No manager')}</span>
+            </button>
+            {selectedEmployee?.id === employee.id && (
+              <div className="employee-profile-drawer">
+                <div className="employee-profile-header">
+                  <div>
+                    <p className="eyebrow">Employee profile</p>
+                    <h2>{employee.title}</h2>
+                    <span>{String(employee.metadata?.title ?? 'Role pending')} | {String(employee.metadata?.department ?? 'Department pending')}</span>
+                  </div>
+                  <details className="dataset-action-menu">
+                    <summary>Actions</summary>
+                    <button type="button" onClick={() => void editEmployee(employee)}>Edit employee</button>
+                    <button type="button" onClick={() => void updateHrRecord(employee, { status: employee.status === 'active' ? 'inactive' : 'active' })}>Toggle status</button>
+                    <button type="button" onClick={() => void archiveEmployee(employee)}>Archive employee</button>
+                  </details>
+                </div>
+                <div className="employee-tabs">
+                  {['Overview', 'Payroll', 'Attendance', 'Documents', 'Performance', 'Activity History'].map((tab) => (
+                    <button className={employeeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setEmployeeTab(tab)}>{tab}</button>
+                  ))}
+                </div>
+                <EmployeeProfileTab
+                  attendance={selectedEmployeeAttendance}
+                  documents={selectedEmployeeDocs}
+                  employee={employee}
+                  payroll={selectedEmployeePayroll}
+                  tab={employeeTab}
+                />
+              </div>
+            )}
+          </article>
+        ))}
+        {!employees.length && <EmptyState title="Create your first employee" copy="Employee profiles, payroll validation, paystubs, attendance, PTO, and HR reports will appear here." />}
+        {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}
+      </section>
+    </article>
+  );
+}
+
+function EmployeeProfileTab({
+  attendance,
+  documents,
+  employee,
+  payroll,
+  tab
+}: {
+  attendance: ModuleRecord[];
+  documents: ModuleRecord[];
+  employee: ModuleRecord;
+  payroll: ModuleRecord[];
+  tab: string;
+}) {
+  if (tab === 'Payroll') {
+    return <EmployeeRecordList title="Payroll and paystubs" records={payroll} empty="No payroll records or paystubs attached yet." />;
+  }
+  if (tab === 'Attendance') {
+    return <EmployeeRecordList title="Attendance, PTO, sick leave, and overtime" records={attendance} empty="No attendance or PTO records yet." />;
+  }
+  if (tab === 'Documents') {
+    return <EmployeeRecordList title="Employee documents" records={documents} empty="No employee documents uploaded yet." />;
+  }
+  if (tab === 'Performance') {
+    return (
+      <div className="employee-tab-panel">
+        <h3>Performance</h3>
+        <p>Performance review cycle, goals, manager notes, and turnover risk scoring will be tracked here.</p>
+        <p>{String(employee.metadata?.notes ?? 'No performance notes yet.')}</p>
+      </div>
+    );
+  }
+  if (tab === 'Activity History') {
+    return (
+      <div className="employee-tab-panel">
+        <h3>Activity history</h3>
+        <p>Created {new Date(employee.createdAt).toLocaleString()}</p>
+        <p>Last updated {new Date(employee.updatedAt).toLocaleString()}</p>
+      </div>
+    );
+  }
+  return (
+    <div className="employee-tab-panel employee-overview-grid">
+      {[
+        ['Employee ID', employee.metadata?.employeeId],
+        ['Email', employee.metadata?.email],
+        ['Phone', employee.metadata?.phone],
+        ['Hire date', employee.metadata?.hireDate],
+        ['Employment type', employee.metadata?.employmentType],
+        ['Salary / pay rate', employee.metadata?.salary],
+        ['Tax details', employee.metadata?.taxDetails],
+        ['Benefits', employee.metadata?.benefits],
+        ['Notes', employee.metadata?.notes]
+      ].map(([label, value]) => (
+        <div key={String(label)}><span>{label}</span><strong>{String(value || 'Not set')}</strong></div>
+      ))}
+    </div>
+  );
+}
+
+function EmployeeRecordList({ empty, records, title }: { empty: string; records: ModuleRecord[]; title: string }) {
+  return (
+    <div className="employee-tab-panel">
+      <h3>{title}</h3>
+      {records.map((record) => (
+        <div className="history-item" key={record.id}>
+          <div>
+            <strong>{record.title}</strong>
+            <span>{record.status} | {new Date(record.createdAt).toLocaleString()}</span>
+          </div>
+        </div>
+      ))}
+      {!records.length && <p className="muted">{empty}</p>}
+    </div>
   );
 }
 

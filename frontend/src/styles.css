@@ -2839,6 +2839,141 @@ th {
   padding: 7px 10px;
 }
 
+.hr-workforce-workspace,
+.hr-operations-grid,
+.hr-ai-panel,
+.hr-employee-form,
+.employee-profile-drawer,
+.employee-tab-panel {
+  display: grid;
+  gap: 14px;
+}
+
+.hr-dashboard-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.hr-dashboard-grid div {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.86);
+  padding: 12px;
+}
+
+.hr-dashboard-grid span,
+.employee-overview-grid span {
+  color: #64748b;
+  font-size: 12px;
+}
+
+.hr-dashboard-grid strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 22px;
+}
+
+.hr-operations-grid {
+  grid-template-columns: minmax(320px, 1.2fr) minmax(280px, 0.8fr);
+}
+
+.hr-employee-form {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.hr-employee-form > div,
+.hr-employee-form textarea,
+.hr-employee-form button {
+  grid-column: 1 / -1;
+}
+
+.hr-employee-form input,
+.hr-employee-form select,
+.hr-employee-form textarea {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.hr-employee-form textarea {
+  min-height: 72px;
+  padding: 10px;
+  resize: vertical;
+}
+
+.hr-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: end;
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 10px;
+  background: rgba(248, 250, 252, 0.86);
+  padding: 12px;
+}
+
+.hr-toolbar label {
+  display: grid;
+  gap: 5px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hr-toolbar button,
+.hr-employee-form button {
+  width: auto;
+}
+
+.employee-profile-drawer {
+  border-top: 1px solid rgba(15, 23, 42, 0.08);
+  padding: 14px;
+}
+
+.employee-profile-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.employee-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.employee-tabs button {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  padding: 7px 10px;
+}
+
+.employee-tabs button.active {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.employee-overview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.employee-overview-grid div {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.72);
+  padding: 10px;
+}
+
 .dataset-detail-grid span,
 .workflow-history-strip span,
 .dataset-preview-strip span {
