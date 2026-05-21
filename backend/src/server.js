@@ -104,7 +104,8 @@ let startupInFlight = false;
 let startupRetryTimer = null;
 let startupRetryCount = 0;
 let lastStartupRecoveredAt = null;
-const authDbWaitMs = Number(process.env.AUTH_DB_WAIT_MS || 5000);
+const authDbWaitMs = Number(process.env.AUTH_DB_WAIT_MS || 15000);
+const readinessDbWaitMs = Number(process.env.READINESS_DB_WAIT_MS || 13000);
 const startupRetryBaseMs = Number(process.env.STARTUP_RETRY_BASE_MS || 2500);
 const startupRetryMaxMs = Number(process.env.STARTUP_RETRY_MAX_MS || 30000);
 const maxUploadBytes = Number(process.env.MAX_UPLOAD_BYTES || 15 * 1024 * 1024);
@@ -1409,10 +1410,11 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-app.get('/api/readiness', (_req, res) => {
-  const dbStatus = getDatabaseRuntimeStatus();
+app.get('/api/readiness', async (_req, res) => {
+  let dbStatus = getDatabaseRuntimeStatus();
   if (dbStatus.usingPostgres && !dbStatus.connected) {
-    runStartupInBackground('readiness');
+    await waitForStartupWarmup('readiness', readinessDbWaitMs);
+    dbStatus = getDatabaseRuntimeStatus();
   }
   const ready = !dbStatus.usingPostgres || dbStatus.hostConfigured;
   const degraded = Boolean(dbStatus.usingPostgres && !dbStatus.connected);
