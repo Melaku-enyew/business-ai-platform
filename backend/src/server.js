@@ -2579,11 +2579,32 @@ app.get('/api/modules/metrics', async (req, res, next) => {
 
 app.get('/api/modules/:module/records', async (req, res, next) => {
   try {
-    res.json({ records: await listModuleRecords(req.user, req.params.module) });
+    const records = await listModuleRecords(req.user, req.params.module);
+    res.json({ records: sanitizeModuleRecordsForUser(req.user, req.params.module, records) });
   } catch (error) {
     next(error);
   }
 });
+
+function sanitizeModuleRecordsForUser(user, moduleName, records) {
+  if (moduleName !== 'hr' || hasRole(user, 'manager')) return records;
+  return records
+    .filter((record) => record.recordType === 'employee')
+    .map((record) => {
+      const metadata = record.metadata ?? {};
+      return {
+        ...record,
+        amount: null,
+        metadata: {
+          employeeId: metadata.employeeId,
+          department: metadata.department,
+          title: metadata.title,
+          manager: metadata.manager,
+          employmentType: metadata.employmentType
+        }
+      };
+    });
+}
 
 app.post('/api/modules/:module/records', requireDurableStorage, async (req, res, next) => {
   try {

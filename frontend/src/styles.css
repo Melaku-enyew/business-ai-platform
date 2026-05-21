@@ -2961,6 +2961,102 @@ th {
   color: var(--accent-text);
 }
 
+.sticky-tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  background: inherit;
+  padding: 6px 0;
+}
+
+.employee-workspace-modal {
+  width: min(1040px, 100%);
+}
+
+.leave-workflow-modal {
+  width: min(820px, 100%);
+}
+
+.leave-workflow-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.leave-workflow-grid label {
+  display: grid;
+  gap: 6px;
+  color: #475569;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.leave-workflow-grid input,
+.leave-workflow-grid select,
+.leave-workflow-grid textarea {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 0 10px;
+}
+
+.leave-workflow-grid textarea {
+  min-height: 82px;
+  padding: 10px;
+}
+
+.full-span {
+  grid-column: 1 / -1;
+}
+
+.checkbox-line {
+  display: flex !important;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.checkbox-line input {
+  min-height: auto;
+  width: auto;
+}
+
+.leave-balance-strip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin: 14px 0;
+}
+
+.leave-balance-strip span {
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.86);
+  color: #475569;
+  padding: 10px;
+}
+
+.inline-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 0;
+}
+
+.leave-history-item {
+  align-items: center;
+}
+
+.leave-history-item small {
+  display: block;
+  margin-top: 4px;
+  color: #64748b;
+}
+
 .employee-overview-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -2972,6 +3068,19 @@ th {
   border-radius: 8px;
   background: rgba(255, 255, 255, 0.72);
   padding: 10px;
+}
+
+@media (max-width: 760px) {
+  .leave-workflow-grid,
+  .leave-balance-strip {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-profile-header,
+  .inline-actions {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 .dataset-detail-grid span,

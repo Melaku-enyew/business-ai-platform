@@ -5636,6 +5636,7 @@ function ModuleWorkspacePage({
           selectedCompanyId={selectedCompanyId}
           setError={setError}
           setRecords={setRecords}
+          user={user}
         />
       ) : (
         <article className="panel routed-workspace">
@@ -5819,7 +5820,8 @@ function HrWorkforceWorkspace({
   records,
   selectedCompanyId,
   setError,
-  setRecords
+  setRecords,
+  user
 }: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   company: Company | null;
@@ -5827,6 +5829,7 @@ function HrWorkforceWorkspace({
   selectedCompanyId: string;
   setError: (message: string) => void;
   setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
+  user: User | null;
 }) {
   const [employeeForm, setEmployeeForm] = useState({
     employeeId: '',
@@ -5844,24 +5847,47 @@ function HrWorkforceWorkspace({
     notes: ''
   });
   const [selectedEmployeeId, setSelectedEmployeeId] = useState('');
+  const [employeeWorkspaceId, setEmployeeWorkspaceId] = useState('');
   const [employeeTab, setEmployeeTab] = useState('Overview');
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [payrollFileName, setPayrollFileName] = useState('');
+  const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
+  const [leaveSaving, setLeaveSaving] = useState(false);
+  const [leaveForm, setLeaveForm] = useState({
+    employeeRecordId: '',
+    startDate: '',
+    endDate: '',
+    reason: '',
+    attachmentName: '',
+    manager: '',
+    emergency: false
+  });
+  const canManageHr = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  const canViewSensitiveHr = canManageHr;
   const employees = records.filter((record) => record.recordType === 'employee' && record.status !== 'archived');
   const archivedEmployees = records.filter((record) => record.recordType === 'employee' && record.status === 'archived');
   const payrollRecords = records.filter((record) => record.recordType === 'payroll');
   const attendanceRecords = records.filter((record) => record.recordType === 'attendance');
+  const leaveRequests = records.filter((record) => record.recordType === 'leave_request');
   const documents = records.filter((record) => record.recordType === 'document' || record.recordType === 'paystub');
   const selectedEmployee = employees.find((employee) => employee.id === selectedEmployeeId) ?? employees[0] ?? null;
+  const workspaceEmployee = employees.find((employee) => employee.id === employeeWorkspaceId) ?? null;
   const selectedEmployeePayroll = payrollRecords.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
   const selectedEmployeeAttendance = attendanceRecords.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
   const selectedEmployeeDocs = documents.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
+  const selectedEmployeeLeave = leaveRequests.filter((record) => record.metadata?.employeeRecordId === selectedEmployee?.id || record.metadata?.employeeId === selectedEmployee?.metadata?.employeeId);
+  const workspaceEmployeePayroll = payrollRecords.filter((record) => record.metadata?.employeeRecordId === workspaceEmployee?.id || record.metadata?.employeeId === workspaceEmployee?.metadata?.employeeId);
+  const workspaceEmployeeAttendance = attendanceRecords.filter((record) => record.metadata?.employeeRecordId === workspaceEmployee?.id || record.metadata?.employeeId === workspaceEmployee?.metadata?.employeeId);
+  const workspaceEmployeeDocs = documents.filter((record) => record.metadata?.employeeRecordId === workspaceEmployee?.id || record.metadata?.employeeId === workspaceEmployee?.metadata?.employeeId);
+  const workspaceEmployeeLeave = leaveRequests.filter((record) => record.metadata?.employeeRecordId === workspaceEmployee?.id || record.metadata?.employeeId === workspaceEmployee?.metadata?.employeeId);
   const duplicateEmployeeIds = findRepeatedValues(employees.map((employee) => String(employee.metadata?.employeeId ?? '').trim()).filter(Boolean));
   const employeesMissingIds = employees.filter((employee) => !String(employee.metadata?.employeeId ?? '').trim()).length;
   const missingPaystubs = employees.filter((employee) => !documents.some((doc) => doc.recordType === 'paystub' && (doc.metadata?.employeeRecordId === employee.id || doc.metadata?.employeeId === employee.metadata?.employeeId))).length;
   const overtimeWarnings = attendanceRecords.filter((record) => Number(record.metadata?.overtimeHours ?? 0) > 8).length;
   const pendingOnboarding = employees.filter((employee) => employee.status === 'onboarding').length;
-  const ptoRequests = attendanceRecords.filter((record) => record.status === 'pto_requested').length;
+  const ptoRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'pto').length;
+  const sickRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'sick').length;
+  const pendingHrApprovals = leaveRequests.filter((record) => record.status === 'pending_approval');
 
   async function createHrRecord(recordType: string, title: string, status: string, metadata: Record<string, unknown>, amount?: number | null) {
     const response = await apiFetch('/api/modules/hr/records', {
@@ -5972,18 +5998,132 @@ function HrWorkforceWorkspace({
     }
   }
 
+  function openLeaveWorkflow(type: 'pto' | 'sick') {
+    const employee = selectedEmployee ?? employees[0] ?? null;
+    setLeaveWorkflow(type);
+    setLeaveForm({
+      employeeRecordId: employee?.id ?? '',
+      startDate: '',
+      endDate: '',
+      reason: '',
+      attachmentName: '',
+      manager: String(employee?.metadata?.manager ?? ''),
+      emergency: false
+    });
+  }
+
+  function calculateLeaveHours(startDate: string, endDate: string) {
+    if (!startDate || !endDate) return 0;
+    const start = new Date(`${startDate}T00:00:00`);
+    const end = new Date(`${endDate}T00:00:00`);
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 0;
+    return (Math.floor((end.getTime() - start.getTime()) / 86400000) + 1) * 8;
+  }
+
+  function employeeLeaveBalance(employee: ModuleRecord | null, type: 'pto' | 'sick') {
+    const defaultHours = type === 'pto' ? 120 : 40;
+    const key = type === 'pto' ? 'ptoBalanceHours' : 'sickBalanceHours';
+    const startingBalance = Number(employee?.metadata?.[key] ?? defaultHours);
+    const used = leaveRequests
+      .filter((request) => request.status === 'approved' && request.metadata?.employeeRecordId === employee?.id && request.metadata?.leaveType === type)
+      .reduce((sum, request) => sum + Number(request.metadata?.requestedHours ?? 0), 0);
+    return Math.max(startingBalance - used, 0);
+  }
+
+  async function submitLeaveWorkflow(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!leaveWorkflow) return;
+    const employee = employees.find((entry) => entry.id === leaveForm.employeeRecordId) ?? null;
+    if (!employee) {
+      setError('Select an employee before submitting leave.');
+      return;
+    }
+    const requestedHours = calculateLeaveHours(leaveForm.startDate, leaveForm.endDate);
+    if (!requestedHours) {
+      setError('Select a valid start and end date for the leave request.');
+      return;
+    }
+    setLeaveSaving(true);
+    setError('');
+    try {
+      const manager = leaveForm.manager.trim() || String(employee.metadata?.manager ?? 'Manager review queue');
+      const remainingBefore = employeeLeaveBalance(employee, leaveWorkflow);
+      await createHrRecord(
+        'leave_request',
+        `${employee.title} ${leaveWorkflow === 'pto' ? 'PTO' : 'sick leave'} request`,
+        'pending_approval',
+        {
+          leaveType: leaveWorkflow,
+          employeeRecordId: employee.id,
+          employeeId: employee.metadata?.employeeId,
+          employeeName: employee.title,
+          startDate: leaveForm.startDate,
+          endDate: leaveForm.endDate,
+          reason: leaveForm.reason.trim(),
+          attachmentName: leaveForm.attachmentName,
+          manager,
+          approvalChain: ['Employee submitted', `${manager} approval`, 'HR operations archive'],
+          emergency: leaveForm.emergency,
+          requestedHours,
+          remainingBalanceBefore: remainingBefore,
+          remainingBalanceAfter: remainingBefore - requestedHours,
+          submittedAt: new Date().toISOString(),
+          approvalHistory: [
+            { action: 'submitted', actor: user?.name ?? user?.email ?? 'Employee', at: new Date().toISOString(), comment: leaveForm.reason.trim() }
+          ],
+          notification: `${manager} notified for ${leaveWorkflow === 'pto' ? 'PTO' : 'sick leave'} approval.`
+        }
+      );
+      setLeaveWorkflow(null);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Leave request could not be submitted.');
+    } finally {
+      setLeaveSaving(false);
+    }
+  }
+
+  async function decideLeaveRequest(request: ModuleRecord, decision: 'approved' | 'rejected') {
+    const comment = window.prompt(`${decision === 'approved' ? 'Approval' : 'Rejection'} comment`, decision === 'approved' ? 'Approved for coverage.' : 'Rejected for coverage conflict.') ?? '';
+    try {
+      await updateHrRecord(request, {
+        status: decision,
+        metadata: {
+          ...(request.metadata ?? {}),
+          decidedAt: new Date().toISOString(),
+          decidedBy: user?.name ?? user?.email ?? 'Manager',
+          managerComment: comment,
+          approvalHistory: [
+            ...asArray(request.metadata?.approvalHistory),
+            { action: decision, actor: user?.name ?? user?.email ?? 'Manager', at: new Date().toISOString(), comment }
+          ]
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Leave approval update failed.');
+    }
+  }
+
   async function uploadPayroll(file: File, attachAsPaystub = false) {
     setPayrollFileName(file.name);
     try {
-      const title = attachAsPaystub && selectedEmployee ? `${selectedEmployee.title} paystub - ${file.name}` : `Payroll import - ${file.name}`;
+      const inferredEmployee = selectedEmployee ?? employees.find((employee) => {
+        const employeeId = String(employee.metadata?.employeeId ?? '').toLowerCase();
+        return employeeId && file.name.toLowerCase().includes(employeeId);
+      }) ?? null;
+      const duplicatePayrollEntries = payrollRecords.filter((record) => record.metadata?.fileName === file.name).length;
+      const missingEmployeeDetection = attachAsPaystub && !inferredEmployee ? 1 : 0;
+      const title = attachAsPaystub && inferredEmployee ? `${inferredEmployee.title} paystub - ${file.name}` : `Payroll import - ${file.name}`;
       await createHrRecord(attachAsPaystub ? 'paystub' : 'payroll', title, 'pending_validation', {
-        employeeRecordId: attachAsPaystub ? selectedEmployee?.id : null,
-        employeeId: attachAsPaystub ? selectedEmployee?.metadata?.employeeId : null,
+        employeeRecordId: attachAsPaystub ? inferredEmployee?.id : null,
+        employeeId: attachAsPaystub ? inferredEmployee?.metadata?.employeeId : null,
+        attachedEmployeeName: inferredEmployee?.title ?? null,
         fileName: file.name,
         fileType: file.name.split('.').pop()?.toLowerCase(),
         uploadedAt: new Date().toISOString(),
+        hrUploadType: attachAsPaystub ? 'paystub' : 'payroll_file',
         validation: {
-          duplicatePayrollDetection: duplicateEmployeeIds.length,
+          duplicatePayrollDetection: duplicatePayrollEntries,
+          missingEmployeeDetection,
           missingHoursDetection: attendanceRecords.filter((record) => Number(record.metadata?.hours ?? 0) <= 0).length,
           overtimeWarnings
         }
@@ -6003,6 +6143,8 @@ function HrWorkforceWorkspace({
       `Payroll alerts: ${duplicateEmployeeIds.length + missingPaystubs + overtimeWarnings}`,
       `Missing paystubs: ${missingPaystubs}`,
       `PTO requests: ${ptoRequests}`,
+      `Sick leave requests: ${sickRequests}`,
+      `Pending approvals: ${pendingHrApprovals.length}`,
       '',
       'AI insights',
       ...hrInsightItems().map((item) => `- ${item}`)
@@ -6033,6 +6175,8 @@ function HrWorkforceWorkspace({
       overtimeWarnings ? `${overtimeWarnings} overtime spike warnings need review.` : 'No overtime spikes detected.',
       missingPaystubs ? `${missingPaystubs} employees are missing paystubs.` : 'Paystub coverage looks complete.',
       ptoRequests ? `${ptoRequests} PTO requests need manager review.` : 'No PTO conflicts are currently pending.',
+      sickRequests ? `${sickRequests} sick leave requests need coverage review.` : 'No sick leave requests are pending.',
+      pendingHrApprovals.length ? `${pendingHrApprovals.length} HR approvals are waiting on a manager.` : 'Approval queues are clear.',
       pendingOnboarding > 3 ? 'Turnover/onboarding risk is elevated due to pending starts.' : 'Turnover risk is stable.'
     ];
   }
@@ -6048,6 +6192,8 @@ function HrWorkforceWorkspace({
           ['Attendance records', attendanceRecords.length],
           ['Missing paystubs', missingPaystubs],
           ['PTO requests', ptoRequests],
+          ['Sick leave', sickRequests],
+          ['Pending approvals', pendingHrApprovals.length],
           ['HR AI insights', hrInsightItems().filter((item) => !/healthy|No |stable|complete/i.test(item)).length]
         ].map(([label, value]) => (
           <div key={label}>
@@ -6058,7 +6204,7 @@ function HrWorkforceWorkspace({
       </div>
 
       <section className="hr-operations-grid">
-        <form className="hr-employee-form" onSubmit={saveEmployee}>
+        {canManageHr ? <form className="hr-employee-form" onSubmit={saveEmployee}>
           <div>
             <p className="eyebrow">Employee management</p>
             <h2>Create employee</h2>
@@ -6082,7 +6228,15 @@ function HrWorkforceWorkspace({
           <input placeholder="Benefits" value={employeeForm.benefits} onChange={(event) => setEmployeeForm((current) => ({ ...current, benefits: event.target.value }))} />
           <textarea placeholder="Employee notes" value={employeeForm.notes} onChange={(event) => setEmployeeForm((current) => ({ ...current, notes: event.target.value }))} />
           <button type="submit" disabled={savingEmployee}>{savingEmployee ? 'Saving...' : 'Create employee'}</button>
-        </form>
+        </form> : (
+          <section className="hr-ai-panel">
+            <div>
+              <p className="eyebrow">Directory access</p>
+              <h2>Employee directory</h2>
+            </div>
+            <p className="muted">Your role can view the company directory and submit assigned HR workflows. Payroll, salary, tax, benefits, and private employee notes are restricted.</p>
+          </section>
+        )}
 
         <section className="hr-ai-panel">
           <div>
@@ -6108,10 +6262,10 @@ function HrWorkforceWorkspace({
           <input accept=".pdf,.csv,.xlsx,.xls,.json" type="file" disabled={!selectedEmployee} onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], true)} />
         </label>
         <button type="button" onClick={() => void addAttendance('attendance')} disabled={!selectedEmployee}>Log attendance</button>
-        <button type="button" onClick={() => void addAttendance('pto_requested')} disabled={!selectedEmployee}>Request PTO</button>
-        <button type="button" onClick={() => void addAttendance('sick_leave')} disabled={!selectedEmployee}>Sick leave</button>
-        <button type="button" onClick={() => exportHrReport('Employee')}>Employee report PDF</button>
-        <button type="button" onClick={() => exportHrExcel('Workforce')}>Export Excel</button>
+        <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>Request PTO</button>
+        <button type="button" onClick={() => openLeaveWorkflow('sick')} disabled={!selectedEmployee}>Sick leave</button>
+        {canManageHr && <button type="button" onClick={() => exportHrReport('Employee')}>Employee report PDF</button>}
+        {canManageHr && <button type="button" onClick={() => exportHrExcel('Workforce')}>Export Excel</button>}
       </section>
       {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
 
@@ -6124,72 +6278,243 @@ function HrWorkforceWorkspace({
           <span>Manager</span>
         </div>
         {employees.map((employee) => (
-          <article className={`enterprise-dataset-row ${selectedEmployee?.id === employee.id ? 'expanded' : ''}`} key={employee.id}>
-            <button className="dataset-row-summary" type="button" onClick={() => { setSelectedEmployeeId(employee.id); setEmployeeTab('Overview'); }}>
-              <span><strong>{employee.title}</strong><small>{String(employee.metadata?.employeeId ?? 'No employee ID')} | {String(employee.metadata?.email ?? 'No email')}</small></span>
+          <article className={`enterprise-dataset-row ${selectedEmployee?.id === employee.id ? 'selected' : ''}`} key={employee.id}>
+            <button className="dataset-row-summary" type="button" onClick={() => { setSelectedEmployeeId(employee.id); setEmployeeWorkspaceId(employee.id); setEmployeeTab('Overview'); }}>
+              <span><strong>{employee.title}</strong><small>{String(employee.metadata?.employeeId ?? 'No employee ID')}{canViewSensitiveHr ? ` | ${String(employee.metadata?.email ?? 'No email')}` : ''}</small></span>
               <span>{String(employee.metadata?.department ?? 'Unassigned')}</span>
               <span>{String(employee.metadata?.title ?? 'No title')}</span>
               <span>{employee.status}</span>
               <span>{String(employee.metadata?.manager ?? 'No manager')}</span>
             </button>
-            {selectedEmployee?.id === employee.id && (
-              <div className="employee-profile-drawer">
-                <div className="employee-profile-header">
-                  <div>
-                    <p className="eyebrow">Employee profile</p>
-                    <h2>{employee.title}</h2>
-                    <span>{String(employee.metadata?.title ?? 'Role pending')} | {String(employee.metadata?.department ?? 'Department pending')}</span>
-                  </div>
-                  <details className="dataset-action-menu">
-                    <summary>Actions</summary>
-                    <button type="button" onClick={() => void editEmployee(employee)}>Edit employee</button>
-                    <button type="button" onClick={() => void updateHrRecord(employee, { status: employee.status === 'active' ? 'inactive' : 'active' })}>Toggle status</button>
-                    <button type="button" onClick={() => void archiveEmployee(employee)}>Archive employee</button>
-                  </details>
-                </div>
-                <div className="employee-tabs">
-                  {['Overview', 'Payroll', 'Attendance', 'Documents', 'Performance', 'Activity History'].map((tab) => (
-                    <button className={employeeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setEmployeeTab(tab)}>{tab}</button>
-                  ))}
-                </div>
-                <EmployeeProfileTab
-                  attendance={selectedEmployeeAttendance}
-                  documents={selectedEmployeeDocs}
-                  employee={employee}
-                  payroll={selectedEmployeePayroll}
-                  tab={employeeTab}
-                />
-              </div>
-            )}
           </article>
         ))}
         {!employees.length && <EmptyState title="Create your first employee" copy="Employee profiles, payroll validation, paystubs, attendance, PTO, and HR reports will appear here." />}
         {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}
       </section>
+      {leaveWorkflow && (
+        <LeaveWorkflowModal
+          employees={employees}
+          form={leaveForm}
+          leaveType={leaveWorkflow}
+          onClose={() => setLeaveWorkflow(null)}
+          onFile={(file) => setLeaveForm((current) => ({ ...current, attachmentName: file.name }))}
+          onSubmit={submitLeaveWorkflow}
+          saving={leaveSaving}
+          selectedEmployee={employees.find((employee) => employee.id === leaveForm.employeeRecordId) ?? null}
+          setForm={setLeaveForm}
+          usedHours={(employee, type) => employeeLeaveBalance(employee, type)}
+          requestedHours={calculateLeaveHours(leaveForm.startDate, leaveForm.endDate)}
+        />
+      )}
+      {workspaceEmployee && (
+        <EmployeeWorkspaceModal
+          attendance={workspaceEmployeeAttendance}
+          canManage={canManageHr}
+          canViewSensitive={canViewSensitiveHr}
+          documents={workspaceEmployeeDocs}
+          employee={workspaceEmployee}
+          leaveRequests={workspaceEmployeeLeave}
+          onArchive={() => void archiveEmployee(workspaceEmployee)}
+          onBack={() => setEmployeeWorkspaceId('')}
+          onDecideLeave={decideLeaveRequest}
+          onEdit={() => void editEmployee(workspaceEmployee)}
+          onToggleStatus={() => void updateHrRecord(workspaceEmployee, { status: workspaceEmployee.status === 'active' ? 'inactive' : 'active' })}
+          payroll={workspaceEmployeePayroll}
+          setTab={setEmployeeTab}
+          tab={employeeTab}
+        />
+      )}
     </article>
+  );
+}
+
+function LeaveWorkflowModal({
+  employees,
+  form,
+  leaveType,
+  onClose,
+  onFile,
+  onSubmit,
+  requestedHours,
+  saving,
+  selectedEmployee,
+  setForm,
+  usedHours
+}: {
+  employees: ModuleRecord[];
+  form: { employeeRecordId: string; startDate: string; endDate: string; reason: string; attachmentName: string; manager: string; emergency: boolean };
+  leaveType: 'pto' | 'sick';
+  onClose: () => void;
+  onFile: (file: File) => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+  requestedHours: number;
+  saving: boolean;
+  selectedEmployee: ModuleRecord | null;
+  setForm: Dispatch<SetStateAction<{ employeeRecordId: string; startDate: string; endDate: string; reason: string; attachmentName: string; manager: string; emergency: boolean }>>;
+  usedHours: (employee: ModuleRecord | null, type: 'pto' | 'sick') => number;
+}) {
+  const balance = usedHours(selectedEmployee, leaveType);
+  const remaining = balance - requestedHours;
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="access-modal leave-workflow-modal" aria-modal="true" role="dialog" aria-label={`${leaveType === 'pto' ? 'PTO' : 'Sick leave'} request workflow`} onSubmit={onSubmit}>
+        <div className="employee-profile-header">
+          <div>
+            <p className="eyebrow">HR workflow</p>
+            <h2>{leaveType === 'pto' ? 'Request PTO' : 'Sick Leave'}</h2>
+            <span>Employee submits to manager notification to pending approval to approve or reject.</span>
+          </div>
+          <button className="ghost-button compact" type="button" onClick={onClose}>Close</button>
+        </div>
+        <div className="leave-workflow-grid">
+          <label>Employee
+            <select value={form.employeeRecordId} onChange={(event) => setForm((current) => ({ ...current, employeeRecordId: event.target.value }))}>
+              <option value="">Select employee</option>
+              {employees.map((employee) => <option key={employee.id} value={employee.id}>{employee.title}</option>)}
+            </select>
+          </label>
+          <label>Manager
+            <input placeholder="Manager or approval queue" value={form.manager} onChange={(event) => setForm((current) => ({ ...current, manager: event.target.value }))} />
+          </label>
+          <label>Start date
+            <input type="date" value={form.startDate} onChange={(event) => setForm((current) => ({ ...current, startDate: event.target.value }))} />
+          </label>
+          <label>End date
+            <input type="date" value={form.endDate} onChange={(event) => setForm((current) => ({ ...current, endDate: event.target.value }))} />
+          </label>
+          <label className="full-span">Reason
+            <textarea placeholder="Coverage notes, reason, and manager context" value={form.reason} onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))} />
+          </label>
+          <label>Attachment
+            <input type="file" onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])} />
+          </label>
+          <label className="checkbox-line">
+            <input checked={form.emergency} type="checkbox" onChange={(event) => setForm((current) => ({ ...current, emergency: event.target.checked }))} />
+            Emergency leave flag
+          </label>
+        </div>
+        <div className="leave-balance-strip">
+          <span><strong>{balance}</strong> hours available</span>
+          <span><strong>{requestedHours}</strong> hours requested</span>
+          <span className={remaining < 0 ? 'warning-note' : ''}><strong>{remaining}</strong> hours after request</span>
+          <span>{form.attachmentName || 'No attachment selected'}</span>
+        </div>
+        <div className="workflow-history-strip">
+          {['Employee submitted', 'Manager notified', 'Pending approval', 'Approve / Reject', 'Status updates'].map((stage, index) => (
+            <span key={stage}>{index + 1}. {stage}</span>
+          ))}
+        </div>
+        <div className="modal-actions">
+          <button className="ghost-button" type="button" onClick={onClose}>Cancel</button>
+          <button type="submit" disabled={saving}>{saving ? 'Submitting...' : 'Submit workflow'}</button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function EmployeeWorkspaceModal({
+  attendance,
+  canManage,
+  canViewSensitive,
+  documents,
+  employee,
+  leaveRequests,
+  onArchive,
+  onBack,
+  onDecideLeave,
+  onEdit,
+  onToggleStatus,
+  payroll,
+  setTab,
+  tab
+}: {
+  attendance: ModuleRecord[];
+  canManage: boolean;
+  canViewSensitive: boolean;
+  documents: ModuleRecord[];
+  employee: ModuleRecord;
+  leaveRequests: ModuleRecord[];
+  onArchive: () => void;
+  onBack: () => void;
+  onDecideLeave: (request: ModuleRecord, decision: 'approved' | 'rejected') => void;
+  onEdit: () => void;
+  onToggleStatus: () => void;
+  payroll: ModuleRecord[];
+  setTab: (tab: string) => void;
+  tab: string;
+}) {
+  const tabs = ['Overview', 'Payroll', 'Attendance', 'PTO', 'Documents', 'Performance', 'Activity History', 'Approvals'];
+  return (
+    <div className="modal-backdrop employee-workspace-backdrop" role="presentation">
+      <section className="access-modal employee-workspace-modal" aria-modal="true" role="dialog" aria-label={`${employee.title} employee workspace`}>
+        <div className="employee-profile-header">
+          <div>
+            <p className="eyebrow">HR / Employee Workspace</p>
+            <h2>{employee.title}</h2>
+            <span>{String(employee.metadata?.title ?? 'Role pending')} | {String(employee.metadata?.department ?? 'Department pending')}</span>
+          </div>
+          <div className="modal-actions inline-actions">
+            {canManage && <button className="ghost-button compact" type="button" onClick={onEdit}>Edit</button>}
+            {canManage && <button className="ghost-button compact" type="button" onClick={onToggleStatus}>Toggle status</button>}
+            {canManage && <button className="ghost-button compact" type="button" onClick={onArchive}>Archive</button>}
+            <button type="button" onClick={onBack}>Back</button>
+          </div>
+        </div>
+        <div className="employee-tabs sticky-tabs">
+          {tabs.map((item) => (
+            <button className={tab === item ? 'active' : ''} key={item} type="button" onClick={() => setTab(item)}>{item}</button>
+          ))}
+        </div>
+        <EmployeeProfileTab
+          attendance={attendance}
+          canManage={canManage}
+          canViewSensitive={canViewSensitive}
+          documents={documents}
+          employee={employee}
+          leaveRequests={leaveRequests}
+          onDecideLeave={onDecideLeave}
+          payroll={payroll}
+          tab={tab}
+        />
+      </section>
+    </div>
   );
 }
 
 function EmployeeProfileTab({
   attendance,
+  canManage,
+  canViewSensitive,
   documents,
   employee,
+  leaveRequests,
+  onDecideLeave,
   payroll,
   tab
 }: {
   attendance: ModuleRecord[];
+  canManage: boolean;
+  canViewSensitive: boolean;
   documents: ModuleRecord[];
   employee: ModuleRecord;
+  leaveRequests: ModuleRecord[];
+  onDecideLeave: (request: ModuleRecord, decision: 'approved' | 'rejected') => void;
   payroll: ModuleRecord[];
   tab: string;
 }) {
   if (tab === 'Payroll') {
+    if (!canViewSensitive) return <RestrictedHrPanel title="Payroll and paystubs" />;
     return <EmployeeRecordList title="Payroll and paystubs" records={payroll} empty="No payroll records or paystubs attached yet." />;
   }
   if (tab === 'Attendance') {
     return <EmployeeRecordList title="Attendance, PTO, sick leave, and overtime" records={attendance} empty="No attendance or PTO records yet." />;
   }
+  if (tab === 'PTO') {
+    return <LeaveRequestList canManage={canManage} onDecide={onDecideLeave} records={leaveRequests} />;
+  }
   if (tab === 'Documents') {
+    if (!canViewSensitive) return <RestrictedHrPanel title="Employee documents" />;
     return <EmployeeRecordList title="Employee documents" records={documents} empty="No employee documents uploaded yet." />;
   }
   if (tab === 'Performance') {
@@ -6210,9 +6535,12 @@ function EmployeeProfileTab({
       </div>
     );
   }
+  if (tab === 'Approvals') {
+    return <LeaveRequestList canManage={canManage} onDecide={onDecideLeave} records={leaveRequests.filter((record) => record.status === 'pending_approval')} />;
+  }
   return (
     <div className="employee-tab-panel employee-overview-grid">
-      {[
+      {(canViewSensitive ? [
         ['Employee ID', employee.metadata?.employeeId],
         ['Email', employee.metadata?.email],
         ['Phone', employee.metadata?.phone],
@@ -6222,9 +6550,48 @@ function EmployeeProfileTab({
         ['Tax details', employee.metadata?.taxDetails],
         ['Benefits', employee.metadata?.benefits],
         ['Notes', employee.metadata?.notes]
-      ].map(([label, value]) => (
+      ] : [
+        ['Employee ID', employee.metadata?.employeeId],
+        ['Department', employee.metadata?.department],
+        ['Role / title', employee.metadata?.title],
+        ['Employment type', employee.metadata?.employmentType],
+        ['Manager', employee.metadata?.manager]
+      ]).map(([label, value]) => (
         <div key={String(label)}><span>{label}</span><strong>{String(value || 'Not set')}</strong></div>
       ))}
+    </div>
+  );
+}
+
+function RestrictedHrPanel({ title }: { title: string }) {
+  return (
+    <div className="employee-tab-panel">
+      <h3>{title}</h3>
+      <p className="muted">This information is restricted to managers, HR administrators, and owners.</p>
+    </div>
+  );
+}
+
+function LeaveRequestList({ canManage, onDecide, records }: { canManage: boolean; onDecide: (record: ModuleRecord, decision: 'approved' | 'rejected') => void; records: ModuleRecord[] }) {
+  return (
+    <div className="employee-tab-panel">
+      <h3>PTO, sick leave, and approvals</h3>
+      {records.map((record) => (
+        <div className="history-item leave-history-item" key={record.id}>
+          <div>
+            <strong>{record.title}</strong>
+            <span>{record.status} | {String(record.metadata?.startDate ?? 'No start')} to {String(record.metadata?.endDate ?? 'No end')}</span>
+            <small>{String(record.metadata?.reason ?? 'No reason provided')} | Manager: {String(record.metadata?.manager ?? 'Unassigned')}</small>
+          </div>
+          {canManage && record.status === 'pending_approval' && (
+            <div className="inline-actions">
+              <button type="button" onClick={() => onDecide(record, 'approved')}>Approve</button>
+              <button className="ghost-button compact" type="button" onClick={() => onDecide(record, 'rejected')}>Reject</button>
+            </div>
+          )}
+        </div>
+      ))}
+      {!records.length && <p className="muted">No PTO or sick leave workflow history yet.</p>}
     </div>
   );
 }
