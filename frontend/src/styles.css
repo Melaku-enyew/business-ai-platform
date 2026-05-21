@@ -2989,6 +2989,22 @@ th {
   padding: 12px;
 }
 
+.unified-hr-toolbar {
+  align-items: center;
+  padding: 10px 12px;
+}
+
+.unified-hr-toolbar > div {
+  display: grid;
+  gap: 2px;
+  min-width: 190px;
+}
+
+.unified-hr-toolbar strong {
+  color: var(--text);
+  font-weight: 900;
+}
+
 .hr-toolbar label {
   display: grid;
   gap: 5px;
@@ -3000,6 +3016,73 @@ th {
 .hr-toolbar button,
 .hr-employee-form button {
   width: auto;
+}
+
+.collapsible-risk-panel {
+  align-self: start;
+  padding: 12px;
+}
+
+.risk-monitor-trigger {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.risk-monitor-trigger strong {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  padding: 7px 10px;
+}
+
+.risk-monitor-body {
+  display: grid;
+  gap: 8px;
+  animation: card-rise 0.18s ease;
+}
+
+.ai-insight-chip.severity-warning {
+  border-left-color: #d97706;
+}
+
+.ai-insight-chip.severity-ok {
+  border-left-color: var(--success);
+}
+
+.hr-upload-center,
+.unified-timesheet-summary {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 12px;
+}
+
+.timesheet-tab-panel {
+  max-height: min(60vh, 620px);
+  overflow: auto;
+  padding-right: 4px;
+}
+
+.timesheet-entry-list {
+  display: grid;
+  gap: 10px;
+}
+
+.timesheet-entry-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
 }
 
 .employee-profile-drawer {

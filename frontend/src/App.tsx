@@ -6234,6 +6234,10 @@ function HrWorkforceWorkspace({
   const [employeeTab, setEmployeeTab] = useState('Overview');
   const [savingEmployee, setSavingEmployee] = useState(false);
   const [employeeFormOpen, setEmployeeFormOpen] = useState(false);
+  const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
+  const [uploadCenterOpen, setUploadCenterOpen] = useState(false);
+  const [hrUploadType, setHrUploadType] = useState('Employee dataset');
+  const [hrUploadAction, setHrUploadAction] = useState('Create new dataset');
   const [payrollFileName, setPayrollFileName] = useState('');
   const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
@@ -6682,6 +6686,73 @@ function HrWorkforceWorkspace({
     }
   }
 
+  async function editTimesheet(record: ModuleRecord) {
+    const workDate = window.prompt('Work date', String(record.metadata?.workDate ?? record.metadata?.date ?? attendanceDate)) ?? String(record.metadata?.workDate ?? record.metadata?.date ?? attendanceDate);
+    const projectCode = window.prompt('Project / client reference', String(record.metadata?.projectCode ?? 'MetroCare Migration')) ?? String(record.metadata?.projectCode ?? '');
+    const taskCode = window.prompt('Task', String(record.metadata?.taskCode ?? 'API Integration')) ?? String(record.metadata?.taskCode ?? '');
+    const startTime = window.prompt('Start time', String(record.metadata?.startTime ?? '09:00')) ?? String(record.metadata?.startTime ?? '09:00');
+    const endTime = window.prompt('End time', String(record.metadata?.endTime ?? '17:00')) ?? String(record.metadata?.endTime ?? '17:00');
+    const totalHours = Number(window.prompt('Total hours', String(record.metadata?.totalHours ?? record.metadata?.hours ?? 8)) ?? record.metadata?.totalHours ?? record.metadata?.hours ?? 8);
+    const overtimeHours = Number(window.prompt('Overtime hours', String(record.metadata?.overtimeHours ?? Math.max(totalHours - 8, 0))) ?? record.metadata?.overtimeHours ?? 0);
+    const notes = window.prompt('Notes', String(record.metadata?.notes ?? record.metadata?.note ?? '')) ?? String(record.metadata?.notes ?? '');
+    try {
+      await updateHrRecord(record, {
+        status: 'draft',
+        metadata: {
+          ...(record.metadata ?? {}),
+          workDate,
+          date: workDate,
+          projectCode,
+          taskCode,
+          startTime,
+          endTime,
+          totalHours,
+          hours: totalHours,
+          overtimeHours,
+          notes,
+          approvalStatus: 'draft',
+          payrollReady: false
+        }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Timesheet edit failed.');
+    }
+  }
+
+  async function deleteTimesheet(record: ModuleRecord) {
+    if (!window.confirm(`Delete ${record.title}?`)) return;
+    try {
+      await updateHrRecord(record, {
+        status: 'archived',
+        metadata: { ...(record.metadata ?? {}), archivedAt: new Date().toISOString(), approvalStatus: 'archived' }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Timesheet delete failed.');
+    }
+  }
+
+  async function resubmitTimesheet(record: ModuleRecord) {
+    try {
+      await updateHrRecord(record, {
+        status: 'submitted',
+        metadata: { ...(record.metadata ?? {}), approvalStatus: 'pending approval', submittedAt: new Date().toISOString(), payrollReady: false }
+      });
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Timesheet resubmit failed.');
+    }
+  }
+
+  function openEmployeeTimesheets() {
+    const employee = selectedEmployee ?? employees[0] ?? null;
+    if (!employee) {
+      setEmployeeFormOpen(true);
+      return;
+    }
+    setSelectedEmployeeId(employee.id);
+    setEmployeeWorkspaceId(employee.id);
+    setEmployeeTab('Timesheets');
+  }
+
   function exportPayrollTimesheet() {
     const rows = [
       ['Employee ID', 'Employee Name', 'Regular Hours', 'Overtime Hours', 'PTO Hours', 'Sick Leave Hours', 'Unpaid Hours', 'Gross Pay Estimate', 'Deductions', 'Tax Placeholder', 'Approval Status', 'Pay Period'],
@@ -6720,15 +6791,38 @@ function HrWorkforceWorkspace({
       }) ?? null;
       const duplicatePayrollEntries = payrollRecords.filter((record) => record.metadata?.fileName === file.name).length;
       const missingEmployeeDetection = attachAsPaystub && !inferredEmployee ? 1 : 0;
-      const title = attachAsPaystub && inferredEmployee ? `${inferredEmployee.title} paystub - ${file.name}` : `Payroll import - ${file.name}`;
-      await createHrRecord(attachAsPaystub ? 'paystub' : 'payroll', title, 'pending_validation', {
+      const datasetTypeToRecord: Record<string, string> = {
+        'Employee dataset': 'employee',
+        'Payroll dataset': 'payroll',
+        'Timesheet dataset': 'timesheet',
+        'PTO dataset': 'leave_request',
+        'Sick leave dataset': 'leave_request',
+        'Hiring dataset': 'hiring',
+        'Performance dataset': 'performance',
+        'Benefits dataset': 'document',
+        'Compliance dataset': 'document'
+      };
+      const recordType = attachAsPaystub ? 'paystub' : datasetTypeToRecord[hrUploadType] ?? 'payroll';
+      const title = attachAsPaystub && inferredEmployee ? `${inferredEmployee.title} paystub - ${file.name}` : `${hrUploadType} import - ${file.name}`;
+      await createHrRecord(recordType, title, 'pending_validation', {
         employeeRecordId: attachAsPaystub ? inferredEmployee?.id : null,
         employeeId: attachAsPaystub ? inferredEmployee?.metadata?.employeeId : null,
+        employeeName: inferredEmployee?.title ?? null,
         attachedEmployeeName: inferredEmployee?.title ?? null,
         fileName: file.name,
         fileType: file.name.split('.').pop()?.toLowerCase(),
         uploadedAt: new Date().toISOString(),
-        hrUploadType: attachAsPaystub ? 'paystub' : 'payroll_file',
+        hrUploadType: attachAsPaystub ? 'paystub' : hrUploadType,
+        datasetAction: hrUploadAction,
+        targetDataset: hrUploadType,
+        mergePreview: {
+          matchedRows: inferredEmployee ? 1 : 0,
+          missingRequiredFields: attachAsPaystub && !inferredEmployee ? ['employeeId'] : [],
+          duplicateEmployees: duplicateEmployeeIds.length,
+          invalidColumns: [],
+          unmappedColumns: [],
+          overwriteWarnings: hrUploadAction.includes('Replace') ? ['Existing rows may be overwritten after approval.'] : []
+        },
         validation: {
           duplicatePayrollDetection: duplicatePayrollEntries,
           missingEmployeeDetection,
@@ -6854,60 +6948,99 @@ function HrWorkforceWorkspace({
           </section>
         )}
 
-        <section className="hr-ai-panel">
-          <div>
-            <p className="eyebrow">HR AI insights</p>
-            <h2>Workforce risk monitor</h2>
-          </div>
-          {hrInsightItems().map((item) => (
-            <div className="ai-insight-chip" key={item}>
-              <strong>{item}</strong>
-              <span>Company-scoped HR intelligence</span>
+        <section className={`hr-ai-panel collapsible-risk-panel ${riskMonitorOpen ? 'open' : ''}`}>
+          <button className="quick-create-bar risk-monitor-trigger" type="button" onClick={() => setRiskMonitorOpen((open) => !open)}>
+            <div>
+              <p className="eyebrow">HR AI insights</p>
+              <h2>Workforce risk monitor</h2>
+              <span>{hrInsightItems().filter((item) => !/healthy|No |stable|complete|clear/i.test(item)).length} active signals. Click to review recommendations.</span>
             </div>
-          ))}
+            <strong>{riskMonitorOpen ? 'Collapse' : 'Expand'}</strong>
+          </button>
+          {riskMonitorOpen && (
+            <div className="risk-monitor-body">
+              {hrInsightItems().map((item) => {
+                const active = !/healthy|No |stable|complete|clear/i.test(item);
+                return (
+                  <div className={`ai-insight-chip ${active ? 'severity-warning' : 'severity-ok'}`} key={item}>
+                    <strong>{active ? 'Warning' : 'Stable'}: {item}</strong>
+                    <span>{active ? 'Recommendation: review the affected employee dataset and approval queue.' : 'Company-scoped HR intelligence'}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </section>
       </section>
 
-      <section className="hr-toolbar">
-        <label>
-          Upload payroll file
-          <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], false)} />
-        </label>
-        <label>
-          Attach paystub to selected employee
-          <input accept=".pdf,.csv,.xlsx,.xls,.json" type="file" disabled={!selectedEmployee} onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], true)} />
-        </label>
-        <button type="button" onClick={() => void addAttendance('timesheet')} disabled={!selectedEmployee}>Log timesheet</button>
+      <section className="hr-toolbar unified-hr-toolbar">
+        <div>
+          <p className="eyebrow">HR Actions</p>
+          <strong>Company HR operations</strong>
+        </div>
+        <button type="button" onClick={() => setUploadCenterOpen((open) => !open)}>Upload Dataset</button>
+        <button type="button" onClick={() => setEmployeeFormOpen(true)}>Add Employee</button>
+        <button type="button" onClick={openEmployeeTimesheets} disabled={!selectedEmployee}>Log Timesheet</button>
         <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>Request PTO</button>
         <button type="button" onClick={() => openLeaveWorkflow('sick')} disabled={!selectedEmployee}>Sick leave</button>
-        {canManageHr && <button type="button" onClick={() => exportHrReport('Employee')}>Employee report PDF</button>}
-        {canManageHr && <button type="button" onClick={() => exportHrExcel('Workforce')}>Export Excel</button>}
+        {canManageHr && <button type="button" onClick={() => exportHrExcel('Workforce')}>Export</button>}
+        {canManageHr && <button type="button" onClick={exportPayrollTimesheet}>Generate Payroll</button>}
       </section>
+      {uploadCenterOpen && (
+        <section className="hr-upload-center">
+          <div>
+            <p className="eyebrow">HR Dataset Upload Center</p>
+            <h2>Choose dataset action</h2>
+            <span>Files are classified before merge so Employee, Payroll, Timesheet, PTO, Sick Leave, Hiring, Performance, Benefits, and Compliance datasets stay separated.</span>
+          </div>
+          <div className="attendance-control-bar">
+            <label>Dataset type
+              <select value={hrUploadType} onChange={(event) => setHrUploadType(event.target.value)}>
+                {['Employee dataset', 'Payroll dataset', 'Timesheet dataset', 'PTO dataset', 'Sick leave dataset', 'Hiring dataset', 'Performance dataset', 'Benefits dataset', 'Compliance dataset'].map((type) => <option key={type}>{type}</option>)}
+              </select>
+            </label>
+            <label>Action
+              <select value={hrUploadAction} onChange={(event) => setHrUploadAction(event.target.value)}>
+                {['Create new dataset', 'Merge into existing dataset', 'Append rows', 'Replace dataset', 'Map columns manually', 'Preview before merge'].map((action) => <option key={action}>{action}</option>)}
+              </select>
+            </label>
+            <label>Upload file
+              <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], false)} />
+            </label>
+            <label>Attach paystub
+              <input accept=".pdf,.csv,.xlsx,.xls,.json" type="file" disabled={!selectedEmployee} onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], true)} />
+            </label>
+          </div>
+          <div className="dataset-merge-preview">
+            <strong>Merge preview</strong>
+            <span>Matched rows, missing required fields, duplicate employees, invalid columns, unmapped columns, and overwrite warnings are stored with the HR import record before approval.</span>
+            <div className="dataset-preview-strip">
+              <span>Target: {hrUploadType}</span>
+              <span>Action: {hrUploadAction}</span>
+              <span>Selected employee: {selectedEmployee?.title ?? 'None'}</span>
+            </div>
+          </div>
+        </section>
+      )}
       {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
 
       {route.type === 'timesheets' && (
-        <AttendanceOperationsWorkspace
-          assignShift={assignShift}
-          attendanceDate={attendanceDate}
-          attendanceRecords={attendanceRecords}
-          attendanceTab={attendanceTab}
-          canManage={canManageHr}
-          clockEmployee={clockEmployee}
-          employees={employees}
-          exportPayrollTimesheet={exportPayrollTimesheet}
-          leaveRequests={leaveRequests}
-          payPeriod={payPeriod}
-          saveTimeEntry={saveTimeEntry}
-          setAttendanceDate={setAttendanceDate}
-          setAttendanceTab={setAttendanceTab}
-          setPayPeriod={setPayPeriod}
-          setTimeEntryForm={setTimeEntryForm}
-          shiftRecords={shiftRecords}
-          submitWeeklyTimesheet={submitWeeklyTimesheet}
-          timeEntryForm={timeEntryForm}
-          updateTimesheetDecision={decideTimesheet}
-          weeklyHoursForEmployee={weeklyHoursForEmployee}
-        />
+        <section className="attendance-ops-workspace unified-timesheet-summary">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Unified Timesheet Workspace</p>
+              <h2>Manage timesheets inside each employee workspace</h2>
+              <span>Open an employee and use the Timesheets tab for date, project/task, hours, overtime, approval, and payroll status edits.</span>
+            </div>
+            <button type="button" onClick={openEmployeeTimesheets} disabled={!selectedEmployee}>Open selected employee timesheets</button>
+          </div>
+          <div className="hr-dashboard-grid compact-attendance-grid">
+            <div><span>Timesheet rows</span><strong>{attendanceRecords.filter((record) => record.status !== 'archived').length}</strong></div>
+            <div><span>Pending approval</span><strong>{attendanceRecords.filter((record) => String(record.metadata?.approvalStatus ?? record.status).includes('pending')).length}</strong></div>
+            <div><span>Overtime alerts</span><strong>{overtimeWarnings}</strong></div>
+            <div><span>Payroll period</span><strong>{payPeriod}</strong></div>
+          </div>
+        </section>
       )}
 
       <section className="hr-employee-table">
@@ -6958,6 +7091,31 @@ function HrWorkforceWorkspace({
           onArchive={() => void archiveEmployee(workspaceEmployee)}
           onBack={() => setEmployeeWorkspaceId('')}
           onDecideLeave={decideLeaveRequest}
+          onDeleteTimesheet={deleteTimesheet}
+          onEditTimesheet={editTimesheet}
+          onResubmitTimesheet={resubmitTimesheet}
+          onTimesheetDecision={decideTimesheet}
+          onCreateTimesheet={(employee) => {
+            setSelectedEmployeeId(employee.id);
+            setTimeEntryForm((current) => ({ ...current, employeeRecordId: employee.id }));
+            void createHrRecord('timesheet', `${employee.title} draft timesheet`, 'draft', {
+              employeeRecordId: employee.id,
+              employeeId: employee.metadata?.employeeId,
+              employeeName: employee.title,
+              workDate: attendanceDate,
+              date: attendanceDate,
+              projectCode: 'MetroCare Migration',
+              taskCode: 'API Integration',
+              workType: 'Project',
+              location: 'On-site',
+              totalHours: 0,
+              hours: 0,
+              overtimeHours: 0,
+              approvalStatus: 'draft',
+              payrollPeriod: payPeriod,
+              notes: 'Draft timesheet entry'
+            });
+          }}
           onEdit={() => void editEmployee(workspaceEmployee)}
           onToggleStatus={() => void updateHrRecord(workspaceEmployee, { status: workspaceEmployee.status === 'active' ? 'inactive' : 'active' })}
           payroll={workspaceEmployeePayroll}
@@ -7226,8 +7384,13 @@ function EmployeeWorkspaceModal({
   leaveRequests,
   onArchive,
   onBack,
+  onCreateTimesheet,
+  onDeleteTimesheet,
   onDecideLeave,
+  onEditTimesheet,
   onEdit,
+  onResubmitTimesheet,
+  onTimesheetDecision,
   onToggleStatus,
   payroll,
   setTab,
@@ -7241,8 +7404,13 @@ function EmployeeWorkspaceModal({
   leaveRequests: ModuleRecord[];
   onArchive: () => void;
   onBack: () => void;
+  onCreateTimesheet: (employee: ModuleRecord) => void;
+  onDeleteTimesheet: (record: ModuleRecord) => void;
   onDecideLeave: (request: ModuleRecord, decision: 'approved' | 'rejected') => void;
+  onEditTimesheet: (record: ModuleRecord) => void;
   onEdit: () => void;
+  onResubmitTimesheet: (record: ModuleRecord) => void;
+  onTimesheetDecision: (record: ModuleRecord, decision: 'approved' | 'rejected') => void;
   onToggleStatus: () => void;
   payroll: ModuleRecord[];
   setTab: (tab: string) => void;
@@ -7277,7 +7445,12 @@ function EmployeeWorkspaceModal({
           documents={documents}
           employee={employee}
           leaveRequests={leaveRequests}
+          onCreateTimesheet={onCreateTimesheet}
+          onDeleteTimesheet={onDeleteTimesheet}
           onDecideLeave={onDecideLeave}
+          onEditTimesheet={onEditTimesheet}
+          onResubmitTimesheet={onResubmitTimesheet}
+          onTimesheetDecision={onTimesheetDecision}
           payroll={payroll}
           tab={tab}
         />
@@ -7293,7 +7466,12 @@ function EmployeeProfileTab({
   documents,
   employee,
   leaveRequests,
+  onCreateTimesheet,
+  onDeleteTimesheet,
   onDecideLeave,
+  onEditTimesheet,
+  onResubmitTimesheet,
+  onTimesheetDecision,
   payroll,
   tab
 }: {
@@ -7303,7 +7481,12 @@ function EmployeeProfileTab({
   documents: ModuleRecord[];
   employee: ModuleRecord;
   leaveRequests: ModuleRecord[];
+  onCreateTimesheet: (employee: ModuleRecord) => void;
+  onDeleteTimesheet: (record: ModuleRecord) => void;
   onDecideLeave: (request: ModuleRecord, decision: 'approved' | 'rejected') => void;
+  onEditTimesheet: (record: ModuleRecord) => void;
+  onResubmitTimesheet: (record: ModuleRecord) => void;
+  onTimesheetDecision: (record: ModuleRecord, decision: 'approved' | 'rejected') => void;
   payroll: ModuleRecord[];
   tab: string;
 }) {
@@ -7312,7 +7495,18 @@ function EmployeeProfileTab({
     return <EmployeeRecordList title="Payroll and paystubs" records={payroll} empty="No payroll records or paystubs attached yet." />;
   }
   if (tab === 'Timesheets') {
-    return <EmployeeRecordList title="Timesheets, PTO, sick leave, and overtime" records={attendance} empty="No timesheet or PTO records yet." />;
+    return (
+      <TimesheetRecordList
+        canManage={canManage}
+        employee={employee}
+        onCreate={onCreateTimesheet}
+        onDelete={onDeleteTimesheet}
+        onEdit={onEditTimesheet}
+        onResubmit={onResubmitTimesheet}
+        onTimesheetDecision={onTimesheetDecision}
+        records={attendance.filter((record) => record.status !== 'archived')}
+      />
+    );
   }
   if (tab === 'PTO') {
     return <LeaveRequestList canManage={canManage} onDecide={onDecideLeave} records={leaveRequests} />;
@@ -7413,6 +7607,63 @@ function EmployeeRecordList({ empty, records, title }: { empty: string; records:
         </div>
       ))}
       {!records.length && <p className="muted">{empty}</p>}
+    </div>
+  );
+}
+
+function TimesheetRecordList({
+  canManage,
+  employee,
+  onCreate,
+  onDelete,
+  onEdit,
+  onResubmit,
+  onTimesheetDecision,
+  records
+}: {
+  canManage: boolean;
+  employee: ModuleRecord;
+  onCreate: (employee: ModuleRecord) => void;
+  onDelete: (record: ModuleRecord) => void;
+  onEdit: (record: ModuleRecord) => void;
+  onResubmit: (record: ModuleRecord) => void;
+  onTimesheetDecision: (record: ModuleRecord, decision: 'approved' | 'rejected') => void;
+  records: ModuleRecord[];
+}) {
+  return (
+    <div className="employee-tab-panel timesheet-tab-panel">
+      <div className="panel-header">
+        <div>
+          <h3>Timesheets</h3>
+          <p className="muted">Edit work date, project/task, hours, overtime, PTO, approval, and payroll readiness in one employee workspace.</p>
+        </div>
+        <button type="button" onClick={() => onCreate(employee)}>Add draft entry</button>
+      </div>
+      <div className="timesheet-entry-list">
+        {records.map((record) => (
+          <article className="timesheet-entry-card" key={record.id}>
+            <div>
+              <strong>{String(record.metadata?.workDate ?? record.metadata?.date ?? 'No date')}</strong>
+              <span>{String(record.metadata?.projectCode ?? 'No project')} / {String(record.metadata?.taskCode ?? 'No task')} | {String(record.metadata?.workType ?? 'Regular')}</span>
+            </div>
+            <div className="dataset-detail-grid compact">
+              <div><span>Total hours</span><strong>{String(record.metadata?.totalHours ?? record.metadata?.hours ?? 0)}</strong></div>
+              <div><span>Overtime</span><strong>{String(record.metadata?.overtimeHours ?? 0)}</strong></div>
+              <div><span>Approval</span><strong>{String(record.metadata?.approvalStatus ?? record.status)}</strong></div>
+              <div><span>Payroll</span><strong>{record.metadata?.payrollReady ? 'Ready' : 'Not ready'}</strong></div>
+            </div>
+            <p className="muted">{String(record.metadata?.notes ?? record.metadata?.note ?? 'No notes')}</p>
+            <div className="inline-actions">
+              <button type="button" onClick={() => onEdit(record)}>Edit hours/project</button>
+              <button className="ghost-button compact" type="button" onClick={() => onResubmit(record)}>Save draft / resubmit</button>
+              {canManage && <button className="ghost-button compact" type="button" onClick={() => onTimesheetDecision(record, 'approved')}>Approve</button>}
+              {canManage && <button className="ghost-button compact" type="button" onClick={() => onTimesheetDecision(record, 'rejected')}>Reject</button>}
+              <button className="ghost-button compact danger" type="button" onClick={() => onDelete(record)}>Delete</button>
+            </div>
+          </article>
+        ))}
+        {!records.length && <p className="muted">No timesheet entries yet. Add a draft entry to start project-based time tracking.</p>}
+      </div>
     </div>
   );
 }
