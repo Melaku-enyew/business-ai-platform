@@ -5,7 +5,7 @@ import { DatasetToolbar } from './components/hr/DatasetToolbar';
 import { EmployeeGrid, EmployeeGridRow } from './components/hr/EmployeeGrid';
 import { HRWorkspaceFrame } from './components/hr/HRWorkspace';
 import { TimesheetWorkspaceSummary } from './components/hr/TimesheetWorkspace';
-import { UploadCenter } from './components/hr/UploadCenter';
+import { UploadCenter, UploadStep } from './components/hr/UploadCenter';
 
 type InsightResponse = {
   metrics: Array<{ label: string; value: number; trend: string }>;
@@ -6261,7 +6261,7 @@ function HrWorkforceWorkspace({
   const [hrUploadType, setHrUploadType] = useState('Employee');
   const [hrUploadAction, setHrUploadAction] = useState('Create new dataset');
   const [stagedHrFile, setStagedHrFile] = useState<File | null>(null);
-  const [hrUploadStep, setHrUploadStep] = useState<'upload' | 'preview' | 'action' | 'validate' | 'approve' | 'process' | 'publish'>('upload');
+  const [hrUploadStep, setHrUploadStep] = useState<UploadStep>('upload');
   const [selectedHrDatasetId, setSelectedHrDatasetId] = useState('');
   const [payrollFileName, setPayrollFileName] = useState('');
   const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
@@ -6903,7 +6903,12 @@ function HrWorkforceWorkspace({
   }
 
   function stageHrUpload(file: File | null) {
-    if (!file) return;
+    if (!file) {
+      setStagedHrFile(null);
+      setPayrollFileName('');
+      setHrUploadStep('upload');
+      return;
+    }
     setStagedHrFile(file);
     setPayrollFileName(file.name);
     setHrUploadStep('preview');

@@ -3181,6 +3181,17 @@ th {
   color: var(--accent-text);
 }
 
+.hr-upload-steps button.completed {
+  border-color: rgba(22, 163, 74, 0.32);
+  background: rgba(22, 163, 74, 0.1);
+  color: #166534;
+}
+
+.hr-upload-steps button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
 .hr-report-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
@@ -3350,6 +3361,25 @@ th {
 
 .compact-import-center {
   margin-bottom: 10px;
+}
+
+.import-status-panel {
+  border-color: rgba(24, 119, 242, 0.22);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 250, 252, 0.92));
+}
+
+.import-preview-grid {
+  max-height: 360px;
+  margin-top: 8px;
+}
+
+.import-preview-grid th button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0;
 }
 
 .compact-module-launcher {
