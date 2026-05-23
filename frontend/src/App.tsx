@@ -5836,7 +5836,7 @@ function ModuleWorkspacePage({
             Retry upload
           </button>
         )}
-      </article> : (
+      </article> : route.module !== 'hr' ? (
         <article className="panel module-dataset-ribbon">
           <div>
             <p className="eyebrow">{route.moduleLabel} datasets</p>
@@ -5849,8 +5849,8 @@ function ModuleWorkspacePage({
             <span>{selectedCompanyName}</span>
           </div>
         </article>
-      )}
-      <article className="panel">
+      ) : null}
+      {route.module !== 'hr' && <article className="panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Single dataset workspace</p>
@@ -5991,7 +5991,7 @@ function ModuleWorkspacePage({
           ))}
           {!moduleDatasets.length && <EmptyState title="Upload your first dataset to begin processing." copy={pipelineConfig.emptyState} />}
         </div>
-      </article>
+      </article>}
       {isDataProcessingWorkspace ? (
         <article className="panel routed-workspace compact-tool-panel">
           <div className="panel-header">
@@ -6258,6 +6258,7 @@ function HrWorkforceWorkspace({
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [uploadCenterOpen, setUploadCenterOpen] = useState(false);
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
+  const [activityCleared, setActivityCleared] = useState(false);
   const [hrUploadType, setHrUploadType] = useState('Employee');
   const [hrUploadAction, setHrUploadAction] = useState('Create new dataset');
   const [stagedHrFile, setStagedHrFile] = useState<File | null>(null);
@@ -6307,15 +6308,128 @@ function HrWorkforceWorkspace({
   const ptoRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'pto').length;
   const sickRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'sick').length;
   const pendingHrApprovals = leaveRequests.filter((record) => record.status === 'pending_approval');
-  const hrDatasets = asArray(datasets)
-    .filter((dataset) => (!selectedCompanyId || dataset.companyId === selectedCompanyId) && classifyDatasetModule(dataset) === 'HR & Workforce')
-    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+  function hrDatasetFromRows(label: string, path: string, rows: Record<string, string>[]): Dataset {
+    const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+    const uploadedAt = new Date(Math.max(0, ...records.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString();
+    return normalizeDatasetForClient({
+      id: `hr-virtual-${label.toLowerCase().replace(/\s+/g, '-')}`,
+      companyId: selectedCompanyId,
+      fileName: `${label} Dataset`,
+      fileType: 'dataset',
+      uploadedAt,
+      rows: rows.length,
+      columns: headers.length,
+      headers,
+      preview: rows,
+      records: rows,
+      previewRows: rows,
+      chartColumn: headers[0] ?? 'status',
+      labelColumn: headers[0] ?? 'name',
+      chart: [],
+      numericSummary: [],
+      insights: [`${label} workspace dataset is linked to ${path}.`],
+      cleanupStatus: rows.length ? 'active' : 'empty',
+      status: rows.length ? 'active' : 'empty',
+      ownerName: user?.name ?? 'HR workspace',
+      ownerEmail: user?.email
+    } as Dataset);
+  }
+
+  const virtualHrDatasets = [
+    hrDatasetFromRows('Employee', '/hr/employees', employees.map((employee) => ({
+      employeeId: String(employee.metadata?.employeeId ?? ''),
+      name: employee.title,
+      department: String(employee.metadata?.department ?? ''),
+      title: String(employee.metadata?.title ?? ''),
+      status: employee.status,
+      manager: String(employee.metadata?.manager ?? ''),
+      email: String(employee.metadata?.email ?? ''),
+      phone: String(employee.metadata?.phone ?? ''),
+      hireDate: String(employee.metadata?.hireDate ?? ''),
+      employmentType: String(employee.metadata?.employmentType ?? '')
+    }))),
+    hrDatasetFromRows('Timesheet', '/hr/timesheets', attendanceRecords.map((record) => ({
+      employeeId: String(record.metadata?.employeeId ?? ''),
+      employeeName: String(record.metadata?.employeeName ?? record.title),
+      workDate: String(record.metadata?.workDate ?? record.metadata?.date ?? ''),
+      projectCode: String(record.metadata?.projectCode ?? ''),
+      taskCode: String(record.metadata?.taskCode ?? ''),
+      totalHours: String(record.metadata?.totalHours ?? record.metadata?.hours ?? ''),
+      overtimeHours: String(record.metadata?.overtimeHours ?? ''),
+      approvalStatus: String(record.metadata?.approvalStatus ?? record.status),
+      payrollPeriod: String(record.metadata?.payrollPeriod ?? '')
+    }))),
+    hrDatasetFromRows('Payroll', '/hr/payroll', payrollRecords.map((record) => ({
+      employeeId: String(record.metadata?.employeeId ?? ''),
+      employeeName: String(record.metadata?.employeeName ?? record.title),
+      payrollPeriod: String(record.metadata?.payrollPeriod ?? ''),
+      fileName: String(record.metadata?.fileName ?? ''),
+      status: record.status,
+      amount: String(record.amount ?? '')
+    }))),
+    hrDatasetFromRows('PTO', '/hr/leave-management', leaveRequests.filter((record) => record.metadata?.leaveType === 'pto').map((record) => ({
+      employeeId: String(record.metadata?.employeeId ?? ''),
+      employeeName: String(record.metadata?.employeeName ?? record.title),
+      startDate: String(record.metadata?.startDate ?? ''),
+      endDate: String(record.metadata?.endDate ?? ''),
+      requestedHours: String(record.metadata?.requestedHours ?? ''),
+      manager: String(record.metadata?.manager ?? ''),
+      status: record.status
+    }))),
+    hrDatasetFromRows('Sick Leave', '/hr/leave-management', leaveRequests.filter((record) => record.metadata?.leaveType === 'sick').map((record) => ({
+      employeeId: String(record.metadata?.employeeId ?? ''),
+      employeeName: String(record.metadata?.employeeName ?? record.title),
+      startDate: String(record.metadata?.startDate ?? ''),
+      endDate: String(record.metadata?.endDate ?? ''),
+      requestedHours: String(record.metadata?.requestedHours ?? ''),
+      manager: String(record.metadata?.manager ?? ''),
+      status: record.status
+    }))),
+    hrDatasetFromRows('Benefits', '/hr/datasets', documents.map((record) => ({
+      employeeId: String(record.metadata?.employeeId ?? ''),
+      employeeName: String(record.metadata?.employeeName ?? record.title),
+      documentType: record.recordType,
+      fileName: String(record.metadata?.fileName ?? record.title),
+      status: record.status
+    }))),
+    hrDatasetFromRows('Hiring', '/hr/datasets', records.filter((record) => record.recordType === 'hiring').map((record) => ({
+      candidate: record.title,
+      status: record.status,
+      owner: String(record.ownerEmail ?? ''),
+      updatedAt: record.updatedAt
+    }))),
+    hrDatasetFromRows('Performance', '/hr/datasets', records.filter((record) => record.recordType === 'performance').map((record) => ({
+      employeeName: record.title,
+      status: record.status,
+      notes: String(record.metadata?.notes ?? ''),
+      updatedAt: record.updatedAt
+    })))
+  ];
+  function hrDatasetKind(dataset: Dataset) {
+    const name = dataset.fileName.toLowerCase();
+    if (name.includes('timesheet') || name.includes('attendance')) return 'Timesheet';
+    if (name.includes('payroll') || name.includes('paystub')) return 'Payroll';
+    if (name.includes('pto')) return 'PTO';
+    if (name.includes('sick')) return 'Sick Leave';
+    if (name.includes('benefit') || name.includes('document')) return 'Benefits';
+    if (name.includes('hiring')) return 'Hiring';
+    if (name.includes('performance')) return 'Performance';
+    return 'Employee';
+  }
+  const realHrDatasets = asArray(datasets)
+    .filter((dataset) => (!selectedCompanyId || dataset.companyId === selectedCompanyId) && classifyDatasetModule(dataset) === 'HR & Workforce');
+  const hrDatasets = virtualHrDatasets.map((virtualDataset) => {
+    const realDataset = realHrDatasets.find((dataset) => hrDatasetKind(dataset) === hrDatasetKind(virtualDataset));
+    if (!realDataset) return virtualDataset;
+    const virtualRows = datasetPreview(virtualDataset);
+    return realDataset.rows || !virtualRows.length ? realDataset : { ...virtualDataset, id: realDataset.id, fileName: realDataset.fileName };
+  });
   const selectedHrDataset = hrDatasets.find((dataset) => dataset.id === selectedHrDatasetId) ?? hrDatasets[0] ?? null;
   const employeeDataset = hrDatasets.find((dataset) => /employee/i.test(dataset.fileName) || datasetHeaders(dataset).some((header) => /employee/i.test(header))) ?? selectedHrDataset;
   const hrDatasetSummaries: HrDatasetSummary[] = hrDatasets.map((dataset) => ({
     id: dataset.id,
     fileName: dataset.fileName,
-    type: dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').split(/[-_\s]/)[0] || 'HR',
+    type: hrDatasetKind(dataset),
     rows: dataset.rows,
     status: dataset.cleanupStatus ?? dataset.status ?? 'draft',
     updatedAt: dataset.uploadedAt
@@ -6378,6 +6492,62 @@ function HrWorkforceWorkspace({
     setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
     if (payload.dataset) setDatasets((current) => [normalizeDatasetForClient(payload.dataset as Dataset), ...current.filter((dataset) => dataset.id !== payload.dataset?.id)]);
     return payload.record;
+  }
+
+  async function saveHrDatasetRows(dataset: Dataset, rows: Record<string, string>[]) {
+    if (!dataset.id.startsWith('hr-virtual-')) {
+      await onSaveDatasetRows(dataset, rows);
+      return;
+    }
+    const kind = hrDatasetKind(dataset);
+    if (kind !== 'Employee') {
+      setError(`${kind} rows are editable after upload/publish. Use the ${kind} workspace actions to add new operational records.`);
+      return;
+    }
+    for (let index = 0; index < rows.length; index += 1) {
+      const row = rows[index];
+      const existing = employees[index];
+      const metadata = {
+        employeeId: row.employeeId ?? row.employee_id ?? '',
+        email: row.email ?? '',
+        phone: row.phone ?? '',
+        department: row.department ?? '',
+        title: row.title ?? '',
+        manager: row.manager ?? '',
+        hireDate: row.hireDate ?? '',
+        employmentType: row.employmentType ?? ''
+      };
+      if (existing) {
+        await updateHrRecord(existing, {
+          title: row.name || row.employeeName || existing.title,
+          status: row.status || existing.status,
+          metadata: { ...(existing.metadata ?? {}), ...metadata }
+        });
+      } else if (row.name || row.employeeName || row.employeeId) {
+        await createHrRecord('employee', row.name || row.employeeName || row.employeeId || 'New employee', row.status || 'active', metadata);
+      }
+    }
+  }
+
+  function runHrDatasetAction(dataset: Dataset, action: string) {
+    setSelectedHrDatasetId(dataset.id);
+    const kind = hrDatasetKind(dataset);
+    const virtual = dataset.id.startsWith('hr-virtual-');
+    if (virtual) {
+      if (action === 'open' || action === 'preview' || action === 'edit' || action === 'query') {
+        navigate(kind === 'Timesheet' ? '/hr/timesheets' : kind === 'Payroll' ? '/hr/payroll' : kind === 'PTO' || kind === 'Sick Leave' ? '/hr/leave-management' : kind === 'Employee' ? '/hr/employees' : '/hr/datasets');
+        return;
+      }
+      if (action === 'clean' || action === 'archive' || action === 'delete') {
+        setError(`${kind} Dataset is generated from HR records. Clean or archive the underlying records in the linked workspace.`);
+        return;
+      }
+      if (action === 'approve') {
+        setError(`${kind} Dataset has no pending import. Upload or edit rows before approval.`);
+        return;
+      }
+    }
+    onDatasetAction(dataset, action);
   }
 
   async function saveEmployee(event: FormEvent<HTMLFormElement>) {
@@ -6993,9 +7163,9 @@ function HrWorkforceWorkspace({
       <DatasetToolbar
         canManage={canManageHr}
         onAddEmployee={() => { setEmployeeFormOpen(true); navigate('/hr/employees'); }}
-        onApprove={() => activeEmployeeDataset && onDatasetAction(activeEmployeeDataset, 'approve')}
+        onApprove={() => activeEmployeeDataset && runHrDatasetAction(activeEmployeeDataset, 'approve')}
         onBulk={() => navigate('/hr/datasets')}
-        onEdit={() => activeEmployeeDataset && onDatasetAction(activeEmployeeDataset, 'edit')}
+        onEdit={() => activeEmployeeDataset && runHrDatasetAction(activeEmployeeDataset, 'edit')}
         onExport={exportPayrollTimesheet}
         onReports={() => navigate('/hr/reports')}
         onUpload={() => { setUploadCenterOpen(true); navigate('/hr/datasets'); }}
@@ -7020,6 +7190,63 @@ function HrWorkforceWorkspace({
           </div>
         ))}
       </div>}
+
+      {activeHrWorkspace === 'overview' && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">All HR datasets</p>
+              <h2>Dataset command cards</h2>
+              <span>Every HR workspace has its own dataset. Click a card to open and edit the associated workspace.</span>
+            </div>
+          </div>
+          <div className="hr-dataset-card-grid">
+            {hrDatasets.map((dataset) => {
+              const path = datasetInsights(dataset)[0]?.match(/linked to ([^.]+)/)?.[1] ?? '/hr/datasets';
+              return (
+                <button className="hr-dataset-command-card" key={dataset.id} type="button" onClick={() => { setSelectedHrDatasetId(dataset.id); navigate(path); }}>
+                  <span className={`status-pill ${String(dataset.cleanupStatus ?? dataset.status ?? 'empty').replace(/\s+/g, '-')}`}>{dataset.cleanupStatus ?? dataset.status ?? 'empty'}</span>
+                  <strong>{hrDatasetKind(dataset)} Dataset</strong>
+                  <small>{dataset.rows.toLocaleString()} rows | {dataset.columns.toLocaleString()} columns</small>
+                  <em>{path.replace('/hr/', '').replace('-', ' ') || 'overview'} workspace</em>
+                </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {activeHrWorkspace === 'overview' && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Live activity</p>
+              <h2>One-card action center</h2>
+              <span>Counts by HR area with direct fix paths for missing or risky records.</span>
+            </div>
+            <button className="ghost-button compact" type="button" onClick={() => setActivityCleared(true)}>Clear activity</button>
+          </div>
+          <div className="hr-live-activity-grid">
+            {[
+              ['Employees missing IDs', employeesMissingIds, '/hr/employees'],
+              ['Pending PTO', ptoRequests, '/hr/leave-management'],
+              ['Pending sick leave', sickRequests, '/hr/leave-management'],
+              ['Overtime warnings', overtimeWarnings, '/hr/timesheets'],
+              ['Missing paystubs', missingPaystubs, '/hr/payroll'],
+              ['Pending approvals', pendingHrApprovals.length, '/hr/approvals']
+            ].map(([label, count, path]) => {
+              const visibleCount = activityCleared ? 0 : Number(count);
+              return (
+              <button key={String(label)} type="button" onClick={() => navigate(String(path))}>
+                <strong>{visibleCount}</strong>
+                <span>{label}</span>
+                <small>{visibleCount ? 'Open workspace to fix' : 'Healthy'}</small>
+              </button>
+              );
+            })}
+          </div>
+        </section>
+      )}
 
       {activeHrWorkspace === 'employees' && <section className="hr-operations-grid focused-hr-workspace">
         {canManageHr ? <section className={`hr-quick-create ${employeeFormOpen ? 'open' : ''}`}>
@@ -7243,7 +7470,7 @@ function HrWorkforceWorkspace({
               const dataset = hrDatasets.find((entry) => entry.id === datasetId);
               if (!dataset) return;
               setSelectedHrDatasetId(dataset.id);
-              onDatasetAction(dataset, action === 'open' ? 'preview' : action);
+              runHrDatasetAction(dataset, action === 'open' ? 'open' : action);
             }}
             onOpen={setSelectedHrDatasetId}
           />
@@ -7262,13 +7489,13 @@ function HrWorkforceWorkspace({
                   ['query', 'Query Dataset'],
                   ['validate', 'Validate'],
                   ['normalize', 'Normalize'],
-                  ['clean', 'Clean'],
+                  ['clean', 'Clean Dataset'],
                   ['approve', 'Approve'],
                   ['export', 'Export'],
                   ['archive', 'Archive'],
                   ['delete', 'Delete']
                 ].map(([action, label]) => (
-                  <button className={action === 'delete' ? 'ghost-button compact danger' : 'ghost-button compact'} key={action} type="button" onClick={() => onDatasetAction(selectedHrDataset, action)}>
+                  <button className={action === 'delete' ? 'ghost-button compact danger' : 'ghost-button compact'} key={action} type="button" onClick={() => runHrDatasetAction(selectedHrDataset, action)}>
                     {label}
                   </button>
                 ))}
@@ -7308,7 +7535,7 @@ function HrWorkforceWorkspace({
                 canEdit={canManageHr}
                 rows={activeDatasetRows as EmployeeGridRow[]}
                 onRowsChange={(rows) => {
-                  void onSaveDatasetRows(activeEmployeeDataset, rows);
+                  void saveHrDatasetRows(activeEmployeeDataset, rows);
                 }}
               />
               {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}

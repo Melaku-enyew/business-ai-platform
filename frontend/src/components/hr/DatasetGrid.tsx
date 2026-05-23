@@ -35,7 +35,7 @@ export function DatasetGrid({ activeDatasetId, datasets, onAction, onOpen }: Dat
           <span className={`status-pill ${dataset.status.replace(/\s+/g, '-')}`}>{dataset.status}</span>
           <span>{new Date(dataset.updatedAt).toLocaleString()}</span>
           <div className="inline-actions">
-            {['Open', 'Edit', 'Approve', 'Export', 'Archive'].map((action) => (
+            {['Open', 'Edit', 'Clean', 'Approve', 'Export', 'Archive'].map((action) => (
               <button className="ghost-button compact" key={action} type="button" onClick={() => onAction(dataset.id, action.toLowerCase())}>
                 {action}
               </button>

@@ -3268,6 +3268,69 @@ th {
   text-align: center;
 }
 
+.hr-dataset-card-grid,
+.hr-live-activity-grid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.hr-dataset-command-card,
+.hr-live-activity-grid button {
+  display: grid;
+  gap: 7px;
+  min-height: 118px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, var(--panel), var(--panel-strong));
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+  color: var(--text);
+  cursor: pointer;
+  padding: 13px;
+  text-align: left;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.hr-dataset-command-card:hover,
+.hr-live-activity-grid button:hover {
+  border-color: rgba(24, 119, 242, 0.42);
+  box-shadow: 0 16px 32px rgba(15, 23, 42, 0.1);
+  transform: translateY(-1px);
+}
+
+.hr-dataset-command-card strong,
+.hr-live-activity-grid strong {
+  color: var(--heading);
+  font-size: 18px;
+  font-weight: 950;
+  line-height: 1.15;
+}
+
+.hr-dataset-command-card small,
+.hr-live-activity-grid small {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 850;
+}
+
+.hr-dataset-command-card em {
+  color: var(--accent-text);
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 900;
+  text-transform: capitalize;
+}
+
+.hr-live-activity-grid button {
+  min-height: 104px;
+}
+
+.hr-live-activity-grid span {
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 900;
+}
+
 .hr-inline-grid {
   display: grid;
   gap: 10px;
