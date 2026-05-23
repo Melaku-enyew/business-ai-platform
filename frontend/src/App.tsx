@@ -2743,7 +2743,8 @@ export function App() {
         )}
 
         {location.pathname !== '/' ? (
-          <RoutedPages
+          <WorkspaceErrorBoundary label="Application Route">
+            <RoutedPages
             apiFetch={apiFetch}
             auditLogs={auditLogs}
             canManage={canManageUsers(user)}
@@ -2783,7 +2784,8 @@ export function App() {
             user={user}
             uploadDataset={uploadDataset}
             workspaceAction={workspaceAction}
-          />
+            />
+          </WorkspaceErrorBoundary>
         ) : currentView === 'settings' ? (
           <section className="settings-grid">
             <article className="panel profile-panel">
@@ -3143,7 +3145,8 @@ export function App() {
           </section>
         ) : (
           <>
-            <EnterpriseCockpit
+            <WorkspaceErrorBoundary label="Dashboard Intelligence Hub">
+              <EnterpriseCockpit
               activeCleanedDataset={activeCleanedDataset}
               activeDataset={activeDataset}
               canManageUsers={canManageUsers(user)}
@@ -3185,7 +3188,8 @@ export function App() {
               uploadState={uploadState}
               user={user}
               workflows={workflows}
-            />
+              />
+            </WorkspaceErrorBoundary>
             <div className="legacy-dashboard-hidden">
             <section className="panel ops-command-center">
               <div className="panel-header">
@@ -3844,11 +3848,11 @@ function EnterpriseCockpit({
   const selectedRows = selectedDashboardDataset ? datasetPreview(selectedDashboardDataset) : [];
   const selectedHeaders = selectedDashboardDataset ? datasetHeaders(selectedDashboardDataset).slice(0, 6) : [];
   const selectedDuplicates = selectedDashboardDataset ? findDuplicateRows(selectedRows).length : 0;
-  const selectedMissing = selectedRows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+  const selectedMissing = missingValueCount(selectedRows);
   function datasetHealth(dataset: Dataset) {
     const rows = datasetPreview(dataset);
     const duplicates = findDuplicateRows(rows).length;
-    const missing = rows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+    const missing = missingValueCount(rows);
     if (/pending|approval/i.test(String(dataset.cleanupStatus ?? dataset.status ?? dataset.pipelineStatus ?? ''))) return 'Approval pending';
     if (duplicates) return 'Duplicate rows';
     if (missing) return 'Missing data';
@@ -3859,7 +3863,7 @@ function EnterpriseCockpit({
     if (dataset.id.startsWith('generated-')) {
       const headers = datasetHeaders(dataset);
       const rows = datasetPreview(dataset);
-      downloadText([headers, ...rows.map((row) => headers.map((header) => String(row[header] ?? '')))].map((row) => row.map(csvEscape).join(',')).join('\n'), `${dataset.fileName.toLowerCase().replace(/\s+/g, '-')}.csv`, 'text/csv');
+      downloadText([headers, ...rows.map((row) => headers.map((header) => String(asObject(row)[header] ?? '')))].map((row) => row.map(csvEscape).join(',')).join('\n'), `${dataset.fileName.toLowerCase().replace(/\s+/g, '-')}.csv`, 'text/csv');
       return;
     }
     downloadDatasetExport(dataset);
@@ -3935,7 +3939,7 @@ function EnterpriseCockpit({
               <thead><tr>{selectedHeaders.map((header) => <th key={header}>{header}</th>)}</tr></thead>
               <tbody>
                 {selectedRows.slice(0, 4).map((row, index) => (
-                  <tr key={`${selectedDashboardDataset.id}-${index}`}>{selectedHeaders.map((header) => <td key={header}>{String(row[header] ?? '') || 'Not set'}</td>)}</tr>
+                  <tr key={`${selectedDashboardDataset.id}-${index}`}>{selectedHeaders.map((header) => <td key={header}>{String(asObject(row)[header] ?? '') || 'Not set'}</td>)}</tr>
                 ))}
                 {!selectedRows.length && <tr><td colSpan={Math.max(selectedHeaders.length, 1)}>No preview rows yet.</td></tr>}
               </tbody>
@@ -4389,7 +4393,9 @@ function asObject(value: unknown): Record<string, unknown> {
 
 function asRecordArray(value: unknown): Record<string, string>[] {
   return Array.isArray(value)
-    ? value.filter((entry): entry is Record<string, string> => Boolean(entry) && typeof entry === 'object')
+    ? value
+      .filter((entry): entry is Record<string, unknown> => Boolean(entry) && typeof entry === 'object')
+      .map((entry) => Object.fromEntries(Object.entries(entry).map(([key, item]) => [key, String(item ?? '')])))
     : [];
 }
 
@@ -4398,8 +4404,24 @@ function finiteNumber(value: unknown, fallback = 0) {
   return Number.isFinite(number) ? number : fallback;
 }
 
+function fixedNumber(value: unknown, digits = 2) {
+  return finiteNumber(value).toFixed(digits);
+}
+
+function money(value: unknown, digits = 2) {
+  return `$${fixedNumber(value, digits)}`;
+}
+
 function displayNumber(value: number | null | undefined) {
   return finiteNumber(value).toLocaleString();
+}
+
+function recordValues(row: unknown) {
+  return Object.values(asObject(row));
+}
+
+function missingValueCount(rows: Array<Record<string, string>>) {
+  return rows.reduce((total, row) => total + recordValues(row).filter((value) => !String(value ?? '').trim()).length, 0);
 }
 
 function datasetChart(dataset: Dataset | null | undefined) {
@@ -6452,8 +6474,8 @@ function HrWorkforceWorkspace({
   }
 
   function employeePayrollProfile(employee: ModuleRecord) {
-    const salary = Number(employee.metadata?.salary ?? employee.amount ?? 0);
-    const payRate = Number(employee.metadata?.payRate ?? (salary > 1000 ? salary / 2080 : salary || 25));
+    const salary = finiteNumber(employee.metadata?.salary ?? employee.amount ?? 0);
+    const payRate = finiteNumber(employee.metadata?.payRate ?? (salary > 1000 ? salary / 2080 : salary || 25), 25);
     const taxType = String(employee.metadata?.taxType ?? employee.metadata?.taxDetails ?? '').toLowerCase().includes('1099') ? '1099' : 'W2';
     return {
       payType: String(employee.metadata?.payType ?? (salary > 1000 ? 'Salary' : 'Hourly')),
@@ -6468,10 +6490,11 @@ function HrWorkforceWorkspace({
 
   function calculatePaystub(employee: ModuleRecord, sourceRecords: ModuleRecord[]) {
     const profile = employeePayrollProfile(employee);
-    const regularHours = sourceRecords.reduce((sum, record) => sum + Math.min(Number(record.metadata?.totalHours ?? record.metadata?.hours ?? 0), 40), 0);
-    const overtimeHours = sourceRecords.reduce((sum, record) => sum + Number(record.metadata?.overtimeHours ?? 0), 0);
-    const ptoHours = sourceRecords.reduce((sum, record) => sum + Number(record.metadata?.PTOHours ?? 0), 0);
-    const sickHours = sourceRecords.reduce((sum, record) => sum + Number(record.metadata?.sickLeaveHours ?? 0), 0);
+    const safeSourceRecords = asArray(sourceRecords);
+    const regularHours = safeSourceRecords.reduce((sum, record) => sum + Math.min(finiteNumber(record.metadata?.totalHours ?? record.metadata?.hours ?? 0), 40), 0);
+    const overtimeHours = safeSourceRecords.reduce((sum, record) => sum + finiteNumber(record.metadata?.overtimeHours ?? 0), 0);
+    const ptoHours = safeSourceRecords.reduce((sum, record) => sum + finiteNumber(record.metadata?.PTOHours ?? 0), 0);
+    const sickHours = safeSourceRecords.reduce((sum, record) => sum + finiteNumber(record.metadata?.sickLeaveHours ?? 0), 0);
     const regularPay = regularHours * profile.payRate;
     const overtimePay = profile.overtimeEligible ? overtimeHours * profile.payRate * 1.5 : overtimeHours * profile.payRate;
     const grossPay = regularPay + overtimePay + ((ptoHours + sickHours) * profile.payRate);
@@ -6521,9 +6544,9 @@ function HrWorkforceWorkspace({
       && record.status !== 'archived');
     const paystub = existingPayroll ? {
       ...calculatePaystub(employee, sourceRecords),
-      grossPay: Number(existingPayroll.metadata?.grossPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).grossPay),
-      deductions: Number(existingPayroll.metadata?.deductions ?? calculatePaystub(employee, sourceRecords).deductions),
-      netPay: Number(existingPayroll.metadata?.netPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).netPay)
+      grossPay: finiteNumber(existingPayroll.metadata?.grossPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).grossPay),
+      deductions: finiteNumber(existingPayroll.metadata?.deductions ?? calculatePaystub(employee, sourceRecords).deductions),
+      netPay: finiteNumber(existingPayroll.metadata?.netPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).netPay)
     } : calculatePaystub(employee, sourceRecords);
     const status = existingPayroll?.status ?? (sourceRecords.length ? 'Draft' : 'Missing timesheet');
     return { employee, existingPayroll, key: payrollCycleKey(employee), sourceRecords, paystub, status };
@@ -7198,11 +7221,11 @@ function HrWorkforceWorkspace({
               overtimeHours: paystub.overtimeHours,
               ptoHours: paystub.ptoHours,
               sickHours: paystub.sickHours,
-              grossPay: paystub.grossPay.toFixed(2),
-              deductions: paystub.deductions.toFixed(2),
-              taxes: (paystub.federalTax + paystub.stateTax + paystub.medicare + paystub.socialSecurity).toFixed(2),
-              benefits: paystub.benefits.toFixed(2),
-              netPay: paystub.netPay.toFixed(2),
+              grossPay: fixedNumber(paystub.grossPay),
+              deductions: fixedNumber(paystub.deductions),
+              taxes: fixedNumber(finiteNumber(paystub.federalTax) + finiteNumber(paystub.stateTax) + finiteNumber(paystub.medicare) + finiteNumber(paystub.socialSecurity)),
+              benefits: fixedNumber(paystub.benefits),
+              netPay: fixedNumber(paystub.netPay),
               taxType: paystub.profile.taxType,
               payrollStatus: existingPayroll ? existingPayroll.status : 'Draft',
               approvalStatus: 'pending approval',
@@ -7301,18 +7324,18 @@ function HrWorkforceWorkspace({
           employee.title,
           payPeriod,
           payrollFrequency,
-          paystub.regularHours.toFixed(2),
-          paystub.overtimeHours.toFixed(2),
-          paystub.ptoHours.toFixed(2),
-          paystub.sickHours.toFixed(2),
-          paystub.grossPay.toFixed(2),
-          paystub.federalTax.toFixed(2),
-          paystub.stateTax.toFixed(2),
-          paystub.medicare.toFixed(2),
-          paystub.socialSecurity.toFixed(2),
-          paystub.benefits.toFixed(2),
-          paystub.retirement.toFixed(2),
-          paystub.netPay.toFixed(2),
+          fixedNumber(paystub.regularHours),
+          fixedNumber(paystub.overtimeHours),
+          fixedNumber(paystub.ptoHours),
+          fixedNumber(paystub.sickHours),
+          fixedNumber(paystub.grossPay),
+          fixedNumber(paystub.federalTax),
+          fixedNumber(paystub.stateTax),
+          fixedNumber(paystub.medicare),
+          fixedNumber(paystub.socialSecurity),
+          fixedNumber(paystub.benefits),
+          fixedNumber(paystub.retirement),
+          fixedNumber(paystub.netPay),
           paystub.profile.taxType,
           sourceRecords.length ? 'payroll ready' : 'missing approved timesheet'
         ];
@@ -7330,16 +7353,16 @@ function HrWorkforceWorkspace({
         payrollPeriod: payPeriod,
         frequency: payrollFrequency,
         sourceEntryIds: item.sourceRecords.map((record) => record.id),
-        regularHours: item.paystub.regularHours,
-        overtimeHours: item.paystub.overtimeHours,
-        ptoHours: item.paystub.ptoHours,
-        sickHours: item.paystub.sickHours,
-        grossPay: item.paystub.grossPay.toFixed(2),
-        deductions: item.paystub.deductions.toFixed(2),
-        taxes: (item.paystub.federalTax + item.paystub.stateTax + item.paystub.medicare + item.paystub.socialSecurity).toFixed(2),
-        benefits: item.paystub.benefits.toFixed(2),
-        netPay: item.paystub.netPay.toFixed(2),
-        taxType: item.paystub.profile.taxType,
+        regularHours: finiteNumber(item.paystub?.regularHours),
+        overtimeHours: finiteNumber(item.paystub?.overtimeHours),
+        ptoHours: finiteNumber(item.paystub?.ptoHours),
+        sickHours: finiteNumber(item.paystub?.sickHours),
+        grossPay: fixedNumber(item.paystub?.grossPay),
+        deductions: fixedNumber(item.paystub?.deductions),
+        taxes: fixedNumber(finiteNumber(item.paystub?.federalTax) + finiteNumber(item.paystub?.stateTax) + finiteNumber(item.paystub?.medicare) + finiteNumber(item.paystub?.socialSecurity)),
+        benefits: fixedNumber(item.paystub?.benefits),
+        netPay: fixedNumber(item.paystub?.netPay),
+        taxType: item.paystub?.profile?.taxType ?? 'W2',
         payrollStatus: 'Payroll ready',
         approvalStatus: 'approved',
         approvedBy: user?.name ?? user?.email ?? 'Manager',
@@ -7348,9 +7371,9 @@ function HrWorkforceWorkspace({
         payrollReady: true
       };
       if (item.existingPayroll) {
-        await updateHrRecord(item.existingPayroll, { status: 'Payroll ready', metadata: { ...(item.existingPayroll.metadata ?? {}), ...payload }, amount: item.paystub.netPay });
+        await updateHrRecord(item.existingPayroll, { status: 'Payroll ready', metadata: { ...(item.existingPayroll.metadata ?? {}), ...payload }, amount: finiteNumber(item.paystub?.netPay) });
       } else {
-        await createHrRecord('payroll', `${item.employee.title} payroll ${payPeriod}`, 'Payroll ready', payload, item.paystub.netPay);
+        await createHrRecord('payroll', `${item.employee.title} payroll ${payPeriod}`, 'Payroll ready', payload, finiteNumber(item.paystub?.netPay));
       }
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Payroll approval failed.');
@@ -7731,10 +7754,10 @@ function HrWorkforceWorkspace({
             <div><span>Payroll records</span><strong>{payrollRecords.length}</strong></div>
             <div><span>Payroll ready</span><strong>{payrollBatchReady}</strong></div>
             <div><span>Missing approvals</span><strong>{payrollQueue.filter((item) => !item.sourceRecords.length).length}</strong></div>
-            <div><span>Gross pay</span><strong>${payrollQueue.reduce((sum, item) => sum + item.paystub.grossPay, 0).toFixed(0)}</strong></div>
-            <div><span>Net pay</span><strong>${payrollQueue.reduce((sum, item) => sum + item.paystub.netPay, 0).toFixed(0)}</strong></div>
-            <div><span>W2</span><strong>{payrollQueue.filter((item) => item.paystub.profile.taxType === 'W2').length}</strong></div>
-            <div><span>1099</span><strong>{payrollQueue.filter((item) => item.paystub.profile.taxType === '1099').length}</strong></div>
+            <div><span>Gross pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.grossPay), 0), 0)}</strong></div>
+            <div><span>Net pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.netPay), 0), 0)}</strong></div>
+            <div><span>W2</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === 'W2').length}</strong></div>
+            <div><span>1099</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === '1099').length}</strong></div>
           </div>
           <div className="payroll-settings-grid">
             {[
@@ -7765,8 +7788,8 @@ function HrWorkforceWorkspace({
                   <button className="payroll-row-main" type="button" onClick={() => setExpandedPayrollKey(expanded ? '' : item.key)}>
                     <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
                     <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
-                    <span>${item.paystub.grossPay.toFixed(2)}</span>
-                    <span><strong>${item.paystub.netPay.toFixed(2)}</strong></span>
+                    <span>{money(item.paystub?.grossPay)}</span>
+                    <span><strong>{money(item.paystub?.netPay)}</strong></span>
                     <span className={`status-pill ${item.sourceRecords.length ? 'approved' : 'pending'}`}>{item.status}</span>
                     </button>
                     <div className="inline-actions payroll-row-actions">
@@ -7778,14 +7801,14 @@ function HrWorkforceWorkspace({
                     {expanded && (
                       <div className="payroll-row-detail">
                         {[
-                          ['Regular hours', item.paystub.regularHours.toFixed(2)],
-                          ['Overtime', item.paystub.overtimeHours.toFixed(2)],
-                          ['PTO hours', item.paystub.ptoHours.toFixed(2)],
-                          ['Gross pay', `$${item.paystub.grossPay.toFixed(2)}`],
-                          ['Taxes', `$${(item.paystub.federalTax + item.paystub.stateTax + item.paystub.medicare + item.paystub.socialSecurity).toFixed(2)}`],
-                          ['Benefits', `$${item.paystub.benefits.toFixed(2)}`],
-                          ['Deductions', `$${item.paystub.deductions.toFixed(2)}`],
-                          ['Net pay', `$${item.paystub.netPay.toFixed(2)}`],
+                          ['Regular hours', fixedNumber(item.paystub?.regularHours)],
+                          ['Overtime', fixedNumber(item.paystub?.overtimeHours)],
+                          ['PTO hours', fixedNumber(item.paystub?.ptoHours)],
+                          ['Gross pay', money(item.paystub?.grossPay)],
+                          ['Taxes', money(finiteNumber(item.paystub?.federalTax) + finiteNumber(item.paystub?.stateTax) + finiteNumber(item.paystub?.medicare) + finiteNumber(item.paystub?.socialSecurity))],
+                          ['Benefits', money(item.paystub?.benefits)],
+                          ['Deductions', money(item.paystub?.deductions)],
+                          ['Net pay', money(item.paystub?.netPay)],
                           ['Approval', String(item.existingPayroll?.metadata?.approvalStatus ?? item.status)],
                           ['Export', String(item.existingPayroll?.metadata?.exportedStatus ?? 'not exported')]
                         ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
@@ -7806,32 +7829,32 @@ function HrWorkforceWorkspace({
               <div>
                 <p className="eyebrow">Employee Paystub</p>
                 <h2>{paystubDrawer.employee.title}</h2>
-                <span>{payPeriod} | {payrollFrequency} | {paystubDrawer.paystub.profile.taxType}</span>
+                <span>{payPeriod} | {payrollFrequency} | {paystubDrawer.paystub?.profile?.taxType ?? 'W2'}</span>
               </div>
               <button className="ghost-button compact" type="button" onClick={() => setPaystubDrawer(null)}>Close</button>
             </div>
             <div className="paystub-summary-grid">
               {[
-                ['Regular hours', paystubDrawer.paystub.regularHours.toFixed(2)],
-                ['Overtime hours', paystubDrawer.paystub.overtimeHours.toFixed(2)],
-                ['Gross pay', `$${paystubDrawer.paystub.grossPay.toFixed(2)}`],
-                ['Federal tax', `$${paystubDrawer.paystub.federalTax.toFixed(2)}`],
-                ['State tax', `$${paystubDrawer.paystub.stateTax.toFixed(2)}`],
-                ['Medicare', `$${paystubDrawer.paystub.medicare.toFixed(2)}`],
-                ['Social Security', `$${paystubDrawer.paystub.socialSecurity.toFixed(2)}`],
-                ['Benefits', `$${paystubDrawer.paystub.benefits.toFixed(2)}`],
-                ['Retirement', `$${paystubDrawer.paystub.retirement.toFixed(2)}`],
-                ['Net pay', `$${paystubDrawer.paystub.netPay.toFixed(2)}`]
+                ['Regular hours', fixedNumber(paystubDrawer.paystub?.regularHours)],
+                ['Overtime hours', fixedNumber(paystubDrawer.paystub?.overtimeHours)],
+                ['Gross pay', money(paystubDrawer.paystub?.grossPay)],
+                ['Federal tax', money(paystubDrawer.paystub?.federalTax)],
+                ['State tax', money(paystubDrawer.paystub?.stateTax)],
+                ['Medicare', money(paystubDrawer.paystub?.medicare)],
+                ['Social Security', money(paystubDrawer.paystub?.socialSecurity)],
+                ['Benefits', money(paystubDrawer.paystub?.benefits)],
+                ['Retirement', money(paystubDrawer.paystub?.retirement)],
+                ['Net pay', money(paystubDrawer.paystub?.netPay)]
               ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
             </div>
             <button type="button" onClick={() => {
               const lines = [
                 `Paystub - ${paystubDrawer.employee.title}`,
                 `Period: ${payPeriod} (${payrollFrequency})`,
-                `Tax type: ${paystubDrawer.paystub.profile.taxType}`,
-                `Gross pay: $${paystubDrawer.paystub.grossPay.toFixed(2)}`,
-                `Deductions: $${paystubDrawer.paystub.deductions.toFixed(2)}`,
-                `Net pay: $${paystubDrawer.paystub.netPay.toFixed(2)}`
+                `Tax type: ${paystubDrawer.paystub?.profile?.taxType ?? 'W2'}`,
+                `Gross pay: ${money(paystubDrawer.paystub?.grossPay)}`,
+                `Deductions: ${money(paystubDrawer.paystub?.deductions)}`,
+                `Net pay: ${money(paystubDrawer.paystub?.netPay)}`
               ];
               downloadText(lines.join('\n'), `${paystubDrawer.employee.title.toLowerCase().replace(/\s+/g, '-')}-${payPeriod}-paystub.txt`, 'text/plain');
             }}>Download paystub</button>
@@ -8698,7 +8721,7 @@ function DatasetPreviewModal({
       if (!filter.trim()) return true;
       const query = filter.toLowerCase();
       if (selectedColumn !== 'all') return String(row[selectedColumn] ?? '').toLowerCase().includes(query);
-      return Object.values(row).some((value) => String(value ?? '').toLowerCase().includes(query));
+      return recordValues(row).some((value) => String(value ?? '').toLowerCase().includes(query));
     })
     .sort((a, b) => {
       const left = String(a[sortColumn] ?? '');
@@ -9497,7 +9520,7 @@ function buildReportLines(dataset: Dataset) {
 
 function buildLocalBusinessIntelligence(dataset: Dataset) {
   const duplicates = findDuplicateRows(datasetPreview(dataset)).length;
-  const missingValues = datasetPreview(dataset).reduce((total, row) => total + Object.values(row).filter((value) => value == null || String(value).trim() === '').length, 0);
+  const missingValues = missingValueCount(datasetPreview(dataset));
   const failedRows = dataset.cleanupMetrics?.failedRows ?? 0;
   const invalidValues = dataset.cleanupMetrics?.invalidValuesDetected ?? missingValues;
   const qualityScore = Math.max(0, Math.min(100, Math.round(dataset.qualityScore ?? Math.max(45, 100 - duplicates - failedRows - Math.ceil(invalidValues / 2)))));
