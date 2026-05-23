@@ -6271,6 +6271,9 @@ function HrWorkforceWorkspace({
   const [attendanceDate, setAttendanceDate] = useState(() => new Date().toISOString().slice(0, 10));
   const [payPeriod, setPayPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [payrollFrequency, setPayrollFrequency] = useState('Biweekly');
+  const [payrollViewMode, setPayrollViewMode] = useState('Employee View');
+  const [expandedPayrollKey, setExpandedPayrollKey] = useState('');
+  const [paystubDrawer, setPaystubDrawer] = useState<{ employee: ModuleRecord; paystub: any; sourceRecords: ModuleRecord[] } | null>(null);
   const [timeEntryForm, setTimeEntryForm] = useState({ employeeRecordId: '', startTime: '09:00', endTime: '17:00', breakMinutes: '30', status: 'draft', shift: 'Day shift', location: 'On-site', projectCode: '', taskCode: '', workType: 'Regular', notes: '' });
   const [leaveForm, setLeaveForm] = useState({
     employeeRecordId: '',
@@ -6389,10 +6392,26 @@ function HrWorkforceWorkspace({
     });
   }
 
+  function payrollCycleKey(employee: ModuleRecord, period = payPeriod) {
+    return `${employee.id}:${period}:${payrollFrequency}`;
+  }
+
   const payrollQueue = payrollVisibleEmployees.map((employee) => {
     const sourceRecords = approvedTimesheetsForPayroll(employee);
-    return { employee, sourceRecords, paystub: calculatePaystub(employee, sourceRecords) };
+    const existingPayroll = payrollRecords.find((record) => String(record.metadata?.employeeRecordId ?? '') === employee.id
+      && String(record.metadata?.payrollPeriod ?? '') === payPeriod
+      && String(record.metadata?.frequency ?? payrollFrequency) === payrollFrequency
+      && record.status !== 'archived');
+    const paystub = existingPayroll ? {
+      ...calculatePaystub(employee, sourceRecords),
+      grossPay: Number(existingPayroll.metadata?.grossPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).grossPay),
+      deductions: Number(existingPayroll.metadata?.deductions ?? calculatePaystub(employee, sourceRecords).deductions),
+      netPay: Number(existingPayroll.metadata?.netPay ?? existingPayroll.amount ?? calculatePaystub(employee, sourceRecords).netPay)
+    } : calculatePaystub(employee, sourceRecords);
+    const status = existingPayroll?.status ?? (sourceRecords.length ? 'Draft' : 'Missing timesheet');
+    return { employee, existingPayroll, key: payrollCycleKey(employee), sourceRecords, paystub, status };
   });
+  const payrollBatchReady = payrollQueue.filter((item) => item.sourceRecords.length && !['Exported', 'Paid', 'Voided'].includes(item.status)).length;
   function hrDatasetFromRows(label: string, path: string, rows: Record<string, string>[]): Dataset {
     const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
     const uploadedAt = new Date(Math.max(0, ...records.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString();
@@ -7035,26 +7054,53 @@ function HrWorkforceWorkspace({
           decidedBy: user?.name ?? user?.email ?? 'Manager'
         }
       });
-      if (decision === 'approved' && !payrollRecords.some((payroll) => payroll.metadata?.sourceTimesheetId === record.id)) {
+      if (decision === 'approved') {
         const employee = employees.find((entry) => entry.id === record.metadata?.employeeRecordId || entry.metadata?.employeeId === record.metadata?.employeeId);
         if (employee) {
-          const paystub = calculatePaystub(employee, [updated]);
+          const period = String(record.metadata?.payrollPeriod ?? payPeriodForDate(String(record.metadata?.workDate ?? record.metadata?.date ?? '')));
+          const existingPayroll = payrollRecords.find((payroll) => payroll.metadata?.sourceTimesheetId === record.id || (
+            payroll.metadata?.employeeRecordId === employee.id
+            && payroll.metadata?.payrollPeriod === period
+            && payroll.metadata?.frequency === payrollFrequency
+            && payroll.status !== 'archived'
+          ));
+          const approvedRecords = [...approvedTimesheetsForPayroll(employee, period), updated].filter((entry, index, list) => list.findIndex((candidate) => candidate.id === entry.id) === index);
+          const paystub = calculatePaystub(employee, approvedRecords);
+          const payrollPayload = {
+            status: existingPayroll ? existingPayroll.status : 'Draft',
+            metadata: {
+              ...(existingPayroll?.metadata ?? {}),
+              employeeRecordId: employee.id,
+              employeeId: employee.metadata?.employeeId,
+              employeeName: employee.title,
+              payrollPeriod: period,
+              sourceTimesheetId: record.id,
+              sourceEntryIds: approvedRecords.map((entry) => entry.id),
+              frequency: payrollFrequency,
+              regularHours: paystub.regularHours,
+              overtimeHours: paystub.overtimeHours,
+              ptoHours: paystub.ptoHours,
+              sickHours: paystub.sickHours,
+              grossPay: paystub.grossPay.toFixed(2),
+              deductions: paystub.deductions.toFixed(2),
+              taxes: (paystub.federalTax + paystub.stateTax + paystub.medicare + paystub.socialSecurity).toFixed(2),
+              benefits: paystub.benefits.toFixed(2),
+              netPay: paystub.netPay.toFixed(2),
+              taxType: paystub.profile.taxType,
+              payrollStatus: existingPayroll ? existingPayroll.status : 'Draft',
+              approvalStatus: 'pending approval',
+              exportedStatus: 'not exported',
+              payrollReady: true
+            },
+            amount: paystub.netPay
+          };
+          if (existingPayroll) {
+            await updateHrRecord(existingPayroll, payrollPayload);
+          } else {
           await createHrRecord('payroll', `${employee.title} payroll ${record.metadata?.payrollPeriod ?? payPeriod}`, 'pending approval', {
-            employeeRecordId: employee.id,
-            employeeId: employee.metadata?.employeeId,
-            employeeName: employee.title,
-            payrollPeriod: record.metadata?.payrollPeriod ?? payPeriodForDate(String(record.metadata?.workDate ?? record.metadata?.date ?? '')),
-            sourceTimesheetId: record.id,
-            frequency: payrollFrequency,
-            regularHours: paystub.regularHours,
-            overtimeHours: paystub.overtimeHours,
-            grossPay: paystub.grossPay.toFixed(2),
-            deductions: paystub.deductions.toFixed(2),
-            netPay: paystub.netPay.toFixed(2),
-            taxType: paystub.profile.taxType,
-            approvalStatus: 'pending approval',
-            payrollReady: true
+            ...payrollPayload.metadata
           }, paystub.netPay);
+          }
         }
       }
     } catch (error) {
@@ -7156,6 +7202,61 @@ function HrWorkforceWorkspace({
       })
     ];
     downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), `payroll-timesheet-${payPeriod}.csv`, 'text/csv');
+  }
+
+  async function approvePayrollRecord(item: { employee: ModuleRecord; existingPayroll?: ModuleRecord; paystub: any; sourceRecords: ModuleRecord[] }) {
+    try {
+      const payload = {
+        employeeRecordId: item.employee.id,
+        employeeId: item.employee.metadata?.employeeId,
+        employeeName: item.employee.title,
+        payrollPeriod: payPeriod,
+        frequency: payrollFrequency,
+        sourceEntryIds: item.sourceRecords.map((record) => record.id),
+        regularHours: item.paystub.regularHours,
+        overtimeHours: item.paystub.overtimeHours,
+        ptoHours: item.paystub.ptoHours,
+        sickHours: item.paystub.sickHours,
+        grossPay: item.paystub.grossPay.toFixed(2),
+        deductions: item.paystub.deductions.toFixed(2),
+        taxes: (item.paystub.federalTax + item.paystub.stateTax + item.paystub.medicare + item.paystub.socialSecurity).toFixed(2),
+        benefits: item.paystub.benefits.toFixed(2),
+        netPay: item.paystub.netPay.toFixed(2),
+        taxType: item.paystub.profile.taxType,
+        payrollStatus: 'Payroll ready',
+        approvalStatus: 'approved',
+        approvedBy: user?.name ?? user?.email ?? 'Manager',
+        approvedAt: new Date().toISOString(),
+        exportedStatus: item.existingPayroll?.metadata?.exportedStatus ?? 'not exported',
+        payrollReady: true
+      };
+      if (item.existingPayroll) {
+        await updateHrRecord(item.existingPayroll, { status: 'Payroll ready', metadata: { ...(item.existingPayroll.metadata ?? {}), ...payload }, amount: item.paystub.netPay });
+      } else {
+        await createHrRecord('payroll', `${item.employee.title} payroll ${payPeriod}`, 'Payroll ready', payload, item.paystub.netPay);
+      }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Payroll approval failed.');
+    }
+  }
+
+  async function exportPayrollBatch() {
+    exportPayrollTimesheet();
+    const readyItems = payrollQueue.filter((item) => item.existingPayroll && ['Payroll ready', 'pending approval', 'Draft'].includes(String(item.existingPayroll.status)));
+    for (const item of readyItems) {
+      if (item.existingPayroll) {
+        await updateHrRecord(item.existingPayroll, {
+          status: 'Exported',
+          metadata: {
+            ...(item.existingPayroll.metadata ?? {}),
+            payrollStatus: 'Exported',
+            exportedStatus: 'exported',
+            exportedAt: new Date().toISOString(),
+            exportedBy: user?.name ?? user?.email ?? 'Manager'
+          }
+        });
+      }
+    }
   }
 
   async function uploadPayroll(file: File, attachAsPaystub = false) {
@@ -7501,12 +7602,17 @@ function HrWorkforceWorkspace({
                 {['Weekly', 'Biweekly', 'Semi-monthly', 'Monthly'].map((frequency) => <option key={frequency}>{frequency}</option>)}
               </select>
               <input type="month" value={payPeriod} onChange={(event) => setPayPeriod(event.target.value)} />
-              <button type="button" onClick={exportPayrollTimesheet}>Export payroll</button>
+              <button type="button" onClick={() => void exportPayrollBatch()}>Export batch</button>
             </div>
+          </div>
+          <div className="payroll-view-tabs">
+            {['Employee View', 'Payroll Batch View', 'Manager View', 'Approval Queue', 'Export Queue'].map((mode) => (
+              <button className={payrollViewMode === mode ? 'active' : ''} key={mode} type="button" onClick={() => setPayrollViewMode(mode)}>{mode}</button>
+            ))}
           </div>
           <div className="hr-dashboard-grid compact-attendance-grid">
             <div><span>Payroll records</span><strong>{payrollRecords.length}</strong></div>
-            <div><span>Payroll ready</span><strong>{payrollQueue.filter((item) => item.sourceRecords.length).length}</strong></div>
+            <div><span>Payroll ready</span><strong>{payrollBatchReady}</strong></div>
             <div><span>Missing approvals</span><strong>{payrollQueue.filter((item) => !item.sourceRecords.length).length}</strong></div>
             <div><span>Gross pay</span><strong>${payrollQueue.reduce((sum, item) => sum + item.paystub.grossPay, 0).toFixed(0)}</strong></div>
             <div><span>Net pay</span><strong>${payrollQueue.reduce((sum, item) => sum + item.paystub.netPay, 0).toFixed(0)}</strong></div>
@@ -7526,50 +7632,98 @@ function HrWorkforceWorkspace({
           <div className="payroll-operations-table">
             <div className="payroll-table-head">
               <span>Employee</span>
+              <span>Pay period</span>
               <span>Profile</span>
               <span>Hours</span>
               <span>Gross</span>
-              <span>Deductions</span>
               <span>Net</span>
               <span>Status</span>
               <span>Actions</span>
             </div>
-            {payrollQueue.map(({ employee, paystub, sourceRecords }) => (
-              <article key={employee.id}>
-                <span><strong>{employee.title}</strong><small>{employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
-                <span><strong>{paystub.profile.taxType}</strong><small>{paystub.profile.payType} ${paystub.profile.payRate.toFixed(2)}/hr</small></span>
-                <span><strong>{paystub.regularHours.toFixed(1)} regular</strong><small>{paystub.overtimeHours.toFixed(1)} overtime</small></span>
-                <span>${paystub.grossPay.toFixed(2)}</span>
-                <span>${paystub.deductions.toFixed(2)}</span>
-                <span><strong>${paystub.netPay.toFixed(2)}</strong></span>
-                <span className={`status-pill ${sourceRecords.length ? 'approved' : 'pending'}`}>{sourceRecords.length ? 'payroll ready' : 'needs approval'}</span>
-                <div className="inline-actions">
-                  <button className="ghost-button compact" type="button" onClick={() => { setEmployeeWorkspaceId(employee.id); setEmployeeTab('Payroll'); }}>Profile</button>
-                  <button className="ghost-button compact" type="button" onClick={() => {
-                    const lines = [
-                      `Paystub - ${employee.title}`,
-                      `Period: ${payPeriod} (${payrollFrequency})`,
-                      `Tax type: ${paystub.profile.taxType}`,
-                      `Regular hours: ${paystub.regularHours.toFixed(2)}`,
-                      `Overtime hours: ${paystub.overtimeHours.toFixed(2)}`,
-                      `Gross pay: $${paystub.grossPay.toFixed(2)}`,
-                      `Federal tax: $${paystub.federalTax.toFixed(2)}`,
-                      `State tax: $${paystub.stateTax.toFixed(2)}`,
-                      `Medicare: $${paystub.medicare.toFixed(2)}`,
-                      `Social Security: $${paystub.socialSecurity.toFixed(2)}`,
-                      `Benefits: $${paystub.benefits.toFixed(2)}`,
-                      `Retirement: $${paystub.retirement.toFixed(2)}`,
-                      `Net pay: $${paystub.netPay.toFixed(2)}`
-                    ];
-                    downloadText(lines.join('\n'), `${employee.title.toLowerCase().replace(/\s+/g, '-')}-${payPeriod}-paystub.txt`, 'text/plain');
-                  }}>Paystub</button>
-                </div>
-              </article>
-            ))}
+            {payrollQueue
+              .filter((item) => payrollViewMode !== 'Approval Queue' || /pending|Draft|ready/i.test(String(item.status)))
+              .filter((item) => payrollViewMode !== 'Export Queue' || /ready|Exported/i.test(String(item.status)))
+              .map((item) => {
+                const expanded = expandedPayrollKey === item.key;
+                return (
+                  <article className={expanded ? 'expanded' : ''} key={item.key}>
+                    <button className="payroll-row-main" type="button" onClick={() => setExpandedPayrollKey(expanded ? '' : item.key)}>
+                      <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
+                      <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
+                      <span><strong>{item.paystub.profile.taxType}</strong><small>{item.paystub.profile.payType} ${item.paystub.profile.payRate.toFixed(2)}/hr</small></span>
+                      <span><strong>{item.paystub.regularHours.toFixed(1)} regular</strong><small>{item.paystub.overtimeHours.toFixed(1)} overtime</small></span>
+                      <span>${item.paystub.grossPay.toFixed(2)}</span>
+                      <span><strong>${item.paystub.netPay.toFixed(2)}</strong></span>
+                      <span className={`status-pill ${item.sourceRecords.length ? 'approved' : 'pending'}`}>{item.status}</span>
+                    </button>
+                    <div className="inline-actions payroll-row-actions">
+                      <button className="ghost-button compact" type="button" onClick={() => { setEmployeeWorkspaceId(item.employee.id); setEmployeeTab('Payroll'); }}>Profile</button>
+                      <button className="ghost-button compact" type="button" onClick={() => setPaystubDrawer({ employee: item.employee, paystub: item.paystub, sourceRecords: item.sourceRecords })}>Paystub</button>
+                      {canManageHr && <button className="ghost-button compact" type="button" onClick={() => void approvePayrollRecord(item)}>Approve</button>}
+                      {canManageHr && <button className="ghost-button compact" type="button" onClick={() => void exportPayrollBatch()}>Export</button>}
+                    </div>
+                    {expanded && (
+                      <div className="payroll-row-detail">
+                        {[
+                          ['Regular hours', item.paystub.regularHours.toFixed(2)],
+                          ['Overtime', item.paystub.overtimeHours.toFixed(2)],
+                          ['PTO hours', item.paystub.ptoHours.toFixed(2)],
+                          ['Gross pay', `$${item.paystub.grossPay.toFixed(2)}`],
+                          ['Taxes', `$${(item.paystub.federalTax + item.paystub.stateTax + item.paystub.medicare + item.paystub.socialSecurity).toFixed(2)}`],
+                          ['Benefits', `$${item.paystub.benefits.toFixed(2)}`],
+                          ['Deductions', `$${item.paystub.deductions.toFixed(2)}`],
+                          ['Net pay', `$${item.paystub.netPay.toFixed(2)}`],
+                          ['Approval', String(item.existingPayroll?.metadata?.approvalStatus ?? item.status)],
+                          ['Export', String(item.existingPayroll?.metadata?.exportedStatus ?? 'not exported')]
+                        ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             {!payrollQueue.length && <div className="hr-empty-line">No payroll-visible employees for this account.</div>}
           </div>
           <EmployeeRecordList title="Payroll record history" records={payrollRecords} empty="No persisted payroll entries have been created from approvals yet." />
         </section>
+      )}
+      {paystubDrawer && (
+        <div className="drill-overlay" role="dialog" aria-modal="true" aria-label="Paystub detail">
+          <section className="drill-panel paystub-drawer">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Employee Paystub</p>
+                <h2>{paystubDrawer.employee.title}</h2>
+                <span>{payPeriod} | {payrollFrequency} | {paystubDrawer.paystub.profile.taxType}</span>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setPaystubDrawer(null)}>Close</button>
+            </div>
+            <div className="paystub-summary-grid">
+              {[
+                ['Regular hours', paystubDrawer.paystub.regularHours.toFixed(2)],
+                ['Overtime hours', paystubDrawer.paystub.overtimeHours.toFixed(2)],
+                ['Gross pay', `$${paystubDrawer.paystub.grossPay.toFixed(2)}`],
+                ['Federal tax', `$${paystubDrawer.paystub.federalTax.toFixed(2)}`],
+                ['State tax', `$${paystubDrawer.paystub.stateTax.toFixed(2)}`],
+                ['Medicare', `$${paystubDrawer.paystub.medicare.toFixed(2)}`],
+                ['Social Security', `$${paystubDrawer.paystub.socialSecurity.toFixed(2)}`],
+                ['Benefits', `$${paystubDrawer.paystub.benefits.toFixed(2)}`],
+                ['Retirement', `$${paystubDrawer.paystub.retirement.toFixed(2)}`],
+                ['Net pay', `$${paystubDrawer.paystub.netPay.toFixed(2)}`]
+              ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
+            </div>
+            <button type="button" onClick={() => {
+              const lines = [
+                `Paystub - ${paystubDrawer.employee.title}`,
+                `Period: ${payPeriod} (${payrollFrequency})`,
+                `Tax type: ${paystubDrawer.paystub.profile.taxType}`,
+                `Gross pay: $${paystubDrawer.paystub.grossPay.toFixed(2)}`,
+                `Deductions: $${paystubDrawer.paystub.deductions.toFixed(2)}`,
+                `Net pay: $${paystubDrawer.paystub.netPay.toFixed(2)}`
+              ];
+              downloadText(lines.join('\n'), `${paystubDrawer.employee.title.toLowerCase().replace(/\s+/g, '-')}-${payPeriod}-paystub.txt`, 'text/plain');
+            }}>Download paystub</button>
+          </section>
+        </div>
       )}
 
       {activeHrWorkspace === 'pto' && (

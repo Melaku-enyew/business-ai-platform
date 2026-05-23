@@ -3553,10 +3553,16 @@ th {
   gap: 5px;
 }
 
-.payroll-table-head,
-.payroll-operations-table article {
+.payroll-table-head {
   display: grid;
-  grid-template-columns: minmax(150px, 1.4fr) minmax(120px, 1fr) 0.9fr 0.75fr 0.75fr 0.75fr 0.9fr minmax(150px, 1fr);
+  grid-template-columns: minmax(150px, 1.3fr) 0.85fr 0.9fr 0.85fr 0.7fr 0.7fr 0.9fr minmax(150px, 1fr);
+  gap: 7px;
+  align-items: center;
+}
+
+.payroll-row-main {
+  display: grid;
+  grid-template-columns: minmax(150px, 1.3fr) 0.85fr 0.9fr 0.85fr 0.7fr 0.7fr 0.9fr;
   gap: 7px;
   align-items: center;
 }
@@ -3570,6 +3576,8 @@ th {
 }
 
 .payroll-operations-table article {
+  display: grid;
+  gap: 7px;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--panel);
@@ -3578,7 +3586,78 @@ th {
   padding: 8px;
 }
 
-.payroll-operations-table article > span {
+.payroll-row-main {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 0;
+  text-align: left;
+}
+
+.payroll-row-actions {
+  justify-content: flex-end;
+}
+
+.payroll-row-detail,
+.paystub-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 8px;
+}
+
+.payroll-row-detail div,
+.paystub-summary-grid div {
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  padding: 7px 8px;
+}
+
+.payroll-row-detail span,
+.paystub-summary-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+}
+
+.payroll-row-detail strong,
+.paystub-summary-grid strong {
+  color: var(--heading);
+  font-size: 13px;
+  font-weight: 950;
+}
+
+.payroll-view-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.payroll-view-tabs button {
+  width: auto;
+  min-height: 30px;
+  border-radius: 999px;
+  font-size: 12px;
+  padding: 5px 10px;
+}
+
+.payroll-view-tabs button.active {
+  border-color: rgba(24, 119, 242, 0.45);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.paystub-drawer {
+  width: min(560px, 100%);
+}
+
+.payroll-operations-table article > span,
+.payroll-row-main > span {
   min-width: 0;
 }
 
@@ -3587,7 +3666,7 @@ th {
     display: none;
   }
 
-  .payroll-operations-table article {
+  .payroll-row-main {
     grid-template-columns: 1fr 1fr;
   }
 }
