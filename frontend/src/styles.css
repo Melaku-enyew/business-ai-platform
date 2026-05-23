@@ -2994,6 +2994,61 @@ th {
   padding: 10px 12px;
 }
 
+.sticky-hr-toolbar {
+  position: sticky;
+  top: 72px;
+  z-index: 8;
+  margin: 12px 0;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
+}
+
+.hr-workspace-shell-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.9));
+  padding: 14px;
+}
+
+.hr-workspace-shell-header h2 {
+  margin: 2px 0;
+}
+
+.hr-workspace-shell-header span {
+  color: var(--muted);
+  font-weight: 700;
+}
+
+.hr-workspace-nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.hr-workspace-nav button {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 850;
+  padding: 8px 12px;
+  transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
+}
+
+.hr-workspace-nav button:hover,
+.hr-workspace-nav button.active {
+  border-color: rgba(24, 119, 242, 0.42);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  transform: translateY(-1px);
+}
+
 .unified-hr-toolbar > div {
   display: grid;
   gap: 2px;
@@ -3063,6 +3118,138 @@ th {
   background: var(--panel);
   box-shadow: var(--shadow);
   padding: 12px;
+}
+
+.focused-hr-workspace,
+.hr-focused-card,
+.hr-dataset-workspace {
+  display: grid;
+  gap: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.hr-upload-steps {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.hr-upload-steps button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.92);
+  color: var(--text);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 850;
+  padding: 8px 10px;
+  text-align: left;
+}
+
+.hr-upload-steps button.active {
+  border-color: rgba(24, 119, 242, 0.45);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.hr-report-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.hr-report-grid article,
+.selected-dataset-card {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.hr-report-grid article span {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.dataset-primary-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.compact-dataset-table {
+  max-height: 320px;
+  overflow: auto;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  border-radius: 999px;
+  background: #e5e7eb;
+  color: #111827;
+  font-size: 12px;
+  padding: 4px 8px;
+  text-transform: capitalize;
+}
+
+.status-pill.completed,
+.status-pill.approved,
+.status-pill.published {
+  background: rgba(22, 163, 74, 0.14);
+  color: #166534;
+}
+
+.status-pill.pending,
+.status-pill.pending-validation,
+.status-pill.pending-approval,
+.status-pill.draft {
+  background: rgba(217, 119, 6, 0.14);
+  color: #92400e;
+}
+
+.status-pill.rejected,
+.status-pill.failed {
+  background: rgba(220, 38, 38, 0.14);
+  color: #991b1b;
+}
+
+.hr-ai-drawer {
+  display: grid;
+  gap: 14px;
+  width: min(520px, 100%);
+  max-height: min(86vh, 760px);
+  overflow: auto;
+  margin-left: auto;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px 0 0 12px;
+  background: var(--panel);
+  box-shadow: -18px 0 48px rgba(15, 23, 42, 0.18);
+  padding: 16px;
+  animation: drawer-slide 0.18s ease;
+}
+
+.risk-monitor-body.always-open {
+  display: grid;
+}
+
+@keyframes drawer-slide {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
 }
 
 .timesheet-tab-panel {

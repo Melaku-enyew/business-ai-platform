@@ -612,10 +612,16 @@ const moduleCards: Record<string, ModuleAction[]> = {
     { title: 'Progress Reports', copy: 'Summarize status, risks, dependencies, and next actions.', type: 'progress_report', path: '/engineering/progress-reports' }
   ],
   hr: [
+    { title: 'HR Overview', copy: 'Compact HR command center for company workforce, datasets, approvals, and AI insights.', type: 'overview', path: '/hr' },
     { title: 'Employee Records', copy: 'Centralize profiles, roles, onboarding status, and access policies.', type: 'employee', path: '/hr/employees' },
     { title: 'Timesheets', copy: 'Manage daily entries, weekly approvals, project hours, PTO, overtime, and payroll-ready exports.', type: 'timesheets', path: '/hr/timesheets' },
+    { title: 'Payroll Workspace', copy: 'Run payroll preparation, paystub review, dataset-backed payroll exports, and exception checks.', type: 'payroll', path: '/hr/payroll' },
     { title: 'Hiring', copy: 'Track candidates, interviews, and onboarding steps.', type: 'hiring', path: '/hr/hiring' },
-    { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave', path: '/hr/leave-management' }
+    { title: 'Leave Management', copy: 'Manage leave requests, approvals, and team coverage.', type: 'leave', path: '/hr/leave-management' },
+    { title: 'HR Dataset Workspace', copy: 'Select one HR dataset at a time, edit rows and columns, approve changes, and publish exports.', type: 'datasets', path: '/hr/datasets' },
+    { title: 'HR Reports Workspace', copy: 'Generate HR, payroll, PTO, timesheet, and workforce reports inside the company workspace.', type: 'reports', path: '/hr/reports' },
+    { title: 'HR Approval Workspace', copy: 'Review PTO, timesheet, payroll, and dataset approval queues.', type: 'approvals', path: '/hr/approvals' },
+    { title: 'HR AI Insights Workspace', copy: 'Review workforce risk, payroll anomalies, missing data, and operational recommendations.', type: 'ai_insights', path: '/hr/ai-insights' }
   ],
   crm: [
     { title: 'Clients', copy: 'Track client accounts, contacts, and relationship health.', type: 'client', path: '/crm/clients' },
@@ -6009,6 +6015,8 @@ function ModuleWorkspacePage({
         <HrWorkforceWorkspace
           apiFetch={apiFetch}
           company={selectedCompany}
+          datasets={moduleDatasets}
+          onDatasetAction={runDatasetAction}
           records={filteredRecords}
           route={route}
           selectedCompanyId={selectedCompanyId}
@@ -6196,6 +6204,8 @@ function ModuleBusinessDashboard({ records, route, selectedCompany }: { records:
 function HrWorkforceWorkspace({
   apiFetch,
   company,
+  datasets,
+  onDatasetAction,
   records,
   route,
   selectedCompanyId,
@@ -6206,6 +6216,8 @@ function HrWorkforceWorkspace({
 }: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   company: Company | null;
+  datasets: Dataset[];
+  onDatasetAction: (dataset: Dataset, action: string) => void;
   records: ModuleRecord[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
@@ -6236,8 +6248,12 @@ function HrWorkforceWorkspace({
   const [employeeFormOpen, setEmployeeFormOpen] = useState(false);
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [uploadCenterOpen, setUploadCenterOpen] = useState(false);
+  const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
   const [hrUploadType, setHrUploadType] = useState('Employee dataset');
   const [hrUploadAction, setHrUploadAction] = useState('Create new dataset');
+  const [stagedHrFile, setStagedHrFile] = useState<File | null>(null);
+  const [hrUploadStep, setHrUploadStep] = useState<'upload' | 'preview' | 'action' | 'validate' | 'approve' | 'process' | 'publish'>('upload');
+  const [selectedHrDatasetId, setSelectedHrDatasetId] = useState('');
   const [payrollFileName, setPayrollFileName] = useState('');
   const [leaveWorkflow, setLeaveWorkflow] = useState<'pto' | 'sick' | null>(null);
   const [leaveSaving, setLeaveSaving] = useState(false);
@@ -6256,6 +6272,7 @@ function HrWorkforceWorkspace({
   });
   const canManageHr = user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
   const canViewSensitiveHr = canManageHr;
+  const navigate = useNavigate();
   const employees = records.filter((record) => record.recordType === 'employee' && record.status !== 'archived');
   const archivedEmployees = records.filter((record) => record.recordType === 'employee' && record.status === 'archived');
   const payrollRecords = records.filter((record) => record.recordType === 'payroll');
@@ -6281,11 +6298,41 @@ function HrWorkforceWorkspace({
   const ptoRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'pto').length;
   const sickRequests = leaveRequests.filter((record) => record.status === 'pending_approval' && record.metadata?.leaveType === 'sick').length;
   const pendingHrApprovals = leaveRequests.filter((record) => record.status === 'pending_approval');
+  const hrDatasets = asArray(datasets)
+    .filter((dataset) => (!selectedCompanyId || dataset.companyId === selectedCompanyId) && classifyDatasetModule(dataset) === 'HR & Workforce')
+    .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
+  const selectedHrDataset = hrDatasets.find((dataset) => dataset.id === selectedHrDatasetId) ?? hrDatasets[0] ?? null;
+  const activeHrWorkspace = route.type === 'timesheets' ? 'timesheets'
+    : route.type === 'employee' ? 'employees'
+      : route.type === 'leave' ? 'pto'
+        : route.type === 'hiring' ? 'datasets'
+          : route.type === 'payroll' ? 'payroll'
+            : route.type === 'reports' ? 'reports'
+              : route.type === 'approvals' ? 'approvals'
+                : route.type === 'ai_insights' ? 'ai'
+                  : route.type === 'datasets' ? 'datasets'
+                    : 'overview';
+  const hrWorkspaceTabs = [
+    { key: 'overview', label: 'Overview', path: '/hr' },
+    { key: 'employees', label: 'Employees', path: '/hr/employees' },
+    { key: 'timesheets', label: 'Timesheets', path: '/hr/timesheets' },
+    { key: 'payroll', label: 'Payroll', path: '/hr/payroll' },
+    { key: 'pto', label: 'PTO', path: '/hr/leave-management' },
+    { key: 'reports', label: 'Reports', path: '/hr/reports' },
+    { key: 'datasets', label: 'Datasets', path: '/hr/datasets' },
+    { key: 'approvals', label: 'Approvals', path: '/hr/approvals' },
+    { key: 'ai', label: 'AI Insights', path: '/hr/ai-insights' }
+  ];
 
   useEffect(() => {
     if (route.type === 'timesheets') setAttendanceTab('Live Workforce');
     if (route.type === 'leave') setAttendanceTab('Leave Calendar');
   }, [route.type]);
+
+  useEffect(() => {
+    if (!selectedHrDatasetId && hrDatasets[0]) setSelectedHrDatasetId(hrDatasets[0].id);
+    if (selectedHrDatasetId && !hrDatasets.some((dataset) => dataset.id === selectedHrDatasetId)) setSelectedHrDatasetId(hrDatasets[0]?.id ?? '');
+  }, [hrDatasets, selectedHrDatasetId]);
 
   async function createHrRecord(recordType: string, title: string, status: string, metadata: Record<string, unknown>, amount?: number | null) {
     const response = await apiFetch('/api/modules/hr/records', {
@@ -6835,6 +6882,31 @@ function HrWorkforceWorkspace({
     }
   }
 
+  function stageHrUpload(file: File | null) {
+    if (!file) return;
+    setStagedHrFile(file);
+    setPayrollFileName(file.name);
+    setHrUploadStep('preview');
+  }
+
+  function advanceHrUploadStep(nextStep: typeof hrUploadStep) {
+    if (!stagedHrFile && nextStep !== 'upload') {
+      setError('Choose a file before continuing the HR dataset workflow.');
+      return;
+    }
+    setHrUploadStep(nextStep);
+  }
+
+  async function publishHrUpload(attachAsPaystub = false) {
+    if (!stagedHrFile) {
+      setError('Choose a file before publishing the HR dataset workflow.');
+      return;
+    }
+    await uploadPayroll(stagedHrFile, attachAsPaystub);
+    setHrUploadStep('publish');
+    setStagedHrFile(null);
+  }
+
   function exportHrReport(kind: string) {
     const lines = [
       `Metenova AI HR ${kind} Report`,
@@ -6885,7 +6957,38 @@ function HrWorkforceWorkspace({
 
   return (
     <article className="panel routed-workspace hr-workforce-workspace">
-      <div className="hr-dashboard-grid">
+      <div className="hr-workspace-shell-header">
+        <div>
+          <p className="eyebrow">HR & Workforce</p>
+          <h2>{hrWorkspaceTabs.find((tab) => tab.key === activeHrWorkspace)?.label ?? 'Overview'} Workspace</h2>
+          <span>{company?.name ?? 'Selected company'} - modular HR operations with isolated datasets, approvals, and reports.</span>
+        </div>
+        <button className="ghost-button compact" type="button" onClick={() => setAiDrawerOpen(true)}>Open AI Insights</button>
+      </div>
+
+      <nav className="hr-workspace-nav" aria-label="HR workspaces">
+        {hrWorkspaceTabs.map((tab) => (
+          <button className={activeHrWorkspace === tab.key ? 'active' : ''} key={tab.key} type="button" onClick={() => navigate(tab.path)}>
+            {tab.label}
+          </button>
+        ))}
+      </nav>
+
+      <section className="hr-toolbar unified-hr-toolbar sticky-hr-toolbar">
+        <div>
+          <p className="eyebrow">HR Actions</p>
+          <strong>Company HR operations</strong>
+        </div>
+        <button type="button" onClick={() => { setUploadCenterOpen(true); navigate('/hr/datasets'); }}>Upload Dataset</button>
+        <button type="button" onClick={() => { setEmployeeFormOpen(true); navigate('/hr/employees'); }}>Add Employee</button>
+        <button type="button" onClick={() => navigate('/hr/timesheets')}>Open Timesheets</button>
+        <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>PTO Requests</button>
+        <button type="button" onClick={() => navigate('/hr/approvals')}>Approvals</button>
+        <button type="button" onClick={() => navigate('/hr/reports')}>Reports</button>
+        {canManageHr && <button type="button" onClick={exportPayrollTimesheet}>Export</button>}
+      </section>
+
+      {activeHrWorkspace === 'overview' && <div className="hr-dashboard-grid">
         {[
           ['Total employees', employees.length],
           ['Active employees', employees.filter((employee) => employee.status === 'active').length],
@@ -6903,9 +7006,9 @@ function HrWorkforceWorkspace({
             <strong>{value}</strong>
           </div>
         ))}
-      </div>
+      </div>}
 
-      <section className="hr-operations-grid">
+      {activeHrWorkspace === 'employees' && <section className="hr-operations-grid focused-hr-workspace">
         {canManageHr ? <section className={`hr-quick-create ${employeeFormOpen ? 'open' : ''}`}>
           <div className="quick-create-bar">
             <div>
@@ -6949,49 +7052,37 @@ function HrWorkforceWorkspace({
         )}
 
         <section className={`hr-ai-panel collapsible-risk-panel ${riskMonitorOpen ? 'open' : ''}`}>
-          <button className="quick-create-bar risk-monitor-trigger" type="button" onClick={() => setRiskMonitorOpen((open) => !open)}>
+          <button className="quick-create-bar risk-monitor-trigger" type="button" onClick={() => setAiDrawerOpen(true)}>
             <div>
               <p className="eyebrow">HR AI insights</p>
               <h2>Workforce risk monitor</h2>
-              <span>{hrInsightItems().filter((item) => !/healthy|No |stable|complete|clear/i.test(item)).length} active signals. Click to review recommendations.</span>
+              <span>{hrInsightItems().filter((item) => !/healthy|No |stable|complete|clear/i.test(item)).length} active signals. Open the AI drawer for recommendations.</span>
             </div>
-            <strong>{riskMonitorOpen ? 'Collapse' : 'Expand'}</strong>
+            <strong>Open AI Insights</strong>
           </button>
-          {riskMonitorOpen && (
-            <div className="risk-monitor-body">
-              {hrInsightItems().map((item) => {
-                const active = !/healthy|No |stable|complete|clear/i.test(item);
-                return (
-                  <div className={`ai-insight-chip ${active ? 'severity-warning' : 'severity-ok'}`} key={item}>
-                    <strong>{active ? 'Warning' : 'Stable'}: {item}</strong>
-                    <span>{active ? 'Recommendation: review the affected employee dataset and approval queue.' : 'Company-scoped HR intelligence'}</span>
-                  </div>
-                );
-              })}
-            </div>
-          )}
         </section>
-      </section>
-
-      <section className="hr-toolbar unified-hr-toolbar">
-        <div>
-          <p className="eyebrow">HR Actions</p>
-          <strong>Company HR operations</strong>
-        </div>
-        <button type="button" onClick={() => setUploadCenterOpen((open) => !open)}>Upload Dataset</button>
-        <button type="button" onClick={() => setEmployeeFormOpen(true)}>Add Employee</button>
-        <button type="button" onClick={openEmployeeTimesheets} disabled={!selectedEmployee}>Log Timesheet</button>
-        <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>Request PTO</button>
-        <button type="button" onClick={() => openLeaveWorkflow('sick')} disabled={!selectedEmployee}>Sick leave</button>
-        {canManageHr && <button type="button" onClick={() => exportHrExcel('Workforce')}>Export</button>}
-        {canManageHr && <button type="button" onClick={exportPayrollTimesheet}>Generate Payroll</button>}
-      </section>
-      {uploadCenterOpen && (
+      </section>}
+      {uploadCenterOpen && activeHrWorkspace === 'datasets' && (
         <section className="hr-upload-center">
           <div>
             <p className="eyebrow">HR Dataset Upload Center</p>
-            <h2>Choose dataset action</h2>
-            <span>Files are classified before merge so Employee, Payroll, Timesheet, PTO, Sick Leave, Hiring, Performance, Benefits, and Compliance datasets stay separated.</span>
+            <h2>Stage, preview, approve, then publish</h2>
+            <span>Nothing auto-runs. Choose a file, preview the schema, choose create/merge/append/replace, validate, approve, then publish into the selected HR dataset.</span>
+          </div>
+          <div className="hr-upload-steps">
+            {[
+              ['upload', '1 Upload'],
+              ['preview', '2 Preview'],
+              ['action', '3 Choose Action'],
+              ['validate', '4 Validate'],
+              ['approve', '5 Approve'],
+              ['process', '6 Run Processing'],
+              ['publish', '7 Export / Publish']
+            ].map(([key, label]) => (
+              <button className={hrUploadStep === key ? 'active' : ''} key={key} type="button" onClick={() => advanceHrUploadStep(key as typeof hrUploadStep)}>
+                {label}
+              </button>
+            ))}
           </div>
           <div className="attendance-control-bar">
             <label>Dataset type
@@ -7005,18 +7096,22 @@ function HrWorkforceWorkspace({
               </select>
             </label>
             <label>Upload file
-              <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], false)} />
+              <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => stageHrUpload(event.target.files?.[0] ?? null)} />
             </label>
-            <label>Attach paystub
-              <input accept=".pdf,.csv,.xlsx,.xls,.json" type="file" disabled={!selectedEmployee} onChange={(event) => event.target.files?.[0] && void uploadPayroll(event.target.files[0], true)} />
-            </label>
+            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('preview')}>Preview upload</button>
+            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('action')}>Choose action</button>
+            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('validate')}>Validate</button>
+            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('approve')}>Approve</button>
+            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('process')}>Run processing</button>
+            <button type="button" disabled={!stagedHrFile || hrUploadStep !== 'process'} onClick={() => void publishHrUpload(false)}>Publish dataset</button>
           </div>
           <div className="dataset-merge-preview">
             <strong>Merge preview</strong>
-            <span>Matched rows, missing required fields, duplicate employees, invalid columns, unmapped columns, and overwrite warnings are stored with the HR import record before approval.</span>
+            <span>{stagedHrFile ? `${stagedHrFile.name} is staged. Matched rows, missing fields, duplicate employees, invalid columns, unmapped columns, and overwrite warnings are reviewed before publishing.` : 'Choose a file to stage a preview before any HR dataset is changed.'}</span>
             <div className="dataset-preview-strip">
               <span>Target: {hrUploadType}</span>
               <span>Action: {hrUploadAction}</span>
+              <span>Step: {hrUploadStep}</span>
               <span>Selected employee: {selectedEmployee?.title ?? 'None'}</span>
             </div>
           </div>
@@ -7024,26 +7119,194 @@ function HrWorkforceWorkspace({
       )}
       {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
 
-      {route.type === 'timesheets' && (
-        <section className="attendance-ops-workspace unified-timesheet-summary">
+      {activeHrWorkspace === 'timesheets' && (
+        <AttendanceOperationsWorkspace
+          assignShift={assignShift}
+          attendanceDate={attendanceDate}
+          attendanceRecords={attendanceRecords}
+          attendanceTab={attendanceTab}
+          canManage={canManageHr}
+          clockEmployee={clockEmployee}
+          employees={employees}
+          exportPayrollTimesheet={exportPayrollTimesheet}
+          leaveRequests={leaveRequests}
+          payPeriod={payPeriod}
+          saveTimeEntry={saveTimeEntry}
+          setAttendanceDate={setAttendanceDate}
+          setAttendanceTab={setAttendanceTab}
+          setPayPeriod={setPayPeriod}
+          setTimeEntryForm={setTimeEntryForm}
+          shiftRecords={shiftRecords}
+          submitWeeklyTimesheet={submitWeeklyTimesheet}
+          timeEntryForm={timeEntryForm}
+          updateTimesheetDecision={decideTimesheet}
+          weeklyHoursForEmployee={weeklyHoursForEmployee}
+        />
+      )}
+
+      {activeHrWorkspace === 'payroll' && (
+        <section className="hr-focused-card">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Unified Timesheet Workspace</p>
-              <h2>Manage timesheets inside each employee workspace</h2>
-              <span>Open an employee and use the Timesheets tab for date, project/task, hours, overtime, approval, and payroll status edits.</span>
+              <p className="eyebrow">Payroll Workspace</p>
+              <h2>Payroll preparation and paystub review</h2>
+              <span>Review payroll records, paystubs, missing hours, overtime exceptions, and payroll-ready exports.</span>
             </div>
-            <button type="button" onClick={openEmployeeTimesheets} disabled={!selectedEmployee}>Open selected employee timesheets</button>
+            <button type="button" onClick={exportPayrollTimesheet}>Export payroll-ready CSV</button>
           </div>
           <div className="hr-dashboard-grid compact-attendance-grid">
-            <div><span>Timesheet rows</span><strong>{attendanceRecords.filter((record) => record.status !== 'archived').length}</strong></div>
-            <div><span>Pending approval</span><strong>{attendanceRecords.filter((record) => String(record.metadata?.approvalStatus ?? record.status).includes('pending')).length}</strong></div>
+            <div><span>Payroll records</span><strong>{payrollRecords.length}</strong></div>
+            <div><span>Paystubs/docs</span><strong>{documents.length}</strong></div>
+            <div><span>Missing paystubs</span><strong>{missingPaystubs}</strong></div>
             <div><span>Overtime alerts</span><strong>{overtimeWarnings}</strong></div>
-            <div><span>Payroll period</span><strong>{payPeriod}</strong></div>
+          </div>
+          <EmployeeRecordList title="Payroll records" records={payrollRecords} empty="No payroll records have been created yet." />
+        </section>
+      )}
+
+      {activeHrWorkspace === 'pto' && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">PTO & Leave Workspace</p>
+              <h2>Leave requests and team coverage</h2>
+              <span>Submit PTO or sick leave, review approval history, and manage manager comments.</span>
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>Request PTO</button>
+              <button className="ghost-button compact" type="button" onClick={() => openLeaveWorkflow('sick')} disabled={!selectedEmployee}>Sick leave</button>
+            </div>
+          </div>
+          <LeaveRequestList canManage={canManageHr} onDecide={decideLeaveRequest} records={leaveRequests} />
+        </section>
+      )}
+
+      {activeHrWorkspace === 'reports' && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">HR Reports Workspace</p>
+              <h2>Operational reports</h2>
+              <span>Generate employee, payroll, attendance, PTO, workforce analytics, PDF, and Excel-compatible exports.</span>
+            </div>
+          </div>
+          <div className="hr-report-grid">
+            {['Employee Report', 'Payroll Summary', 'Timesheet Report', 'PTO Report', 'Workforce Analytics'].map((kind) => (
+              <article key={kind}>
+                <strong>{kind}</strong>
+                <span>{company?.name ?? 'Selected company'} - {employees.length} employees - {pendingHrApprovals.length} approvals</span>
+                <div className="inline-actions">
+                  <button type="button" onClick={() => exportHrReport(kind)}>Export PDF</button>
+                  <button className="ghost-button compact" type="button" onClick={() => exportHrExcel(kind)}>Export Excel</button>
+                </div>
+              </article>
+            ))}
           </div>
         </section>
       )}
 
-      <section className="hr-employee-table">
+      {activeHrWorkspace === 'approvals' && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">HR Approval Workspace</p>
+              <h2>Centralized approvals</h2>
+              <span>Review PTO, sick leave, timesheet, payroll, and staged dataset approvals in one focused queue.</span>
+            </div>
+          </div>
+          <LeaveRequestList canManage={canManageHr} onDecide={decideLeaveRequest} records={pendingHrApprovals} />
+          <TimesheetRecordList
+            canManage={canManageHr}
+            employee={selectedEmployee ?? employees[0] ?? ({ id: 'empty', title: 'No employee selected', metadata: {}, status: 'draft', recordType: 'employee', module: 'hr', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() } as ModuleRecord)}
+            onCreate={openEmployeeTimesheets}
+            onDelete={deleteTimesheet}
+            onEdit={editTimesheet}
+            onResubmit={resubmitTimesheet}
+            onTimesheetDecision={decideTimesheet}
+            records={attendanceRecords.filter((record) => String(record.metadata?.approvalStatus ?? record.status).includes('pending'))}
+          />
+        </section>
+      )}
+
+      {activeHrWorkspace === 'ai' && (
+        <section className="hr-focused-card hr-ai-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">HR AI Insights Workspace</p>
+              <h2>Workforce risk and recommendations</h2>
+              <span>AI-style operational warnings stay isolated from the employee and dataset workspaces.</span>
+            </div>
+          </div>
+          <div className="risk-monitor-body always-open">
+            {hrInsightItems().map((item) => {
+              const active = !/healthy|No |stable|complete|clear/i.test(item);
+              return (
+                <div className={`ai-insight-chip ${active ? 'severity-warning' : 'severity-ok'}`} key={item}>
+                  <strong>{active ? 'Warning' : 'Stable'}: {item}</strong>
+                  <span>{active ? 'Recommendation: review the affected employee dataset and approval queue.' : 'Company-scoped HR intelligence'}</span>
+                </div>
+              );
+            })}
+          </div>
+        </section>
+      )}
+
+      {activeHrWorkspace === 'datasets' && (
+        <section className="hr-focused-card hr-dataset-workspace">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">HR Dataset Workspace</p>
+              <h2>Selected dataset control</h2>
+              <span>Select one dataset. Only its rows, reports, approvals, exports, and actions are shown.</span>
+            </div>
+            <select value={selectedHrDataset?.id ?? ''} onChange={(event) => setSelectedHrDatasetId(event.target.value)}>
+              <option value="">Select dataset</option>
+              {hrDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+            </select>
+          </div>
+          {selectedHrDataset ? (
+            <div className="selected-dataset-card">
+              <div className="dataset-detail-grid">
+                <div><span>Dataset</span><strong>{selectedHrDataset.fileName}</strong></div>
+                <div><span>Status</span><strong className={`status-pill ${String(selectedHrDataset.cleanupStatus ?? selectedHrDataset.status ?? 'draft').replace(/\s+/g, '-')}`}>{selectedHrDataset.cleanupStatus ?? selectedHrDataset.status ?? 'draft'}</strong></div>
+                <div><span>Rows</span><strong>{displayNumber(selectedHrDataset.rows)}</strong></div>
+                <div><span>Columns</span><strong>{displayNumber(selectedHrDataset.columns)}</strong></div>
+              </div>
+              <div className="inline-actions dataset-primary-actions">
+                {[
+                  ['preview', 'Preview Rows'],
+                  ['edit', 'Edit Rows'],
+                  ['query', 'Query Dataset'],
+                  ['validate', 'Validate'],
+                  ['normalize', 'Normalize'],
+                  ['clean', 'Clean'],
+                  ['approve', 'Approve'],
+                  ['export', 'Export'],
+                  ['archive', 'Archive'],
+                  ['delete', 'Delete']
+                ].map(([action, label]) => (
+                  <button className={action === 'delete' ? 'ghost-button compact danger' : 'ghost-button compact'} key={action} type="button" onClick={() => onDatasetAction(selectedHrDataset, action)}>
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <div className="table-wrap preview-table-wrap compact-dataset-table">
+                <table className="preview-table">
+                  <thead><tr>{getPreviewHeaders(selectedHrDataset).slice(0, 8).map((header) => <th key={header}>{header}</th>)}</tr></thead>
+                  <tbody>
+                    {getPreviewRows(selectedHrDataset, 'upload').slice(0, 6).map((row, index) => (
+                      <tr key={index}>{getPreviewHeaders(selectedHrDataset).slice(0, 8).map((header) => <td key={header}>{String(row[header] ?? '')}</td>)}</tr>
+                    ))}
+                    {!getPreviewRows(selectedHrDataset, 'upload').length && <tr><td colSpan={Math.max(getPreviewHeaders(selectedHrDataset).slice(0, 8).length, 1)}>No rows are available for this selected dataset.</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          ) : <EmptyState title="No HR datasets yet" copy="Upload or create an Employee, Payroll, Timesheet, PTO, Sick Leave, Hiring, Performance, Benefits, or Compliance dataset." />}
+        </section>
+      )}
+
+      {(activeHrWorkspace === 'employees' || activeHrWorkspace === 'overview') && <section className="hr-employee-table">
         <div className="dataset-table-head">
           <span>Employee</span>
           <span>Department</span>
@@ -7064,7 +7327,32 @@ function HrWorkforceWorkspace({
         ))}
         {!employees.length && <EmptyState title="Create your first employee" copy="Employee profiles, payroll validation, paystubs, timesheets, PTO, and HR reports will appear here." />}
         {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}
-      </section>
+      </section>}
+      {aiDrawerOpen && (
+        <div className="modal-backdrop" role="presentation">
+          <aside className="hr-ai-drawer" aria-label="HR AI insights drawer">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">AI Insights Drawer</p>
+                <h2>Workforce risk monitor</h2>
+                <span>Risks, alerts, recommendations, anomaly warnings, and dataset-driven HR intelligence.</span>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setAiDrawerOpen(false)}>Close</button>
+            </div>
+            <div className="risk-monitor-body always-open">
+              {hrInsightItems().map((item) => {
+                const active = !/healthy|No |stable|complete|clear/i.test(item);
+                return (
+                  <div className={`ai-insight-chip ${active ? 'severity-warning' : 'severity-ok'}`} key={item}>
+                    <strong>{active ? 'Warning' : 'Stable'}: {item}</strong>
+                    <span>{active ? 'Recommendation: review the selected HR dataset, approval queue, or employee workspace.' : 'Company-scoped HR intelligence'}</span>
+                  </div>
+                );
+              })}
+            </div>
+          </aside>
+        </div>
+      )}
       {leaveWorkflow && (
         <LeaveWorkflowModal
           employees={employees}
