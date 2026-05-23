@@ -1332,9 +1332,50 @@ export function App() {
     () => companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? sampleCompanies[0],
     [companies, selectedCompanyId]
   );
+  const operationalModuleDatasets = useMemo(() => {
+    const scopedRecords = selectedCompanyId ? records.filter((record) => record.companyId === selectedCompanyId) : records;
+    const makeDataset = (name: string, rows: Record<string, string>[]): Dataset => {
+      const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+      return normalizeDatasetForClient({
+        id: `generated-${selectedCompanyId || 'all'}-${name.toLowerCase().replace(/\s+/g, '-')}`,
+        companyId: selectedCompanyId,
+        fileName: `${name} Dataset`,
+        fileType: 'operational',
+        uploadedAt: new Date(Math.max(0, ...scopedRecords.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString(),
+        rows: rows.length,
+        columns: headers.length,
+        headers,
+        preview: rows,
+        records: rows,
+        previewRows: rows,
+        chart: [],
+        numericSummary: [],
+        cleanupStatus: rows.length ? 'active' : 'empty',
+        pipelineStatus: rows.length ? 'synced' : 'empty',
+        status: rows.length ? 'active' : 'empty',
+        ownerName: 'HR & Workforce',
+        ownerEmail: 'HR & Workforce',
+        insights: [`${name} is generated from HR workspace records.`]
+      } as Dataset);
+    };
+    const hrRecords = scopedRecords.filter((record) => record.module === 'hr');
+    return [
+      makeDataset('Employee', hrRecords.filter((record) => record.recordType === 'employee' && record.status !== 'archived').map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), name: record.title, status: record.status, department: String(record.metadata?.department ?? ''), email: String(record.metadata?.email ?? '') }))),
+      makeDataset('Timesheet', hrRecords.filter((record) => ['timesheet', 'attendance'].includes(record.recordType) && record.status !== 'archived').map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), workDate: String(record.metadata?.workDate ?? record.metadata?.date ?? ''), hours: String(record.metadata?.totalHours ?? record.metadata?.hours ?? ''), status: record.status }))),
+      makeDataset('PTO', hrRecords.filter((record) => record.recordType === 'leave_request' && record.metadata?.leaveType === 'pto').map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), startDate: String(record.metadata?.startDate ?? ''), endDate: String(record.metadata?.endDate ?? ''), status: record.status }))),
+      makeDataset('Payroll', hrRecords.filter((record) => record.recordType === 'payroll').map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), payPeriod: String(record.metadata?.payrollPeriod ?? ''), grossPay: String(record.metadata?.grossPay ?? ''), netPay: String(record.metadata?.netPay ?? ''), status: record.status }))),
+      makeDataset('Benefits', hrRecords.filter((record) => ['document', 'paystub'].includes(record.recordType)).map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), type: record.recordType, status: record.status }))),
+      makeDataset('Hiring', hrRecords.filter((record) => record.recordType === 'hiring').map((record) => ({ candidate: record.title, status: record.status, owner: String(record.ownerEmail ?? '') }))),
+      makeDataset('Performance', hrRecords.filter((record) => record.recordType === 'performance').map((record) => ({ employeeName: record.title, status: record.status, notes: String(record.metadata?.notes ?? '') })))
+    ];
+  }, [records, selectedCompanyId]);
   const companyDatasets = useMemo(
-    () => selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets,
-    [datasets, selectedCompanyId]
+    () => {
+      const persisted = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
+      const persistedNames = new Set(persisted.map((dataset) => dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase()));
+      return [...operationalModuleDatasets.filter((dataset) => !persistedNames.has(dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase())), ...persisted];
+    },
+    [datasets, operationalModuleDatasets, selectedCompanyId]
   );
   const activeCleanedDataset = useMemo(() => {
     if (!activeDataset) return null;
@@ -3788,7 +3829,8 @@ function EnterpriseCockpit({
     ['HR', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'HR')],
     ['Finance', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Finance')],
     ['Engineering', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Engineering')],
-    ['CRM', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'CRM')]
+    ['CRM', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'CRM')],
+    ['Analytics', companyDatasets.filter((dataset) => !['HR', 'Finance', 'Engineering', 'CRM'].includes(classifyDatasetModule(dataset)))]
   ] as Array<[string, Dataset[]]>;
   const registryDatasets = companyDatasets
     .filter((dataset) => datasetRegistryModule === 'all' || classifyDatasetModule(dataset) === datasetRegistryModule)
@@ -3798,6 +3840,46 @@ function EnterpriseCockpit({
       dataset.cleanupStatus,
       ...asArray(dataset.headers)
     ].join(' ').toLowerCase().includes(datasetRegistryQuery.toLowerCase()));
+  const selectedDashboardDataset = activeDataset ?? companyDatasets[0] ?? null;
+  const selectedRows = selectedDashboardDataset ? datasetPreview(selectedDashboardDataset) : [];
+  const selectedHeaders = selectedDashboardDataset ? datasetHeaders(selectedDashboardDataset).slice(0, 6) : [];
+  const selectedDuplicates = selectedDashboardDataset ? findDuplicateRows(selectedRows).length : 0;
+  const selectedMissing = selectedRows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+  function datasetHealth(dataset: Dataset) {
+    const rows = datasetPreview(dataset);
+    const duplicates = findDuplicateRows(rows).length;
+    const missing = rows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+    if (/pending|approval/i.test(String(dataset.cleanupStatus ?? dataset.status ?? dataset.pipelineStatus ?? ''))) return 'Approval pending';
+    if (duplicates) return 'Duplicate rows';
+    if (missing) return 'Missing data';
+    if ((dataset.cleanupMetrics?.failedRows ?? 0) > 0) return 'Warning';
+    return rows.length ? 'Healthy' : 'Empty';
+  }
+  function exportDashboardDataset(dataset: Dataset) {
+    if (dataset.id.startsWith('generated-')) {
+      const headers = datasetHeaders(dataset);
+      const rows = datasetPreview(dataset);
+      downloadText([headers, ...rows.map((row) => headers.map((header) => String(row[header] ?? '')))].map((row) => row.map(csvEscape).join(',')).join('\n'), `${dataset.fileName.toLowerCase().replace(/\s+/g, '-')}.csv`, 'text/csv');
+      return;
+    }
+    downloadDatasetExport(dataset);
+  }
+  function cleanDashboardDataset(dataset: Dataset) {
+    onSelectDataset(dataset);
+    if (dataset.id.startsWith('generated-')) {
+      setDrillPanel({ title: `${dataset.fileName} AI insights`, kind: 'ai' });
+      return;
+    }
+    window.setTimeout(() => void onCleanDataset(), 0);
+  }
+  const liveActivityItems = [
+    ['Dataset approved', `${companyDatasets.filter((dataset) => /active|approved|completed/i.test(String(dataset.status ?? dataset.cleanupStatus))).length} active`, '/data-processing/workspace'],
+    ['Payroll exported', `${companyReports.filter((report) => /payroll/i.test(report.title)).length} reports`, '/hr/payroll'],
+    ['Timesheet synced', `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /timesheet/i.test(dataset.fileName))?.rows ?? 0} rows`, '/hr/timesheets'],
+    ['Employee added', `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /employee/i.test(dataset.fileName))?.rows ?? 0} employees`, '/hr/employees'],
+    ['PTO approved', `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /pto/i.test(dataset.fileName))?.rows ?? 0} records`, '/hr/leave-management'],
+    [selectedDuplicates ? 'Duplicate employee detected' : 'Dataset health', selectedDuplicates ? `${selectedDuplicates} duplicates` : `${datasetHealthScore}% health`, '/data-processing/workspace']
+  ];
 
   return (
     <section className="dashboard-cockpit" aria-label="Enterprise operations cockpit">
@@ -3827,16 +3909,40 @@ function EnterpriseCockpit({
 
       <div className="company-dataset-selector">
         <div>
-          <p className="eyebrow">Company dataset registry</p>
-          <strong>{selectedCompany?.name ?? 'Selected company'} datasets</strong>
-          <span>{companyDatasets.length} datasets connected to dashboard, analytics, reports, pipelines, and governance.</span>
+          <p className="eyebrow">Dataset Intelligence Hub</p>
+          <strong>{selectedCompany?.name ?? 'Selected company'} live datasets</strong>
+          <span>{companyDatasets.length} uploaded, generated, and synced datasets connected across modules.</span>
         </div>
-        <select value={activeDataset?.id ?? ''} onChange={(event) => onSelectDataset(companyDatasets.find((dataset) => dataset.id === event.target.value) ?? null)}>
+        <select value={selectedDashboardDataset?.id ?? ''} onChange={(event) => onSelectDataset(companyDatasets.find((dataset) => dataset.id === event.target.value) ?? null)}>
           <option value="">Company overview</option>
           {companyDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
         </select>
         <button type="button" onClick={() => navigate('/data-processing/workspace')}>Open Enterprise Data Hub</button>
       </div>
+
+      {selectedDashboardDataset && (
+        <section className="dashboard-live-preview">
+          <div className="dashboard-live-summary">
+            <div><span>Dataset</span><strong>{selectedDashboardDataset.fileName}</strong></div>
+            <div><span>Module</span><strong>{classifyDatasetModule(selectedDashboardDataset)}</strong></div>
+            <div><span>Health</span><strong>{datasetHealth(selectedDashboardDataset)}</strong></div>
+            <div><span>Rows</span><strong>{displayNumber(selectedDashboardDataset.rows)}</strong></div>
+            <div><span>Missing</span><strong>{selectedMissing}</strong></div>
+            <div><span>Duplicates</span><strong>{selectedDuplicates}</strong></div>
+          </div>
+          <div className="dashboard-live-table">
+            <table>
+              <thead><tr>{selectedHeaders.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+              <tbody>
+                {selectedRows.slice(0, 4).map((row, index) => (
+                  <tr key={`${selectedDashboardDataset.id}-${index}`}>{selectedHeaders.map((header) => <td key={header}>{String(row[header] ?? '') || 'Not set'}</td>)}</tr>
+                ))}
+                {!selectedRows.length && <tr><td colSpan={Math.max(selectedHeaders.length, 1)}>No preview rows yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <div className="company-module-dataset-registry">
         {moduleGroups.map(([label, datasets]) => (
@@ -3859,14 +3965,19 @@ function EnterpriseCockpit({
             <option value="CRM">CRM</option>
           </select>
         </div>
-        <div className="compact-table">
+        <div className="dashboard-dataset-actions-grid">
           {registryDatasets.slice(0, 8).map((dataset) => (
-            <div key={dataset.id}>
-              <span><strong>{dataset.fileName}</strong><small>{classifyDatasetModule(dataset)} | {dataset.rows} rows | {dataset.cleanupStatus ?? dataset.status ?? 'uploaded'}</small></span>
-              <span>{dataset.ownerEmail ?? dataset.ownerName ?? 'Workspace'}</span>
-              <button type="button" onClick={() => onSelectDataset(dataset)}>Preview rows</button>
-              <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Open module</button>
-            </div>
+            <article key={dataset.id}>
+              <span className="dataset-type-icon">{classifyDatasetModule(dataset).slice(0, 2).toUpperCase()}</span>
+              <span><strong>{dataset.fileName}</strong><small>{displayNumber(dataset.rows)} rows | {datasetHealth(dataset)}</small></span>
+              <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Open</button>
+              <button type="button" onClick={() => onSelectDataset(dataset)}>Preview</button>
+              <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Edit</button>
+              <button type="button" onClick={() => exportDashboardDataset(dataset)}>Export</button>
+              <button type="button" onClick={() => setDrillPanel({ title: `${dataset.fileName} approvals`, kind: 'approval' })}>Approve</button>
+              <button type="button" onClick={() => cleanDashboardDataset(dataset)}>Clean</button>
+              <button type="button" onClick={() => setDrillPanel({ title: `${dataset.fileName} AI insights`, kind: 'ai' })}>AI</button>
+            </article>
           ))}
           {!registryDatasets.length && <div><span><strong>No datasets match the current filters.</strong><small>Try another module, status, owner, or column query.</small></span></div>}
         </div>
@@ -3995,15 +4106,21 @@ function EnterpriseCockpit({
         <aside className="live-rail" aria-label="Live activity rail">
           <div>
             <p className="eyebrow">Live activity</p>
-            <strong>{selectedCompany?.name ?? 'Company'}</strong>
+            <strong>Operational timeline</strong>
           </div>
-          {notifications.slice(0, 8).map((notification) => (
-            <button key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
+          <div className="compact-activity-timeline">
+            {liveActivityItems.map(([title, detail, path]) => (
+              <button key={title} type="button" onClick={() => navigate(path)}>
+                <strong>{title}</strong>
+                <span>{detail}</span>
+              </button>
+            ))}
+          </div>
+          {notifications.slice(0, 3).map((notification) => (
+            <button className="notification-mini" key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
               <strong>{notification.title}</strong>
-              <span>{notification.message}</span>
             </button>
           ))}
-          {!notifications.length && <p className="muted">No live alerts yet.</p>}
         </aside>
       </div>
 
@@ -7633,8 +7750,6 @@ function HrWorkforceWorkspace({
             <div className="payroll-table-head">
               <span>Employee</span>
               <span>Pay period</span>
-              <span>Profile</span>
-              <span>Hours</span>
               <span>Gross</span>
               <span>Net</span>
               <span>Status</span>
@@ -7647,14 +7762,12 @@ function HrWorkforceWorkspace({
                 const expanded = expandedPayrollKey === item.key;
                 return (
                   <article className={expanded ? 'expanded' : ''} key={item.key}>
-                    <button className="payroll-row-main" type="button" onClick={() => setExpandedPayrollKey(expanded ? '' : item.key)}>
-                      <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
-                      <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
-                      <span><strong>{item.paystub.profile.taxType}</strong><small>{item.paystub.profile.payType} ${item.paystub.profile.payRate.toFixed(2)}/hr</small></span>
-                      <span><strong>{item.paystub.regularHours.toFixed(1)} regular</strong><small>{item.paystub.overtimeHours.toFixed(1)} overtime</small></span>
-                      <span>${item.paystub.grossPay.toFixed(2)}</span>
-                      <span><strong>${item.paystub.netPay.toFixed(2)}</strong></span>
-                      <span className={`status-pill ${item.sourceRecords.length ? 'approved' : 'pending'}`}>{item.status}</span>
+                  <button className="payroll-row-main" type="button" onClick={() => setExpandedPayrollKey(expanded ? '' : item.key)}>
+                    <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
+                    <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
+                    <span>${item.paystub.grossPay.toFixed(2)}</span>
+                    <span><strong>${item.paystub.netPay.toFixed(2)}</strong></span>
+                    <span className={`status-pill ${item.sourceRecords.length ? 'approved' : 'pending'}`}>{item.status}</span>
                     </button>
                     <div className="inline-actions payroll-row-actions">
                       <button className="ghost-button compact" type="button" onClick={() => { setEmployeeWorkspaceId(item.employee.id); setEmployeeTab('Payroll'); }}>Profile</button>
