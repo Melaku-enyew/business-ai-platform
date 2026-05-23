@@ -1,5 +1,11 @@
 import { ChangeEvent, Component, CSSProperties, Dispatch, DragEvent, ErrorInfo, FormEvent, ReactNode, SetStateAction, useEffect, useMemo, useState } from 'react';
 import { Navigate, Route, Routes, useLocation, useNavigate } from 'react-router-dom';
+import { DatasetGrid, HrDatasetSummary } from './components/hr/DatasetGrid';
+import { DatasetToolbar } from './components/hr/DatasetToolbar';
+import { EmployeeGrid, EmployeeGridRow } from './components/hr/EmployeeGrid';
+import { HRWorkspaceFrame } from './components/hr/HRWorkspace';
+import { TimesheetWorkspaceSummary } from './components/hr/TimesheetWorkspace';
+import { UploadCenter } from './components/hr/UploadCenter';
 
 type InsightResponse = {
   metrics: Array<{ label: string; value: number; trend: string }>;
@@ -6017,6 +6023,7 @@ function ModuleWorkspacePage({
           company={selectedCompany}
           datasets={moduleDatasets}
           onDatasetAction={runDatasetAction}
+          onSaveDatasetRows={saveDatasetRows}
           records={filteredRecords}
           route={route}
           selectedCompanyId={selectedCompanyId}
@@ -6206,6 +6213,7 @@ function HrWorkforceWorkspace({
   company,
   datasets,
   onDatasetAction,
+  onSaveDatasetRows,
   records,
   route,
   selectedCompanyId,
@@ -6218,6 +6226,7 @@ function HrWorkforceWorkspace({
   company: Company | null;
   datasets: Dataset[];
   onDatasetAction: (dataset: Dataset, action: string) => void;
+  onSaveDatasetRows: (dataset: Dataset, records: Record<string, string>[]) => Promise<void>;
   records: ModuleRecord[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
@@ -6249,7 +6258,7 @@ function HrWorkforceWorkspace({
   const [riskMonitorOpen, setRiskMonitorOpen] = useState(false);
   const [uploadCenterOpen, setUploadCenterOpen] = useState(false);
   const [aiDrawerOpen, setAiDrawerOpen] = useState(false);
-  const [hrUploadType, setHrUploadType] = useState('Employee dataset');
+  const [hrUploadType, setHrUploadType] = useState('Employee');
   const [hrUploadAction, setHrUploadAction] = useState('Create new dataset');
   const [stagedHrFile, setStagedHrFile] = useState<File | null>(null);
   const [hrUploadStep, setHrUploadStep] = useState<'upload' | 'preview' | 'action' | 'validate' | 'approve' | 'process' | 'publish'>('upload');
@@ -6302,6 +6311,15 @@ function HrWorkforceWorkspace({
     .filter((dataset) => (!selectedCompanyId || dataset.companyId === selectedCompanyId) && classifyDatasetModule(dataset) === 'HR & Workforce')
     .sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
   const selectedHrDataset = hrDatasets.find((dataset) => dataset.id === selectedHrDatasetId) ?? hrDatasets[0] ?? null;
+  const employeeDataset = hrDatasets.find((dataset) => /employee/i.test(dataset.fileName) || datasetHeaders(dataset).some((header) => /employee/i.test(header))) ?? selectedHrDataset;
+  const hrDatasetSummaries: HrDatasetSummary[] = hrDatasets.map((dataset) => ({
+    id: dataset.id,
+    fileName: dataset.fileName,
+    type: dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').split(/[-_\s]/)[0] || 'HR',
+    rows: dataset.rows,
+    status: dataset.cleanupStatus ?? dataset.status ?? 'draft',
+    updatedAt: dataset.uploadedAt
+  }));
   const activeHrWorkspace = route.type === 'timesheets' ? 'timesheets'
     : route.type === 'employee' ? 'employees'
       : route.type === 'leave' ? 'pto'
@@ -6312,6 +6330,8 @@ function HrWorkforceWorkspace({
                 : route.type === 'ai_insights' ? 'ai'
                   : route.type === 'datasets' ? 'datasets'
                     : 'overview';
+  const activeEmployeeDataset = activeHrWorkspace === 'employees' ? employeeDataset : selectedHrDataset;
+  const activeDatasetRows = activeEmployeeDataset ? datasetPreview(activeEmployeeDataset).map((row) => normalizeEditableRow(row)) : [];
   const hrWorkspaceTabs = [
     { key: 'overview', label: 'Overview', path: '/hr' },
     { key: 'employees', label: 'Employees', path: '/hr/employees' },
@@ -6407,18 +6427,10 @@ function HrWorkforceWorkspace({
   }
 
   async function editEmployee(employee: ModuleRecord) {
-    const nextName = window.prompt('Employee name', employee.title)?.trim();
-    if (!nextName) return;
-    const nextTitle = window.prompt('Role/title', String(employee.metadata?.title ?? ''))?.trim() ?? String(employee.metadata?.title ?? '');
-    const nextDepartment = window.prompt('Department', String(employee.metadata?.department ?? ''))?.trim() ?? String(employee.metadata?.department ?? '');
-    try {
-      await updateHrRecord(employee, {
-        title: nextName,
-        metadata: { ...(employee.metadata ?? {}), title: nextTitle, department: nextDepartment }
-      });
-    } catch (error) {
-      setError(error instanceof Error ? error.message : 'Employee update failed.');
-    }
+    setSelectedEmployeeId(employee.id);
+    setEmployeeWorkspaceId(employee.id);
+    setEmployeeTab('Overview');
+    setError('Use the inline employee dataset grid to edit employee values.');
   }
 
   async function archiveEmployee(employee: ModuleRecord) {
@@ -6537,7 +6549,7 @@ function HrWorkforceWorkspace({
   }
 
   async function decideLeaveRequest(request: ModuleRecord, decision: 'approved' | 'rejected') {
-    const comment = window.prompt(`${decision === 'approved' ? 'Approval' : 'Rejection'} comment`, decision === 'approved' ? 'Approved for coverage.' : 'Rejected for coverage conflict.') ?? '';
+    const comment = decision === 'approved' ? 'Approved from HR Approval Workspace.' : 'Rejected from HR Approval Workspace.';
     try {
       await updateHrRecord(request, {
         status: decision,
@@ -6667,8 +6679,7 @@ function HrWorkforceWorkspace({
   }
 
   async function assignShift(employee: ModuleRecord) {
-    const shift = window.prompt('Shift name', 'Day shift 9:00 AM - 5:00 PM')?.trim();
-    if (!shift) return;
+    const shift = 'Day shift 9:00 AM - 5:00 PM';
     try {
       await createHrRecord('shift', `${employee.title} ${shift}`, 'scheduled', {
         employeeRecordId: employee.id,
@@ -6715,7 +6726,7 @@ function HrWorkforceWorkspace({
   }
 
   async function decideTimesheet(record: ModuleRecord, decision: 'approved' | 'rejected') {
-    const comment = window.prompt(`${decision === 'approved' ? 'Approval' : 'Correction request'} comment`, decision === 'approved' ? 'Approved for payroll.' : 'Please correct the time entry.') ?? '';
+    const comment = decision === 'approved' ? 'Approved for payroll.' : 'Correction requested from Timesheet Workspace.';
     try {
       await updateHrRecord(record, {
         status: decision === 'approved' ? 'approved' : 'rejected',
@@ -6734,14 +6745,14 @@ function HrWorkforceWorkspace({
   }
 
   async function editTimesheet(record: ModuleRecord) {
-    const workDate = window.prompt('Work date', String(record.metadata?.workDate ?? record.metadata?.date ?? attendanceDate)) ?? String(record.metadata?.workDate ?? record.metadata?.date ?? attendanceDate);
-    const projectCode = window.prompt('Project / client reference', String(record.metadata?.projectCode ?? 'MetroCare Migration')) ?? String(record.metadata?.projectCode ?? '');
-    const taskCode = window.prompt('Task', String(record.metadata?.taskCode ?? 'API Integration')) ?? String(record.metadata?.taskCode ?? '');
-    const startTime = window.prompt('Start time', String(record.metadata?.startTime ?? '09:00')) ?? String(record.metadata?.startTime ?? '09:00');
-    const endTime = window.prompt('End time', String(record.metadata?.endTime ?? '17:00')) ?? String(record.metadata?.endTime ?? '17:00');
-    const totalHours = Number(window.prompt('Total hours', String(record.metadata?.totalHours ?? record.metadata?.hours ?? 8)) ?? record.metadata?.totalHours ?? record.metadata?.hours ?? 8);
-    const overtimeHours = Number(window.prompt('Overtime hours', String(record.metadata?.overtimeHours ?? Math.max(totalHours - 8, 0))) ?? record.metadata?.overtimeHours ?? 0);
-    const notes = window.prompt('Notes', String(record.metadata?.notes ?? record.metadata?.note ?? '')) ?? String(record.metadata?.notes ?? '');
+    const workDate = String(record.metadata?.workDate ?? record.metadata?.date ?? attendanceDate);
+    const projectCode = String(record.metadata?.projectCode ?? 'MetroCare Migration');
+    const taskCode = String(record.metadata?.taskCode ?? 'API Integration');
+    const startTime = String(record.metadata?.startTime ?? '09:00');
+    const endTime = String(record.metadata?.endTime ?? '17:00');
+    const totalHours = Number(record.metadata?.totalHours ?? record.metadata?.hours ?? 8);
+    const overtimeHours = Number(record.metadata?.overtimeHours ?? Math.max(totalHours - 8, 0));
+    const notes = String(record.metadata?.notes ?? record.metadata?.note ?? 'Inline dataset edit requested.');
     try {
       await updateHrRecord(record, {
         status: 'draft',
@@ -6839,14 +6850,23 @@ function HrWorkforceWorkspace({
       const duplicatePayrollEntries = payrollRecords.filter((record) => record.metadata?.fileName === file.name).length;
       const missingEmployeeDetection = attachAsPaystub && !inferredEmployee ? 1 : 0;
       const datasetTypeToRecord: Record<string, string> = {
+        'Employee': 'employee',
         'Employee dataset': 'employee',
+        'Payroll': 'payroll',
         'Payroll dataset': 'payroll',
+        'Timesheet': 'timesheet',
         'Timesheet dataset': 'timesheet',
+        'PTO': 'leave_request',
         'PTO dataset': 'leave_request',
+        'Sick leave': 'leave_request',
         'Sick leave dataset': 'leave_request',
+        'Hiring': 'hiring',
         'Hiring dataset': 'hiring',
+        'Performance': 'performance',
         'Performance dataset': 'performance',
+        'Benefits': 'document',
         'Benefits dataset': 'document',
+        'Compliance': 'document',
         'Compliance dataset': 'document'
       };
       const recordType = attachAsPaystub ? 'paystub' : datasetTypeToRecord[hrUploadType] ?? 'payroll';
@@ -6957,36 +6977,24 @@ function HrWorkforceWorkspace({
 
   return (
     <article className="panel routed-workspace hr-workforce-workspace">
-      <div className="hr-workspace-shell-header">
-        <div>
-          <p className="eyebrow">HR & Workforce</p>
-          <h2>{hrWorkspaceTabs.find((tab) => tab.key === activeHrWorkspace)?.label ?? 'Overview'} Workspace</h2>
-          <span>{company?.name ?? 'Selected company'} - modular HR operations with isolated datasets, approvals, and reports.</span>
-        </div>
-        <button className="ghost-button compact" type="button" onClick={() => setAiDrawerOpen(true)}>Open AI Insights</button>
-      </div>
+      <HRWorkspaceFrame
+        activeKey={activeHrWorkspace}
+        companyName={company?.name ?? 'Selected company'}
+        onAi={() => setAiDrawerOpen(true)}
+        onNavigate={navigate}
+        tabs={hrWorkspaceTabs}
+      />
 
-      <nav className="hr-workspace-nav" aria-label="HR workspaces">
-        {hrWorkspaceTabs.map((tab) => (
-          <button className={activeHrWorkspace === tab.key ? 'active' : ''} key={tab.key} type="button" onClick={() => navigate(tab.path)}>
-            {tab.label}
-          </button>
-        ))}
-      </nav>
-
-      <section className="hr-toolbar unified-hr-toolbar sticky-hr-toolbar">
-        <div>
-          <p className="eyebrow">HR Actions</p>
-          <strong>Company HR operations</strong>
-        </div>
-        <button type="button" onClick={() => { setUploadCenterOpen(true); navigate('/hr/datasets'); }}>Upload Dataset</button>
-        <button type="button" onClick={() => { setEmployeeFormOpen(true); navigate('/hr/employees'); }}>Add Employee</button>
-        <button type="button" onClick={() => navigate('/hr/timesheets')}>Open Timesheets</button>
-        <button type="button" onClick={() => openLeaveWorkflow('pto')} disabled={!selectedEmployee}>PTO Requests</button>
-        <button type="button" onClick={() => navigate('/hr/approvals')}>Approvals</button>
-        <button type="button" onClick={() => navigate('/hr/reports')}>Reports</button>
-        {canManageHr && <button type="button" onClick={exportPayrollTimesheet}>Export</button>}
-      </section>
+      <DatasetToolbar
+        canManage={canManageHr}
+        onAddEmployee={() => { setEmployeeFormOpen(true); navigate('/hr/employees'); }}
+        onApprove={() => activeEmployeeDataset && onDatasetAction(activeEmployeeDataset, 'approve')}
+        onBulk={() => navigate('/hr/datasets')}
+        onEdit={() => activeEmployeeDataset && onDatasetAction(activeEmployeeDataset, 'edit')}
+        onExport={exportPayrollTimesheet}
+        onReports={() => navigate('/hr/reports')}
+        onUpload={() => { setUploadCenterOpen(true); navigate('/hr/datasets'); }}
+      />
 
       {activeHrWorkspace === 'overview' && <div className="hr-dashboard-grid">
         {[
@@ -7063,59 +7071,18 @@ function HrWorkforceWorkspace({
         </section>
       </section>}
       {uploadCenterOpen && activeHrWorkspace === 'datasets' && (
-        <section className="hr-upload-center">
-          <div>
-            <p className="eyebrow">HR Dataset Upload Center</p>
-            <h2>Stage, preview, approve, then publish</h2>
-            <span>Nothing auto-runs. Choose a file, preview the schema, choose create/merge/append/replace, validate, approve, then publish into the selected HR dataset.</span>
-          </div>
-          <div className="hr-upload-steps">
-            {[
-              ['upload', '1 Upload'],
-              ['preview', '2 Preview'],
-              ['action', '3 Choose Action'],
-              ['validate', '4 Validate'],
-              ['approve', '5 Approve'],
-              ['process', '6 Run Processing'],
-              ['publish', '7 Export / Publish']
-            ].map(([key, label]) => (
-              <button className={hrUploadStep === key ? 'active' : ''} key={key} type="button" onClick={() => advanceHrUploadStep(key as typeof hrUploadStep)}>
-                {label}
-              </button>
-            ))}
-          </div>
-          <div className="attendance-control-bar">
-            <label>Dataset type
-              <select value={hrUploadType} onChange={(event) => setHrUploadType(event.target.value)}>
-                {['Employee dataset', 'Payroll dataset', 'Timesheet dataset', 'PTO dataset', 'Sick leave dataset', 'Hiring dataset', 'Performance dataset', 'Benefits dataset', 'Compliance dataset'].map((type) => <option key={type}>{type}</option>)}
-              </select>
-            </label>
-            <label>Action
-              <select value={hrUploadAction} onChange={(event) => setHrUploadAction(event.target.value)}>
-                {['Create new dataset', 'Merge into existing dataset', 'Append rows', 'Replace dataset', 'Map columns manually', 'Preview before merge'].map((action) => <option key={action}>{action}</option>)}
-              </select>
-            </label>
-            <label>Upload file
-              <input accept=".csv,.xlsx,.xls,.json,.pdf" type="file" onChange={(event) => stageHrUpload(event.target.files?.[0] ?? null)} />
-            </label>
-            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('preview')}>Preview upload</button>
-            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('action')}>Choose action</button>
-            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('validate')}>Validate</button>
-            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('approve')}>Approve</button>
-            <button type="button" disabled={!stagedHrFile} onClick={() => advanceHrUploadStep('process')}>Run processing</button>
-            <button type="button" disabled={!stagedHrFile || hrUploadStep !== 'process'} onClick={() => void publishHrUpload(false)}>Publish dataset</button>
-          </div>
-          <div className="dataset-merge-preview">
-            <strong>Merge preview</strong>
-            <span>{stagedHrFile ? `${stagedHrFile.name} is staged. Matched rows, missing fields, duplicate employees, invalid columns, unmapped columns, and overwrite warnings are reviewed before publishing.` : 'Choose a file to stage a preview before any HR dataset is changed.'}</span>
-            <div className="dataset-preview-strip">
-              <span>Target: {hrUploadType}</span>
-              <span>Action: {hrUploadAction}</span>
-              <span>Step: {hrUploadStep}</span>
-              <span>Selected employee: {selectedEmployee?.title ?? 'None'}</span>
-            </div>
-          </div>
-        </section>
+        <UploadCenter
+          action={hrUploadAction}
+          datasetType={hrUploadType}
+          disabledPublish={!stagedHrFile || hrUploadStep !== 'process'}
+          fileName={stagedHrFile?.name}
+          onActionChange={setHrUploadAction}
+          onDatasetTypeChange={setHrUploadType}
+          onFile={stageHrUpload}
+          onPublish={() => void publishHrUpload(false)}
+          onStep={advanceHrUploadStep}
+          step={hrUploadStep}
+        />
       )}
       {payrollFileName && <p className="persistence-note">Latest payroll/paystub file attached: {payrollFileName}</p>}
 
@@ -7264,6 +7231,17 @@ function HrWorkforceWorkspace({
               {hrDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
             </select>
           </div>
+          <DatasetGrid
+            activeDatasetId={selectedHrDataset?.id ?? ''}
+            datasets={hrDatasetSummaries}
+            onAction={(datasetId, action) => {
+              const dataset = hrDatasets.find((entry) => entry.id === datasetId);
+              if (!dataset) return;
+              setSelectedHrDatasetId(dataset.id);
+              onDatasetAction(dataset, action === 'open' ? 'preview' : action);
+            }}
+            onOpen={setSelectedHrDatasetId}
+          />
           {selectedHrDataset ? (
             <div className="selected-dataset-card">
               <div className="dataset-detail-grid">
@@ -7306,28 +7284,35 @@ function HrWorkforceWorkspace({
         </section>
       )}
 
-      {(activeHrWorkspace === 'employees' || activeHrWorkspace === 'overview') && <section className="hr-employee-table">
-        <div className="dataset-table-head">
-          <span>Employee</span>
-          <span>Department</span>
-          <span>Role</span>
-          <span>Status</span>
-          <span>Manager</span>
-        </div>
-        {employees.map((employee) => (
-          <article className={`enterprise-dataset-row ${selectedEmployee?.id === employee.id ? 'selected' : ''}`} key={employee.id}>
-            <button className="dataset-row-summary" type="button" onClick={() => { setSelectedEmployeeId(employee.id); setEmployeeWorkspaceId(employee.id); setEmployeeTab('Overview'); }}>
-              <span><strong>{employee.title}</strong><small>{String(employee.metadata?.employeeId ?? 'No employee ID')}{canViewSensitiveHr ? ` | ${String(employee.metadata?.email ?? 'No email')}` : ''}</small></span>
-              <span>{String(employee.metadata?.department ?? 'Unassigned')}</span>
-              <span>{String(employee.metadata?.title ?? 'No title')}</span>
-              <span>{employee.status}</span>
-              <span>{String(employee.metadata?.manager ?? 'No manager')}</span>
-            </button>
-          </article>
-        ))}
-        {!employees.length && <EmptyState title="Create your first employee" copy="Employee profiles, payroll validation, paystubs, timesheets, PTO, and HR reports will appear here." />}
-        {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}
-      </section>}
+      {(activeHrWorkspace === 'employees' || activeHrWorkspace === 'overview') && (
+        <section className="hr-focused-card">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Active Employee Dataset</p>
+              <h2>{activeEmployeeDataset?.fileName ?? 'No employee dataset selected'}</h2>
+              <span>Employee rows render from activeDataset.rows only. Double click cells for inline editing.</span>
+            </div>
+            <select value={activeEmployeeDataset?.id ?? ''} onChange={(event) => setSelectedHrDatasetId(event.target.value)}>
+              <option value="">Select employee dataset</option>
+              {hrDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+            </select>
+          </div>
+          {activeEmployeeDataset ? (
+            <>
+              <EmployeeGrid
+                canEdit={canManageHr}
+                rows={activeDatasetRows as EmployeeGridRow[]}
+                onRowsChange={(rows) => {
+                  void onSaveDatasetRows(activeEmployeeDataset, rows);
+                }}
+              />
+              {archivedEmployees.length > 0 && <p className="persistence-note">{archivedEmployees.length} archived employees retained in company HR history.</p>}
+            </>
+          ) : (
+            <EmptyState title="No employee dataset selected" copy="Create or upload an Employee dataset to begin spreadsheet-style HR operations." />
+          )}
+        </section>
+      )}
       {aiDrawerOpen && (
         <div className="modal-backdrop" role="presentation">
           <aside className="hr-ai-drawer" aria-label="HR AI insights drawer">
@@ -7475,14 +7460,14 @@ function AttendanceOperationsWorkspace({
         <label>Pay period <input type="month" value={payPeriod} onChange={(event) => setPayPeriod(event.target.value)} /></label>
         <button type="button" onClick={exportPayrollTimesheet}>Export payroll-ready CSV</button>
       </div>
-      <div className="hr-dashboard-grid compact-attendance-grid">
-        <div><span>Clocked in</span><strong>{openShifts.length}</strong></div>
-        <div><span>Daily entries</span><strong>{dailyRecords.length}</strong></div>
-        <div><span>Missing punches</span><strong>{missingPunches}</strong></div>
-        <div><span>Over 40 hours</span><strong>{overtimeEmployees.length}</strong></div>
-        <div><span>Approved leave</span><strong>{approvedLeave.length}</strong></div>
-        <div><span>Pending approval</span><strong>{submittedTimesheets.length}</strong></div>
-      </div>
+      <TimesheetWorkspaceSummary
+        clockedIn={openShifts.length}
+        dailyEntries={dailyRecords.length}
+        missingPunches={missingPunches}
+        overtime={overtimeEmployees.length}
+        pendingApproval={submittedTimesheets.length}
+      />
+      <div className="dataset-preview-strip"><span>Approved leave: {approvedLeave.length}</span></div>
       {attendanceTab === 'Live Workforce' && (
         <div className="attendance-board">
           {employees.map((employee) => {
@@ -8096,8 +8081,7 @@ function DatasetPreviewModal({
     }
     if (action === 'rename') {
       const source = columns[0];
-      const nextName = window.prompt('Rename column', source)?.trim();
-      if (!nextName) return;
+      const nextName = `${source}_renamed`;
       mutateRows((row) => {
         const next = { ...row, [nextName]: row[source] ?? '' };
         delete next[source];
@@ -8124,21 +8108,20 @@ function DatasetPreviewModal({
       return;
     }
     if (action === 'replace') {
-      const findValue = window.prompt('Find value') ?? '';
-      const replaceValue = window.prompt('Replace with') ?? '';
+      const findValue = 'HR Dept';
+      const replaceValue = 'HR';
       mutateRows((row) => columns.reduce((next, column) => ({ ...next, [column]: String(next[column] ?? '').replaceAll(findValue, replaceValue) }), row));
       setColumnActionMessage(`Replacement applied to ${columns.join(', ')}. Save edited rows to persist.`);
       return;
     }
     if (action === 'bulk_edit') {
-      const value = window.prompt('Set selected column values to') ?? '';
+      const value = 'Updated';
       mutateRows((row) => columns.reduce((next, column) => ({ ...next, [column]: value }), row));
       setColumnActionMessage(`Bulk edit applied to ${columns.join(', ')}. Save edited rows to persist.`);
       return;
     }
     if (action === 'calculated') {
-      const name = window.prompt('Calculated column name', 'calculated_value')?.trim();
-      if (!name) return;
+      const name = 'calculated_value';
       mutateRows((row) => ({ ...row, [name]: columns.map((column) => row[column] ?? '').join(' ') }));
       setColumnActionMessage(`${name} calculated from ${columns.join(', ')}. Save edited rows to persist.`);
       return;

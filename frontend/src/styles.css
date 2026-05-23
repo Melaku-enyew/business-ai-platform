@@ -3002,6 +3002,31 @@ th {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.08);
 }
 
+.hr-modern-toolbar {
+  position: sticky;
+  top: 72px;
+  z-index: 12;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
+  padding: 10px;
+}
+
+.hr-modern-toolbar button {
+  width: auto;
+  min-height: 36px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 850;
+  padding: 8px 11px;
+}
+
 .hr-workspace-shell-header {
   display: flex;
   align-items: center;
@@ -3176,6 +3201,155 @@ th {
   color: var(--muted);
   font-size: 13px;
   font-weight: 700;
+}
+
+.hr-compact-dataset-grid {
+  display: grid;
+  gap: 6px;
+}
+
+.hr-dataset-grid-head,
+.hr-compact-dataset-grid article {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) 0.7fr 0.5fr 0.7fr 1fr minmax(220px, 1.2fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.hr-dataset-grid-head {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 0 10px;
+  text-transform: uppercase;
+}
+
+.hr-compact-dataset-grid article {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  min-height: 46px;
+  padding: 8px 10px;
+}
+
+.hr-compact-dataset-grid article.active {
+  border-color: rgba(24, 119, 242, 0.46);
+  background: var(--accent-wash);
+}
+
+.hr-compact-dataset-grid article > button {
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 900;
+  padding: 0;
+  text-align: left;
+}
+
+.hr-empty-line {
+  border: 1px dashed var(--line-strong);
+  border-radius: 8px;
+  color: var(--muted);
+  font-weight: 800;
+  padding: 18px;
+  text-align: center;
+}
+
+.hr-inline-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.hr-inline-grid-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(248, 250, 252, 0.9);
+  padding: 9px;
+}
+
+.hr-inline-grid-toolbar span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 800;
+  margin-right: auto;
+}
+
+.hr-inline-grid-toolbar button {
+  width: auto;
+}
+
+.hr-grid-scroll {
+  overflow: auto;
+  max-height: min(58vh, 620px);
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+}
+
+.hr-grid-scroll table {
+  width: max(100%, 980px);
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+.hr-grid-scroll th {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  background: var(--panel-strong);
+}
+
+.hr-grid-scroll th:first-child,
+.hr-grid-scroll td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 2;
+  background: var(--panel);
+}
+
+.hr-grid-scroll td,
+.hr-grid-scroll th {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 8px;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.inline-grid-cell {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: text;
+  min-height: 28px;
+  padding: 4px;
+  text-align: left;
+}
+
+.inline-grid-cell:hover {
+  background: rgba(24, 119, 242, 0.07);
+  border-radius: 5px;
+}
+
+.inline-grid-input {
+  width: 100%;
+  min-width: 120px;
+  min-height: 30px;
+  border: 1px solid rgba(24, 119, 242, 0.45);
+  border-radius: 6px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 4px 7px;
+}
+
+.compact-import-center {
+  margin-bottom: 10px;
 }
 
 .dataset-primary-actions {
