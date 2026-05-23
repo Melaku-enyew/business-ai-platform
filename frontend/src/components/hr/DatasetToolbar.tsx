@@ -21,13 +21,22 @@ export function DatasetToolbar({
 }: DatasetToolbarProps) {
   return (
     <section className="hr-modern-toolbar" aria-label="HR dataset actions">
-      <button type="button" onClick={onAddEmployee} disabled={!canManage}>+ Add Employee</button>
-      <button type="button" onClick={onUpload}>Upload</button>
-      <button type="button" onClick={onEdit}>Edit</button>
-      <button type="button" onClick={onApprove} disabled={!canManage}>Approve</button>
-      <button type="button" onClick={onReports}>Reports</button>
-      <button type="button" onClick={onExport}>Export</button>
-      <button type="button" onClick={onBulk} disabled={!canManage}>Bulk Actions</button>
+      <div className="toolbar-group primary">
+        <span>Primary</span>
+        <button type="button" onClick={onAddEmployee} disabled={!canManage}>+ Add</button>
+        <button type="button" onClick={onUpload}>Upload</button>
+        <button type="button" onClick={onEdit}>Edit</button>
+      </div>
+      <div className="toolbar-group secondary">
+        <span>Secondary</span>
+        <button type="button" onClick={onReports}>Reports</button>
+        <button type="button" onClick={onExport}>Export</button>
+      </div>
+      <div className="toolbar-group overflow">
+        <span>Workflow</span>
+        <button type="button" onClick={onApprove} disabled={!canManage}>Approve</button>
+        <button type="button" onClick={onBulk} disabled={!canManage}>More actions</button>
+      </div>
     </section>
   );
 }

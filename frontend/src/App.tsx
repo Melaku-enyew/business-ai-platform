@@ -6337,6 +6337,7 @@ function HrWorkforceWorkspace({
 
   const virtualHrDatasets = [
     hrDatasetFromRows('Employee', '/hr/employees', employees.map((employee) => ({
+      recordId: employee.id,
       employeeId: String(employee.metadata?.employeeId ?? ''),
       name: employee.title,
       department: String(employee.metadata?.department ?? ''),
@@ -6504,9 +6505,25 @@ function HrWorkforceWorkspace({
       setError(`${kind} rows are editable after upload/publish. Use the ${kind} workspace actions to add new operational records.`);
       return;
     }
+    const identityForRow = (row: Record<string, string>) => String(row.recordId || row.employeeId || row.employee_id || row.email || row.name || row.employeeName || '').toLowerCase().trim();
+    const nextIdentities = rows.map(identityForRow).filter(Boolean);
+    const duplicateEmployeeIds = findRepeatedValues(rows.map((row) => String(row.employeeId || row.employee_id || '').toLowerCase().trim()).filter(Boolean));
+    const duplicateEmails = findRepeatedValues(rows.map((row) => String(row.email || '').toLowerCase().trim()).filter(Boolean));
+    const duplicateIdentities = [...duplicateEmployeeIds, ...duplicateEmails];
+    if (duplicateIdentities.length) {
+      setError(`Employee Dataset blocked duplicate keys: ${duplicateIdentities.slice(0, 3).join(', ')}. Merge or clear duplicate employeeId/email values before saving.`);
+      return;
+    }
+    const employeeIdentity = (employee: ModuleRecord) => String(employee.id || employee.metadata?.employeeId || employee.metadata?.email || employee.title || '').toLowerCase().trim();
+    const activeEmployeeIdentities = new Set(nextIdentities);
+    const employeesToArchive = employees.filter((employee) => {
+      const key = employeeIdentity(employee);
+      return key && !activeEmployeeIdentities.has(key);
+    });
     for (let index = 0; index < rows.length; index += 1) {
       const row = rows[index];
-      const existing = employees[index];
+      const key = identityForRow(row);
+      const existing = key ? employees.find((employee) => employeeIdentity(employee) === key) : null;
       const metadata = {
         employeeId: row.employeeId ?? row.employee_id ?? '',
         email: row.email ?? '',
@@ -6526,6 +6543,12 @@ function HrWorkforceWorkspace({
       } else if (row.name || row.employeeName || row.employeeId) {
         await createHrRecord('employee', row.name || row.employeeName || row.employeeId || 'New employee', row.status || 'active', metadata);
       }
+    }
+    for (const employee of employeesToArchive) {
+      await updateHrRecord(employee, {
+        status: 'archived',
+        metadata: { ...(employee.metadata ?? {}), archivedAt: new Date().toISOString(), archiveReason: 'Removed from Employee Dataset grid' }
+      });
     }
   }
 
@@ -6816,6 +6839,17 @@ function HrWorkforceWorkspace({
       return;
     }
     const hours = calculateWorkedHours(timeEntryForm.startTime, timeEntryForm.endTime, timeEntryForm.breakMinutes);
+    const duplicateTimesheet = attendanceRecords.some((record) => {
+      if (record.status === 'archived') return false;
+      return String(record.metadata?.employeeRecordId ?? '') === employee.id
+        && String(record.metadata?.workDate ?? record.metadata?.date ?? '') === attendanceDate
+        && String(record.metadata?.startTime ?? '') === timeEntryForm.startTime
+        && String(record.metadata?.endTime ?? '') === timeEntryForm.endTime;
+    });
+    if (duplicateTimesheet) {
+      setError('Timesheet duplicate blocked: this employee already has the same work date and shift time.');
+      return;
+    }
     try {
       await createHrRecord('timesheet', `${employee.title} ${attendanceDate} timesheet entry`, timeEntryForm.status, {
         employeeRecordId: employee.id,
