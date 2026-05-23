@@ -3352,6 +3352,35 @@ th {
   margin-bottom: 10px;
 }
 
+.compact-module-launcher {
+  display: grid;
+  gap: 12px;
+}
+
+.module-quick-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.module-quick-links button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  cursor: pointer;
+  font-weight: 850;
+  min-height: 42px;
+  padding: 9px 12px;
+  text-align: left;
+}
+
+.module-quick-links button:hover {
+  border-color: rgba(24, 119, 242, 0.38);
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
 .dataset-primary-actions {
   border-top: 1px solid var(--line);
   padding-top: 10px;

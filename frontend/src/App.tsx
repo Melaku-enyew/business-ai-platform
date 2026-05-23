@@ -8609,6 +8609,27 @@ function renderModulePage(
           </div>
         </article>
       )}
+      {view === 'hr' ? (
+        <article className="panel module-workbench compact-module-launcher">
+          <div>
+            <p className="eyebrow">HR & Workforce</p>
+            <h2>Employee-centered HR workspace</h2>
+            <p className="persistence-note">HR now runs through active datasets, employee grids, timesheets, approvals, reports, and AI insights. Generic module item creation is hidden for HR to keep the workspace compact.</p>
+          </div>
+          <div className="module-quick-links">
+            {[
+              ['Employee Workspace', '/hr/employees'],
+              ['Timesheets', '/hr/timesheets'],
+              ['HR Datasets', '/hr/datasets'],
+              ['Approvals', '/hr/approvals'],
+              ['Reports', '/hr/reports'],
+              ['AI Insights', '/hr/ai-insights']
+            ].map(([label, path]) => (
+              <button key={path} type="button" onClick={() => navigate(path)}>{label}</button>
+            ))}
+          </div>
+        </article>
+      ) : (
       <article className="panel module-workbench">
         <div>
           <p className="eyebrow">Workspace records</p>
@@ -8667,6 +8688,7 @@ function renderModulePage(
           {!filteredRecords.length && <div className="empty-state compact-empty">{records.length ? 'No records match the current filters.' : 'No records yet. Add the first operational item.'}</div>}
         </div>
       </article>
+      )}
     </>
   );
 }
