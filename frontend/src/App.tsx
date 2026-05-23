@@ -1332,9 +1332,55 @@ export function App() {
     () => companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? sampleCompanies[0],
     [companies, selectedCompanyId]
   );
+  const operationalModuleDatasets = useMemo(() => {
+    const scopedRecords = selectedCompanyId ? records.filter((record) => record.companyId === selectedCompanyId) : records;
+    const createOperationalDataset = (label: string, moduleLabel: string, rows: Record<string, string>[]): Dataset => {
+      const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
+      const uploadedAt = new Date(Math.max(0, ...scopedRecords.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString();
+      return normalizeDatasetForClient({
+        id: `operational-${selectedCompanyId || 'all'}-${label.toLowerCase().replace(/\s+/g, '-')}`,
+        companyId: selectedCompanyId,
+        fileName: `${label} Dataset`,
+        fileType: 'operational',
+        uploadedAt,
+        rows: rows.length,
+        columns: headers.length,
+        headers,
+        preview: rows,
+        records: rows,
+        previewRows: rows,
+        chart: [],
+        insights: [`${label} is generated from ${moduleLabel} workspace records.`],
+        cleanupStatus: rows.length ? 'active' : 'empty',
+        pipelineStatus: rows.length ? 'synced' : 'empty',
+        status: rows.length ? 'active' : 'empty',
+        ownerName: moduleLabel,
+        ownerEmail: moduleLabel
+      } as Dataset);
+    };
+    const employeeRecords = scopedRecords.filter((record) => record.module === 'hr' && record.recordType === 'employee' && record.status !== 'archived');
+    const timesheetRecords = scopedRecords.filter((record) => record.module === 'hr' && ['timesheet', 'attendance'].includes(record.recordType) && record.status !== 'archived');
+    const leaveRecords = scopedRecords.filter((record) => record.module === 'hr' && record.recordType === 'leave_request');
+    const payrollRecords = scopedRecords.filter((record) => record.module === 'hr' && record.recordType === 'payroll');
+    const docs = scopedRecords.filter((record) => record.module === 'hr' && ['document', 'paystub'].includes(record.recordType));
+    return [
+      createOperationalDataset('Employee', 'HR & Workforce', employeeRecords.map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), name: record.title, status: record.status, department: String(record.metadata?.department ?? ''), email: String(record.metadata?.email ?? '') }))),
+      createOperationalDataset('Timesheet', 'HR & Workforce', timesheetRecords.map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), workDate: String(record.metadata?.workDate ?? record.metadata?.date ?? ''), hours: String(record.metadata?.totalHours ?? record.metadata?.hours ?? ''), status: record.status }))),
+      createOperationalDataset('PTO', 'HR & Workforce', leaveRecords.filter((record) => record.metadata?.leaveType === 'pto').map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), startDate: String(record.metadata?.startDate ?? ''), endDate: String(record.metadata?.endDate ?? ''), status: record.status }))),
+      createOperationalDataset('Payroll', 'HR & Workforce', payrollRecords.map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), payrollPeriod: String(record.metadata?.payrollPeriod ?? ''), grossPay: String(record.metadata?.grossPay ?? ''), netPay: String(record.metadata?.netPay ?? ''), status: record.status }))),
+      createOperationalDataset('Benefits', 'HR & Workforce', docs.map((record) => ({ employeeId: String(record.metadata?.employeeId ?? ''), employeeName: String(record.metadata?.employeeName ?? record.title), documentType: record.recordType, status: record.status }))),
+      createOperationalDataset('Hiring', 'HR & Workforce', scopedRecords.filter((record) => record.module === 'hr' && record.recordType === 'hiring').map((record) => ({ candidate: record.title, status: record.status, owner: String(record.ownerEmail ?? '') }))),
+      createOperationalDataset('Performance', 'HR & Workforce', scopedRecords.filter((record) => record.module === 'hr' && record.recordType === 'performance').map((record) => ({ employeeName: record.title, status: record.status, notes: String(record.metadata?.notes ?? '') })))
+    ];
+  }, [records, selectedCompanyId]);
   const companyDatasets = useMemo(
-    () => selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets,
-    [datasets, selectedCompanyId]
+    () => {
+      const persisted = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
+      const persistedKinds = new Set(persisted.map((dataset) => classifyDatasetModule(dataset) + ':' + dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase()));
+      const generated = operationalModuleDatasets.filter((dataset) => !persistedKinds.has(classifyDatasetModule(dataset) + ':' + dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase()));
+      return [...generated, ...persisted];
+    },
+    [datasets, operationalModuleDatasets, selectedCompanyId]
   );
   const activeCleanedDataset = useMemo(() => {
     if (!activeDataset) return null;
@@ -3788,7 +3834,8 @@ function EnterpriseCockpit({
     ['HR', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'HR')],
     ['Finance', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Finance')],
     ['Engineering', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'Engineering')],
-    ['CRM', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'CRM')]
+    ['CRM', companyDatasets.filter((dataset) => classifyDatasetModule(dataset) === 'CRM')],
+    ['Analytics', companyDatasets.filter((dataset) => !['HR', 'Finance', 'Engineering', 'CRM'].includes(classifyDatasetModule(dataset)))]
   ] as Array<[string, Dataset[]]>;
   const registryDatasets = companyDatasets
     .filter((dataset) => datasetRegistryModule === 'all' || classifyDatasetModule(dataset) === datasetRegistryModule)
@@ -3798,6 +3845,48 @@ function EnterpriseCockpit({
       dataset.cleanupStatus,
       ...asArray(dataset.headers)
     ].join(' ').toLowerCase().includes(datasetRegistryQuery.toLowerCase()));
+  const selectedDashboardDataset = activeDataset ?? companyDatasets[0] ?? null;
+  const activeDatasetRows = selectedDashboardDataset ? datasetPreview(selectedDashboardDataset) : [];
+  const activeDatasetHeaders = selectedDashboardDataset ? datasetHeaders(selectedDashboardDataset).slice(0, 8) : [];
+  const activeDatasetDuplicates = selectedDashboardDataset ? findDuplicateRows(activeDatasetRows).length : 0;
+  const activeDatasetMissingFields = activeDatasetRows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+  const datasetHealthLabel = (dataset: Dataset) => {
+    const rows = datasetPreview(dataset);
+    const duplicates = findDuplicateRows(rows).length;
+    const missing = rows.reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+    if ((dataset.cleanupStatus ?? dataset.status) === 'pending' || /approval/i.test(String(dataset.pipelineStatus ?? ''))) return 'Needs approval';
+    if (duplicates) return 'Duplicate rows';
+    if (missing) return 'Missing data';
+    if ((dataset.cleanupMetrics?.failedRows ?? 0) > 0) return 'Warning';
+    if ((dataset.pipelineStatus ?? '').includes('sync')) return 'Synced';
+    return rows.length ? 'Healthy' : 'Empty';
+  };
+  const datasetIcon = (dataset: Dataset) => ({ HR: 'HR', Finance: 'FA', Engineering: 'EP', CRM: 'CS' }[classifyDatasetModule(dataset)] ?? 'DH');
+  const exportDashboardDataset = (dataset: Dataset) => {
+    if (dataset.id.startsWith('operational-')) {
+      const rows = datasetPreview(dataset);
+      const headers = datasetHeaders(dataset);
+      downloadText([headers, ...rows.map((row) => headers.map((header) => String(row[header] ?? '')))].map((row) => row.map(csvEscape).join(',')).join('\n'), `${dataset.fileName.toLowerCase().replace(/\s+/g, '-')}.csv`, 'text/csv');
+      return;
+    }
+    downloadDatasetExport(dataset);
+  };
+  const cleanDashboardDataset = (dataset: Dataset) => {
+    onSelectDataset(dataset);
+    if (dataset.id.startsWith('operational-')) {
+      setDrillPanel({ title: `${dataset.fileName} AI insights`, kind: 'ai' });
+      return;
+    }
+    window.setTimeout(() => void onCleanDataset(), 0);
+  };
+  const liveActivityItems = [
+    { title: 'Dataset approved', detail: `${companyDatasets.filter((dataset) => /approved|completed|active/i.test(String(dataset.cleanupStatus ?? dataset.status))).length} active datasets`, path: '/data-processing/workspace' },
+    { title: 'Payroll exported', detail: `${companyReports.filter((report) => /payroll/i.test(report.title)).length} payroll reports`, path: '/hr/payroll' },
+    { title: 'Timesheet synced', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /timesheet/i.test(dataset.fileName))?.rows ?? 0} rows`, path: '/hr/timesheets' },
+    { title: 'Employee added', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /employee/i.test(dataset.fileName))?.rows ?? 0} employees`, path: '/hr/employees' },
+    { title: 'PTO approved', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /pto/i.test(dataset.fileName))?.rows ?? 0} PTO records`, path: '/hr/leave-management' },
+    { title: activeDatasetDuplicates ? 'Duplicate warning' : 'Dataset health', detail: activeDatasetDuplicates ? `${activeDatasetDuplicates} duplicates` : `${datasetHealthScore}% health`, path: '/data-processing/workspace' }
+  ];
 
   return (
     <section className="dashboard-cockpit" aria-label="Enterprise operations cockpit">
@@ -3827,16 +3916,41 @@ function EnterpriseCockpit({
 
       <div className="company-dataset-selector">
         <div>
-          <p className="eyebrow">Company dataset registry</p>
-          <strong>{selectedCompany?.name ?? 'Selected company'} datasets</strong>
-          <span>{companyDatasets.length} datasets connected to dashboard, analytics, reports, pipelines, and governance.</span>
+          <p className="eyebrow">Live Dataset Intelligence Hub</p>
+          <strong>{selectedCompany?.name ?? 'Selected company'} operational datasets</strong>
+          <span>{companyDatasets.length} datasets aggregated from uploads, generated module records, syncs, reports, and workflows.</span>
         </div>
-        <select value={activeDataset?.id ?? ''} onChange={(event) => onSelectDataset(companyDatasets.find((dataset) => dataset.id === event.target.value) ?? null)}>
+        <select value={selectedDashboardDataset?.id ?? ''} onChange={(event) => onSelectDataset(companyDatasets.find((dataset) => dataset.id === event.target.value) ?? null)}>
           <option value="">Company overview</option>
           {companyDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
         </select>
         <button type="button" onClick={() => navigate('/data-processing/workspace')}>Open Enterprise Data Hub</button>
       </div>
+
+      {selectedDashboardDataset && (
+        <section className="dashboard-dataset-preview">
+          <div className="dataset-preview-summary">
+            <div><span>Dataset</span><strong>{selectedDashboardDataset.fileName}</strong></div>
+            <div><span>Module</span><strong>{classifyDatasetModule(selectedDashboardDataset)}</strong></div>
+            <div><span>Status</span><strong>{datasetHealthLabel(selectedDashboardDataset)}</strong></div>
+            <div><span>Rows</span><strong>{displayNumber(selectedDashboardDataset.rows)}</strong></div>
+            <div><span>Columns</span><strong>{displayNumber(selectedDashboardDataset.columns)}</strong></div>
+            <div><span>Missing</span><strong>{activeDatasetMissingFields}</strong></div>
+            <div><span>Duplicates</span><strong>{activeDatasetDuplicates}</strong></div>
+          </div>
+          <div className="dashboard-preview-table">
+            <table>
+              <thead><tr>{activeDatasetHeaders.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+              <tbody>
+                {activeDatasetRows.slice(0, 5).map((row, index) => (
+                  <tr key={`${selectedDashboardDataset.id}-${index}`}>{activeDatasetHeaders.map((header) => <td key={header}>{String(row[header] ?? '') || 'Not set'}</td>)}</tr>
+                ))}
+                {!activeDatasetRows.length && <tr><td colSpan={Math.max(activeDatasetHeaders.length, 1)}>No preview rows available yet.</td></tr>}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
 
       <div className="company-module-dataset-registry">
         {moduleGroups.map(([label, datasets]) => (
@@ -3859,15 +3973,38 @@ function EnterpriseCockpit({
             <option value="CRM">CRM</option>
           </select>
         </div>
-        <div className="compact-table">
-          {registryDatasets.slice(0, 8).map((dataset) => (
-            <div key={dataset.id}>
-              <span><strong>{dataset.fileName}</strong><small>{classifyDatasetModule(dataset)} | {dataset.rows} rows | {dataset.cleanupStatus ?? dataset.status ?? 'uploaded'}</small></span>
-              <span>{dataset.ownerEmail ?? dataset.ownerName ?? 'Workspace'}</span>
-              <button type="button" onClick={() => onSelectDataset(dataset)}>Preview rows</button>
-              <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Open module</button>
-            </div>
-          ))}
+        <div className="dashboard-dataset-card-grid">
+          {registryDatasets.slice(0, 12).map((dataset) => {
+            const health = datasetHealthLabel(dataset);
+            const duplicateCount = findDuplicateRows(datasetPreview(dataset)).length;
+            const missingCount = datasetPreview(dataset).reduce((total, row) => total + Object.values(row).filter((value) => !String(value ?? '').trim()).length, 0);
+            return (
+              <article className="dashboard-dataset-card" key={dataset.id}>
+                <div>
+                  <span className="dataset-type-icon">{datasetIcon(dataset)}</span>
+                  <strong>{dataset.fileName}</strong>
+                  <small>{classifyDatasetModule(dataset)} | {dataset.ownerEmail ?? dataset.ownerName ?? 'Workspace'}</small>
+                </div>
+                <div className="dataset-card-metrics">
+                  <span>{displayNumber(dataset.rows)} rows</span>
+                  <span>{new Date(dataset.uploadedAt).toLocaleDateString()}</span>
+                  <span className={`status-pill ${health.toLowerCase().replace(/\s+/g, '-')}`}>{health}</span>
+                  <span>{duplicateCount} dupes</span>
+                  <span>{missingCount} missing</span>
+                  <span>{dataset.qualityScore ?? Math.max(0, 100 - duplicateCount - missingCount)}% health</span>
+                </div>
+                <div className="dataset-card-actions">
+                  <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Open</button>
+                  <button type="button" onClick={() => onSelectDataset(dataset)}>Preview</button>
+                  <button type="button" onClick={() => navigate(moduleWorkspacePathForDataset(dataset))}>Edit</button>
+                  <button type="button" onClick={() => exportDashboardDataset(dataset)}>Export</button>
+                  <button type="button" onClick={() => setDrillPanel({ title: `${dataset.fileName} approval`, kind: 'approval' })}>Approve</button>
+                  <button type="button" onClick={() => cleanDashboardDataset(dataset)}>Clean</button>
+                  <button type="button" onClick={() => setDrillPanel({ title: `${dataset.fileName} AI insights`, kind: 'ai' })}>AI</button>
+                </div>
+              </article>
+            );
+          })}
           {!registryDatasets.length && <div><span><strong>No datasets match the current filters.</strong><small>Try another module, status, owner, or column query.</small></span></div>}
         </div>
       </div>
@@ -3995,15 +4132,21 @@ function EnterpriseCockpit({
         <aside className="live-rail" aria-label="Live activity rail">
           <div>
             <p className="eyebrow">Live activity</p>
-            <strong>{selectedCompany?.name ?? 'Company'}</strong>
+            <strong>Operational timeline</strong>
           </div>
-          {notifications.slice(0, 8).map((notification) => (
-            <button key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
+          <div className="compact-activity-timeline">
+            {liveActivityItems.map((item) => (
+              <button key={item.title} type="button" onClick={() => navigate(item.path)}>
+                <strong>{item.title}</strong>
+                <span>{item.detail}</span>
+              </button>
+            ))}
+          </div>
+          {notifications.slice(0, 3).map((notification) => (
+            <button className="notification-mini" key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
               <strong>{notification.title}</strong>
-              <span>{notification.message}</span>
             </button>
           ))}
-          {!notifications.length && <p className="muted">No live alerts yet.</p>}
         </aside>
       </div>
 
