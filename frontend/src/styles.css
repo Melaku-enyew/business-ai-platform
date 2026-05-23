@@ -2891,32 +2891,34 @@ th {
 .employee-profile-drawer,
 .employee-tab-panel {
   display: grid;
-  gap: 14px;
+  gap: 8px;
 }
 
 .hr-dashboard-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 7px;
 }
 
 .hr-dashboard-grid div {
   border: 1px solid rgba(15, 23, 42, 0.08);
-  border-radius: 8px;
+  border-radius: 7px;
   background: rgba(248, 250, 252, 0.86);
-  padding: 12px;
+  padding: 7px 9px;
 }
 
 .hr-dashboard-grid span,
 .employee-overview-grid span {
   color: #64748b;
-  font-size: 12px;
+  font-size: 11px;
+  font-weight: 850;
 }
 
 .hr-dashboard-grid strong {
   display: block;
-  margin-top: 4px;
-  font-size: 22px;
+  margin-top: 1px;
+  font-size: 17px;
+  line-height: 1.05;
 }
 
 .hr-operations-grid {
@@ -3009,39 +3011,39 @@ th {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
-  margin: 12px 0;
+  gap: 6px;
+  margin: 8px 0;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background: rgba(255, 255, 255, 0.94);
   box-shadow: 0 12px 28px rgba(15, 23, 42, 0.1);
-  padding: 10px;
+  padding: 6px;
 }
 
 .hr-modern-toolbar button {
   width: auto;
-  min-height: 36px;
-  border-radius: 8px;
-  font-size: 13px;
+  min-height: 30px;
+  border-radius: 7px;
+  font-size: 12px;
   font-weight: 850;
-  padding: 8px 11px;
+  padding: 5px 9px;
 }
 
 .toolbar-group {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 4px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: var(--panel);
-  padding: 5px;
+  padding: 3px;
 }
 
 .toolbar-group span {
   color: var(--muted);
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 950;
-  padding: 0 5px;
+  padding: 0 4px;
   text-transform: uppercase;
 }
 
@@ -3049,15 +3051,16 @@ th {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
+  gap: 10px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.94), rgba(248, 250, 252, 0.9));
-  padding: 14px;
+  padding: 9px 11px;
 }
 
 .hr-workspace-shell-header h2 {
-  margin: 2px 0;
+  margin: 1px 0;
+  font-size: 18px;
 }
 
 .hr-workspace-shell-header span {
@@ -3068,8 +3071,8 @@ th {
 .hr-workspace-nav {
   display: flex;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 12px;
+  gap: 6px;
+  margin-top: 8px;
 }
 
 .hr-workspace-nav button {
@@ -3078,9 +3081,9 @@ th {
   background: var(--panel);
   color: var(--text);
   cursor: pointer;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 850;
-  padding: 8px 12px;
+  padding: 6px 10px;
   transition: transform 0.16s ease, border-color 0.16s ease, background 0.16s ease;
 }
 
@@ -3167,12 +3170,12 @@ th {
 .hr-focused-card,
 .hr-dataset-workspace {
   display: grid;
-  gap: 10px;
+  gap: 7px;
   border: 1px solid var(--line-strong);
   border-radius: 10px;
   background: var(--panel);
   box-shadow: var(--shadow);
-  padding: 12px;
+  padding: 9px;
 }
 
 .hr-upload-steps {
@@ -3289,22 +3292,24 @@ th {
 .hr-dataset-card-grid,
 .hr-live-activity-grid {
   display: grid;
-  gap: 10px;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 7px;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
 }
 
 .hr-dataset-command-card,
 .hr-live-activity-grid button {
-  display: grid;
-  gap: 7px;
-  min-height: 96px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 46px;
   border: 1px solid var(--line);
-  border-radius: 10px;
+  border-radius: 8px;
   background: linear-gradient(180deg, var(--panel), var(--panel-strong));
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
   color: var(--text);
   cursor: pointer;
-  padding: 11px;
+  padding: 8px 10px;
   text-align: left;
   transition: border-color 0.18s ease, box-shadow 0.18s ease, transform 0.18s ease;
 }
@@ -3319,7 +3324,7 @@ th {
 .hr-dataset-command-card strong,
 .hr-live-activity-grid strong {
   color: var(--heading);
-  font-size: 18px;
+  font-size: 13px;
   font-weight: 950;
   line-height: 1.15;
 }
@@ -3340,7 +3345,9 @@ th {
 }
 
 .hr-live-activity-grid button {
-  min-height: 90px;
+  min-height: 58px;
+  display: grid;
+  justify-content: stretch;
 }
 
 .hr-live-activity-grid span {

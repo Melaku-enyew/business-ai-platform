@@ -16,7 +16,7 @@ const departmentOptions = ['HR', 'Finance', 'Engineering', 'Operations', 'CRM', 
 
 export function EmployeeGrid({ canEdit, onRowsChange, rows }: EmployeeGridProps) {
   const [selectedRows, setSelectedRows] = useState<number[]>([]);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [compact, setCompact] = useState(true);
   const [filter, setFilter] = useState('');

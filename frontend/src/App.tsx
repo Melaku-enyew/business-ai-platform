@@ -7230,8 +7230,7 @@ function HrWorkforceWorkspace({
           <div className="panel-header">
             <div>
               <p className="eyebrow">All HR datasets</p>
-              <h2>Dataset command cards</h2>
-              <span>Every HR workspace has its own dataset. Click a card to open and edit the associated workspace.</span>
+              <h2>Dataset command center</h2>
             </div>
           </div>
           <div className="hr-dataset-card-grid">
@@ -7239,10 +7238,8 @@ function HrWorkforceWorkspace({
               const path = datasetInsights(dataset)[0]?.match(/linked to ([^.]+)/)?.[1] ?? '/hr/datasets';
               return (
                 <button className="hr-dataset-command-card" key={dataset.id} type="button" onClick={() => { setSelectedHrDatasetId(dataset.id); navigate(path); }}>
-                  <span className={`status-pill ${String(dataset.cleanupStatus ?? dataset.status ?? 'empty').replace(/\s+/g, '-')}`}>{dataset.cleanupStatus ?? dataset.status ?? 'empty'}</span>
                   <strong>{hrDatasetKind(dataset)} Dataset</strong>
-                  <small>{dataset.rows.toLocaleString()} rows | {dataset.columns.toLocaleString()} columns</small>
-                  <em>{path.replace('/hr/', '').replace('-', ' ') || 'overview'} workspace</em>
+                  <span className={`status-pill ${String(dataset.cleanupStatus ?? dataset.status ?? 'empty').replace(/\s+/g, '-')}`}>{dataset.cleanupStatus ?? dataset.status ?? 'empty'}</span>
                 </button>
               );
             })}
