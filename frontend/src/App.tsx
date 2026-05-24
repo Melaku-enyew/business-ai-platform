@@ -6415,6 +6415,7 @@ function HrWorkforceWorkspace({
   const [payrollViewMode, setPayrollViewMode] = useState('Employee View');
   const [expandedPayrollEmployee, setExpandedPayrollEmployee] = useState<string | null>(null);
  const [expandedPayrollKeys, setExpandedPayrollKeys] = useState<string[]>([]);
+ const [showPayrollDashboard, setShowPayrollDashboard] = useState(true);
   const [paystubDrawer, setPaystubDrawer] = useState<{ employee: ModuleRecord; paystub: any; sourceRecords: ModuleRecord[] } | null>(null);
   const [timeEntryForm, setTimeEntryForm] = useState({ employeeRecordId: '', startTime: '09:00', endTime: '17:00', breakMinutes: '30', status: 'draft', shift: 'Day shift', location: 'On-site', projectCode: '', taskCode: '', workType: 'Regular', notes: '' });
   const [leaveForm, setLeaveForm] = useState({
