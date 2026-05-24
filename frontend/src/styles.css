@@ -4386,6 +4386,117 @@ th {
   gap: 8px;
 }
 
+.workspace-command-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+}
+
+.workspace-command-card {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+  padding: 10px;
+}
+
+.workspace-command-main {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 0;
+  text-align: left;
+}
+
+.workspace-command-main strong {
+  display: block;
+  color: var(--heading);
+  font-size: 14px;
+  font-weight: 950;
+}
+
+.workspace-command-main small,
+.workspace-command-meta,
+.workspace-command-meta span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+}
+
+.workspace-command-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: 11px;
+  font-weight: 950;
+}
+
+.workspace-command-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workspace-command-meta span {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel-strong);
+  padding: 4px 7px;
+}
+
+.workspace-command-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.workspace-command-actions button,
+.activity-controls button,
+.activity-controls select {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 11px;
+  font-weight: 850;
+  padding: 4px 8px;
+}
+
+.workspace-command-card:hover {
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--line-strong));
+  box-shadow: 0 16px 34px rgba(15, 23, 42, 0.1);
+}
+
+.activity-controls {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px;
+}
+
+.compact-activity-timeline button.activity-success {
+  border-left-color: var(--success);
+}
+
+.compact-activity-timeline button.activity-warning {
+  border-left-color: #d97706;
+}
+
+.compact-activity-timeline button.activity-info {
+  border-left-color: var(--accent);
+}
+
 .cockpit-kpi {
   position: relative;
   overflow: hidden;
