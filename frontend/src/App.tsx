@@ -1333,7 +1333,9 @@ export function App() {
     [companies, selectedCompanyId]
   );
   const operationalModuleDatasets = useMemo(() => {
-    const scopedRecords = selectedCompanyId ? records.filter((record) => record.companyId === selectedCompanyId) :  moduleRecords;;
+    const scopedRecords = selectedCompanyId
+  ? moduleRecords.filter((record) => record.companyId === selectedCompanyId)
+  : moduleRecords;
     const makeDataset = (name: string, rows: Record<string, string>[]): Dataset => {
       const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
       return normalizeDatasetForClient({
