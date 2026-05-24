@@ -7790,34 +7790,45 @@ function HrWorkforceWorkspace({
               <button className={payrollViewMode === mode ? 'active' : ''} key={mode} type="button" onClick={() => setPayrollViewMode(mode)}>{mode}</button>
             ))}
           </div>
-          <div className="hr-dashboard-grid compact-attendance-grid">
-            <div><span>Payroll records</span><strong>{payrollRecords.length}</strong></div>
-            <div><span>Payroll ready</span><strong>{payrollBatchReady}</strong></div>
-            <div><span>Missing approvals</span><strong>{payrollQueue.filter((item) => !item.sourceRecords.length).length}</strong></div>
-            <div><span>Gross pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.grossPay), 0), 0)}</strong></div>
-            <div><span>Net pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.netPay), 0), 0)}</strong></div>
-            <div><span>W2</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === 'W2').length}</strong></div>
-            <div><span>1099</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === '1099').length}</strong></div>
-          </div>
-          <div className="payroll-settings-grid">
-            {[
-              ['Frequency', payrollFrequency],
-              ['PTO policy', '120 hours default'],
-              ['Overtime rule', '1.5x after daily/weekly threshold'],
-              ['Benefits default', '3% enrolled deduction'],
-              ['Tax defaults', 'W2 withholding, 1099 tracking'],
-              ['Future integrations', 'Direct deposit, QuickBooks, ADP/Gusto']
-            ].map(([label, value]) => <div key={label}><span>{label}</span><strong>{value}</strong></div>)}
-          </div>
-          <div className="payroll-operations-table">
-            <div className="payroll-table-head">
-              <span>Employee</span>
-              <span>Pay period</span>
-              <span>Gross</span>
-              <span>Net</span>
-              <span>Status</span>
-              <span>Actions</span>
-            </div>
+{showPayrollDashboard && (
+  <>
+    <div className="hr-dashboard-grid compact-attendance-grid">
+      <div><span>Payroll records</span><strong>{payrollRecords.length}</strong></div>
+      <div><span>Payroll ready</span><strong>{payrollBatchReady}</strong></div>
+      <div><span>Missing approvals</span><strong>{payrollQueue.filter((item) => !item.sourceRecords.length).length}</strong></div>
+      <div><span>Gross pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.grossPay), 0), 0)}</strong></div>
+      <div><span>Net pay</span><strong>{money(payrollQueue.reduce((sum, item) => sum + finiteNumber(item.paystub?.netPay), 0), 0)}</strong></div>
+      <div><span>W2</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === 'W2').length}</strong></div>
+      <div><span>1099</span><strong>{payrollQueue.filter((item) => item.paystub?.profile?.taxType === '1099').length}</strong></div>
+    </div>
+
+    <div className="payroll-settings-grid">
+      {[
+        ['Frequency', payrollFrequency],
+        ['PTO policy', '120 hours default'],
+        ['Overtime rule', '1.5x after daily/weekly threshold'],
+        ['Benefits default', '3% enrolled deduction'],
+        ['Tax defaults', 'W2 withholding, 1099 tracking'],
+        ['Future integrations', 'Direct deposit, QuickBooks, ADP/Gusto']
+      ].map(([label, value]) => (
+        <div key={label}>
+          <span>{label}</span>
+          <strong>{value}</strong>
+        </div>
+      ))}
+    </div>
+  </>
+)}
+
+<div className="payroll-operations-table">
+  <div className="payroll-table-head">
+    <span>Employee</span>
+    <span>Pay period</span>
+    <span>Gross</span>
+    <span>Net</span>
+    <span>Status</span>
+    <span>Actions</span>
+  </div>
             {payrollQueue
               .filter((item) => payrollViewMode !== 'Approval Queue' || /pending|Draft|ready/i.test(String(item.status)))
               .filter((item) => payrollViewMode !== 'Export Queue' || /ready|Exported/i.test(String(item.status)))
