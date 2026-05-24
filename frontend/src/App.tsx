@@ -6554,7 +6554,8 @@ function HrWorkforceWorkspace({
   const payrollBatchReady = payrollQueue.filter((item) => item.sourceRecords.length && !['Exported', 'Paid', 'Voided'].includes(item.status)).length;
   function hrDatasetFromRows(label: string, path: string, rows: Record<string, string>[]): Dataset {
     const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
-    const uploadedAt = new Date(Math.max(0, ...records.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString();
+    //const uploadedAt = new Date(Math.max(0, ...records.map((record) => new Date(record.updatedAt).getTime())) || Date.now()).toISOString();
+    const uploadedAt = new Date().toISOString();
     return normalizeDatasetForClient({
       id: `hr-virtual-${label.toLowerCase().replace(/\s+/g, '-')}`,
       companyId: selectedCompanyId,
