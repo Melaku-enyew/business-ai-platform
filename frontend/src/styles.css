@@ -3670,7 +3670,18 @@ th {
     grid-template-columns: 1fr 1fr;
   }
 }
+.payroll-employee-cell {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
 
+.payroll-expand-icon {
+  display: inline-flex;
+  width: 18px;
+  color: #64748b;
+  font-size: 12px;
+}
 .compact-import-center {
   margin-bottom: 10px;
 }

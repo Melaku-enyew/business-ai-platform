@@ -7798,7 +7798,16 @@ function HrWorkforceWorkspace({
     )
   }
 >
-                    <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
+                    <span className="payroll-employee-cell">
+  <span className="payroll-expand-icon">
+    {expanded ? '▼' : '▶'}
+  </span>
+
+  <span>
+    <strong>{item.employee.title}</strong>
+    <small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small>
+  </span>
+</span>
                     <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
                     <span>{money(item.paystub?.grossPay)}</span>
                     <span><strong>{money(item.paystub?.netPay)}</strong></span>
