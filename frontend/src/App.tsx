@@ -6414,7 +6414,7 @@ function HrWorkforceWorkspace({
   const [payrollFrequency, setPayrollFrequency] = useState('Biweekly');
   const [payrollViewMode, setPayrollViewMode] = useState('Employee View');
   const [expandedPayrollEmployee, setExpandedPayrollEmployee] = useState<string | null>(null);
-  const [expandedPayrollKey, setExpandedPayrollKey] = useState<string | null>(null);
+ const [expandedPayrollKeys, setExpandedPayrollKeys] = useState<string[]>([]);
   const [paystubDrawer, setPaystubDrawer] = useState<{ employee: ModuleRecord; paystub: any; sourceRecords: ModuleRecord[] } | null>(null);
   const [timeEntryForm, setTimeEntryForm] = useState({ employeeRecordId: '', startTime: '09:00', endTime: '17:00', breakMinutes: '30', status: 'draft', shift: 'Day shift', location: 'On-site', projectCode: '', taskCode: '', workType: 'Regular', notes: '' });
   const [leaveForm, setLeaveForm] = useState({
@@ -7733,31 +7733,56 @@ function HrWorkforceWorkspace({
         />
       )}
 
-      {activeHrWorkspace === 'payroll' && (
-        <section className="hr-focused-card">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Payroll Workspace</p>
-              <h2>Payroll operations center</h2>
-              <span>Approved timesheets flow into payroll, calculate paystubs, and expose exceptions by pay period.</span>
-            </div>
-            <div className="inline-actions">
-              <select value={payrollFrequency} onChange={(event) => setPayrollFrequency(event.target.value)}>
-                {['Weekly', 'Biweekly', 'Semi-monthly', 'Monthly'].map((frequency) => <option key={frequency}>{frequency}</option>)}
-              </select>
-              <input type="month" value={payPeriod} onChange={(event) => setPayPeriod(event.target.value)} />
-              <button type="button" onClick={() => void exportPayrollBatch()}>Export batch</button>
-              <button
-  type="button"
-  className="ghost-button compact"
-  onClick={() =>
-    setExpandedPayrollKey(
-      expandedPayrollKey ? '' : payrollQueue[0]?.key ?? ''
-    )
-  }
->
-  {expandedPayrollKey ? 'Collapse all' : 'Expand all'}
-</button>
+{activeHrWorkspace === 'payroll' && (
+  <section className="hr-focused-card">
+    <div className="panel-header">
+      <div>
+        <p className="eyebrow">Payroll Workspace</p>
+        <h2>Payroll operations center</h2>
+        <span>
+          Approved timesheets flow into payroll, calculate paystubs, and expose exceptions by pay period.
+        </span>
+      </div>
+
+      <div className="inline-actions">
+        <select
+          value={payrollFrequency}
+          onChange={(event) => setPayrollFrequency(event.target.value)}
+        >
+          {['Weekly', 'Biweekly', 'Semi-monthly', 'Monthly'].map((frequency) => (
+            <option key={frequency}>{frequency}</option>
+          ))}
+        </select>
+
+        <input
+          type="month"
+          value={payPeriod}
+          onChange={(event) => setPayPeriod(event.target.value)}
+        />
+
+        <button
+          type="button"
+          onClick={() => void exportPayrollBatch()}
+        >
+          Export batch
+        </button>
+
+        <button
+          type="button"
+          className="ghost-button compact"
+          onClick={() =>
+            setExpandedPayrollKeys(
+              expandedPayrollKeys.length === payrollQueue.length
+                ? []
+                : payrollQueue.map((item) => item.key)
+            )
+          }
+        >
+          {expandedPayrollKeys.length === payrollQueue.length
+            ? 'Collapse all'
+            : 'Expand all'}
+        </button>
+      
             </div>
           </div>
           <div className="payroll-view-tabs">
@@ -7797,16 +7822,18 @@ function HrWorkforceWorkspace({
               .filter((item) => payrollViewMode !== 'Approval Queue' || /pending|Draft|ready/i.test(String(item.status)))
               .filter((item) => payrollViewMode !== 'Export Queue' || /ready|Exported/i.test(String(item.status)))
               .map((item) => {
-                const expanded = expandedPayrollKey === item.key;
+                const expanded = expandedPayrollKeys.includes(item.key);
                 return (
                   <article className={expanded ? 'expanded' : ''} key={item.key}>
                  <button
   className="payroll-row-main"
   type="button"
   onClick={() =>
-    setExpandedPayrollKey(
-      expanded ? null : item.key
-    )
+   setExpandedPayrollKeys((current) =>
+  expanded
+    ? current.filter((key) => key !== item.key)
+    : [...current, item.key]
+)
   }
 >
                     <span className="payroll-employee-cell">
