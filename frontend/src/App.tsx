@@ -1333,7 +1333,7 @@ export function App() {
     [companies, selectedCompanyId]
   );
   const operationalModuleDatasets = useMemo(() => {
-    const scopedRecords = selectedCompanyId ? records.filter((record) => record.companyId === selectedCompanyId) : records;
+    const scopedRecords = selectedCompanyId ? records.filter((record) => record.companyId === selectedCompanyId) :  moduleRecords;;
     const makeDataset = (name: string, rows: Record<string, string>[]): Dataset => {
       const headers = Array.from(new Set(rows.flatMap((row) => Object.keys(row))));
       return normalizeDatasetForClient({
@@ -1368,7 +1368,7 @@ export function App() {
       makeDataset('Hiring', hrRecords.filter((record) => record.recordType === 'hiring').map((record) => ({ candidate: record.title, status: record.status, owner: String(record.ownerEmail ?? '') }))),
       makeDataset('Performance', hrRecords.filter((record) => record.recordType === 'performance').map((record) => ({ employeeName: record.title, status: record.status, notes: String(record.metadata?.notes ?? '') })))
     ];
-  }, [records, selectedCompanyId]);
+  }, [selectedCompanyId, moduleRecords]);
   const companyDatasets = useMemo(
     () => {
       const persisted = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
