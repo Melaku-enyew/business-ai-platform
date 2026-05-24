@@ -6413,7 +6413,8 @@ function HrWorkforceWorkspace({
   const [payPeriod, setPayPeriod] = useState(() => new Date().toISOString().slice(0, 7));
   const [payrollFrequency, setPayrollFrequency] = useState('Biweekly');
   const [payrollViewMode, setPayrollViewMode] = useState('Employee View');
-  const [expandedPayrollKey, setExpandedPayrollKey] = useState('');
+  const [expandedPayrollEmployee, setExpandedPayrollEmployee] = useState<string | null>(null);
+  const [expandedPayrollKey, setExpandedPayrollKey] = useState<string | null>(null);
   const [paystubDrawer, setPaystubDrawer] = useState<{ employee: ModuleRecord; paystub: any; sourceRecords: ModuleRecord[] } | null>(null);
   const [timeEntryForm, setTimeEntryForm] = useState({ employeeRecordId: '', startTime: '09:00', endTime: '17:00', breakMinutes: '30', status: 'draft', shift: 'Day shift', location: 'On-site', projectCode: '', taskCode: '', workType: 'Regular', notes: '' });
   const [leaveForm, setLeaveForm] = useState({
@@ -7788,7 +7789,15 @@ function HrWorkforceWorkspace({
                 const expanded = expandedPayrollKey === item.key;
                 return (
                   <article className={expanded ? 'expanded' : ''} key={item.key}>
-                  <button className="payroll-row-main" type="button" onClick={() => setExpandedPayrollKey(expanded ? '' : item.key)}>
+                 <button
+  className="payroll-row-main"
+  type="button"
+  onClick={() =>
+    setExpandedPayrollKey(
+      expanded ? null : item.key
+    )
+  }
+>
                     <span><strong>{item.employee.title}</strong><small>{item.employee.metadata?.employeeId ?? 'No employee ID'}</small></span>
                     <span><strong>{payPeriod}</strong><small>{payrollFrequency}</small></span>
                     <span>{money(item.paystub?.grossPay)}</span>
