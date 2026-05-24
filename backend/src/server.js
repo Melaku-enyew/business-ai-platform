@@ -1406,6 +1406,37 @@ app.use((req, res, next) => {
 });
 app.use(express.json());
 
+const strippedApiPrefixes = [
+  'admin',
+  'analytics',
+  'assistant',
+  'auth',
+  'cleanup-jobs',
+  'companies',
+  'config',
+  'connectors',
+  'dashboards',
+  'datasets',
+  'enterprise',
+  'health',
+  'invitations',
+  'modules',
+  'notifications',
+  'pipelines',
+  'readiness',
+  'reports',
+  'support',
+  'users'
+];
+
+app.use((req, _res, next) => {
+  const firstSegment = req.path.split('/').filter(Boolean)[0];
+  if (firstSegment && strippedApiPrefixes.includes(firstSegment) && !req.url.startsWith('/api/')) {
+    req.url = `/api${req.url}`;
+  }
+  next();
+});
+
 app.get('/api/health', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
   if (dbStatus.usingPostgres && !dbStatus.connected) {
