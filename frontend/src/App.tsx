@@ -7747,6 +7747,17 @@ function HrWorkforceWorkspace({
               </select>
               <input type="month" value={payPeriod} onChange={(event) => setPayPeriod(event.target.value)} />
               <button type="button" onClick={() => void exportPayrollBatch()}>Export batch</button>
+              <button
+  type="button"
+  className="ghost-button compact"
+  onClick={() =>
+    setExpandedPayrollKey(
+      expandedPayrollKey ? '' : payrollQueue[0]?.key ?? ''
+    )
+  }
+>
+  {expandedPayrollKey ? 'Collapse all' : 'Expand all'}
+</button>
             </div>
           </div>
           <div className="payroll-view-tabs">
