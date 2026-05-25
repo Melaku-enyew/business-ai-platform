@@ -4481,8 +4481,19 @@ th {
 
 .activity-controls {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(95px, 1fr);
   gap: 6px;
+}
+
+.activity-controls input {
+  grid-column: 1 / -1;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  padding: 5px 8px;
 }
 
 .compact-activity-timeline button.activity-success {
@@ -4495,6 +4506,79 @@ th {
 
 .compact-activity-timeline button.activity-info {
   border-left-color: var(--accent);
+}
+
+.dataset-workspace-tabs {
+  display: flex;
+  gap: 6px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+}
+
+.dataset-workspace-tabs button,
+.transform-action-grid button,
+.schema-intelligence-grid button,
+.ai-workspace-grid button,
+.dataset-pipeline-workspace button {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 9px;
+}
+
+.dataset-workspace-tabs button.active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line-strong));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.transform-action-grid,
+.schema-intelligence-grid,
+.ai-workspace-grid,
+.dataset-pipeline-workspace {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.schema-intelligence-grid article,
+.ai-workspace-grid article {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 10px;
+}
+
+.schema-intelligence-grid strong,
+.ai-workspace-grid strong,
+.dataset-pipeline-workspace strong {
+  color: var(--heading);
+  font-weight: 950;
+}
+
+.schema-intelligence-grid span,
+.ai-workspace-grid span,
+.dataset-pipeline-workspace span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.dataset-pipeline-workspace button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
 }
 
 .cockpit-kpi {

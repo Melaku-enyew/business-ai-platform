@@ -92,7 +92,7 @@ type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
 type UserRole = 'owner' | 'admin' | 'manager' | 'employee' | 'viewer';
-type PreviewMode = 'upload' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history' | 'edit' | 'query';
+type PreviewMode = 'upload' | 'schema' | 'transform' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history' | 'edit' | 'query' | 'ai' | 'pipeline';
 type AppView =
   | 'dashboard'
   | 'assistant'
@@ -3795,13 +3795,21 @@ function EnterpriseCockpit({
   workflows: Workflow[];
 }) {
   const tabs = ['Overview', 'Operations', 'Pipelines', 'Approvals', 'Analytics', 'Reports', 'Governance'];
-  const [activeTab, setActiveTab] = useState('Overview');
+  const [activeTab, setActiveTab] = useState(() => {
+    try {
+      return localStorage.getItem('metenovaCockpitTab') || 'Overview';
+    } catch {
+      return 'Overview';
+    }
+  });
   const [drillPanel, setDrillPanel] = useState<{ title: string; kind: string } | null>(null);
   const [search, setSearch] = useState('');
   const [datasetRegistryQuery, setDatasetRegistryQuery] = useState('');
   const [datasetRegistryModule, setDatasetRegistryModule] = useState('all');
   const [activityOpen, setActivityOpen] = useState(true);
   const [activityWorkspaceFilter, setActivityWorkspaceFilter] = useState('all');
+  const [activitySearch, setActivitySearch] = useState('');
+  const [activityCleared, setActivityCleared] = useState(false);
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
     try {
       return JSON.parse(localStorage.getItem('metenovaCockpitCollapsed') || '{}');
@@ -3821,6 +3829,14 @@ function EnterpriseCockpit({
       localStorage.setItem('metenovaCockpitCollapsed', JSON.stringify(next));
       return next;
     });
+  };
+  const selectDashboardTab = (tab: string) => {
+    setActiveTab(tab);
+    try {
+      localStorage.setItem('metenovaCockpitTab', tab);
+    } catch {
+      // Local storage can be unavailable in private or restricted browser contexts.
+    }
   };
   const kpis = [
     { key: 'workflows', label: 'Active workflows', value: workflows.length, detail: `${cleanupJobs.length} cleanup jobs tracked`, kind: 'workflow' },
@@ -3931,6 +3947,10 @@ function EnterpriseCockpit({
     { workspace: 'hr', title: 'Timesheet synced', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /timesheet/i.test(dataset.fileName))?.rows ?? 0} rows`, path: '/hr/timesheets', tone: 'info' },
     { workspace: 'hr', title: 'Employee added', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /employee/i.test(dataset.fileName))?.rows ?? 0} employees`, path: '/hr/employees', tone: 'info' },
     { workspace: 'hr', title: 'PTO approved', detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].find((dataset) => /pto/i.test(dataset.fileName))?.rows ?? 0} records`, path: '/hr/leave-management', tone: 'warning' },
+    { workspace: 'finance', title: 'Finance workspace synced', detail: `${moduleGroups.find(([label]) => label === 'Finance')?.[1].length ?? 0} datasets`, path: '/accounting/invoices', tone: 'info' },
+    { workspace: 'engineering', title: 'Engineering workflow updated', detail: `${moduleGroups.find(([label]) => label === 'Engineering')?.[1].length ?? 0} datasets`, path: '/engineering/projects', tone: 'info' },
+    { workspace: 'crm', title: 'CRM pipeline activity', detail: `${moduleGroups.find(([label]) => label === 'CRM')?.[1].length ?? 0} datasets`, path: '/crm/clients', tone: 'info' },
+    { workspace: 'analytics', title: 'Analytics refreshed', detail: `${companyReports.length + companyDashboards.length} reports and dashboards`, path: '/analytics/dashboard', tone: 'success' },
     { workspace: 'data', title: 'Dataset health', detail: `${datasetHealthScore}% health`, path: '/data-processing/workspace', tone: datasetHealthScore > 85 ? 'success' : 'warning' }
   ];
   const visibleActivityItems = liveActivityItems.filter((item) => activityWorkspaceFilter === 'all' || item.workspace === activityWorkspaceFilter);
@@ -3957,7 +3977,7 @@ function EnterpriseCockpit({
 
       <div className="cockpit-tabs" role="tablist" aria-label="Dashboard views">
         {tabs.map((tab) => (
-          <button className={activeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setActiveTab(tab)}>{tab}</button>
+          <button className={activeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => selectDashboardTab(tab)}>{tab}</button>
         ))}
       </div>
 
@@ -3982,6 +4002,14 @@ function EnterpriseCockpit({
                 setDrillPanel({ title: `${card.label} datasets`, kind: 'datasets' });
               }}>Datasets</button>
               <button type="button" onClick={() => setDrillPanel({ title: `${card.label} AI insights`, kind: 'ai' })}>AI</button>
+              <button type="button" onClick={() => {
+                selectDashboardTab('Reports');
+                setDrillPanel({ title: `${card.label} reports`, kind: 'reports' });
+              }}>Reports</button>
+              <button type="button" onClick={() => {
+                setActivityWorkspaceFilter(card.key === 'data' ? 'data' : card.key);
+                setActivityOpen(true);
+              }}>Activity</button>
             </div>
           </article>
         ))}
@@ -4118,15 +4146,24 @@ function EnterpriseCockpit({
               <select value={activityWorkspaceFilter} onChange={(event) => setActivityWorkspaceFilter(event.target.value)}>
                 <option value="all">All workspaces</option>
                 <option value="hr">HR</option>
+                <option value="finance">Finance</option>
+                <option value="engineering">Engineering</option>
+                <option value="crm">CRM</option>
                 <option value="data">Data Hub</option>
+                <option value="analytics">Analytics</option>
               </select>
+              <input placeholder="Search activity" value={activitySearch} onChange={(event) => setActivitySearch(event.target.value)} />
+              <button type="button" onClick={() => setActivityCleared(true)}>Clear</button>
             </div>
-            {activityOpen && visibleActivityItems.map((item) => (
+            {activityOpen && !activityCleared && visibleActivityItems
+              .filter((item) => !activitySearch.trim() || [item.title, item.detail, item.workspace].join(' ').toLowerCase().includes(activitySearch.toLowerCase()))
+              .map((item) => (
               <button className={`activity-${item.tone}`} key={item.title} type="button" onClick={() => navigate(item.path)}>
                 <strong>{item.title}</strong>
-                <span>{item.detail} | {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
+                <span>{item.workspace.toUpperCase()} | {item.detail} | {user?.name ?? 'System'} | {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
               </button>
             ))}
+            {activityOpen && activityCleared && <button type="button" onClick={() => setActivityCleared(false)}><strong>Activity cleared</strong><span>Restore live activity</span></button>}
           </div>
           {notifications.slice(0, 3).map((notification) => (
             <button className="notification-mini" key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
@@ -4194,7 +4231,10 @@ function renderDrillContent(kind: string, context: {
     return <div className="compact-table">{context.enterpriseOps.connectors.map((connector) => <div key={connector.id}><span><strong>{connector.name}</strong><small>{connector.connectorType}</small></span><span>{connector.status}</span><span>{connector.healthStatus}</span></div>)}</div>;
   }
   if (kind === 'datasets' || kind === 'analytics') {
-    return <div className="compact-table">{context.companyDatasets.map((dataset) => <div key={dataset.id}><span><strong>{dataset.fileName}</strong><small>{dataset.rows} rows | {dataset.cleanupStatus}</small></span><button type="button" onClick={() => context.onSelectDataset(dataset)}>Select</button><button type="button" onClick={context.onCleanDataset}>Clean</button><button type="button" onClick={() => context.onArchiveDataset(dataset)}>Archive</button></div>)}</div>;
+    return <div className="compact-table">{context.companyDatasets.map((dataset) => <div key={dataset.id}><span><strong>{dataset.fileName}</strong><small>{classifyDatasetModule(dataset)} | {dataset.rows} rows | {dataset.cleanupStatus ?? dataset.status ?? 'uploaded'}</small></span><button type="button" onClick={() => context.onSelectDataset(dataset)}>Preview</button><button type="button" onClick={() => { context.onSelectDataset(dataset); window.setTimeout(context.onCleanDataset, 0); }}>Clean</button><button type="button" onClick={() => context.onArchiveDataset(dataset)}>Archive</button></div>)}</div>;
+  }
+  if (kind === 'reports') {
+    return <div className="timeline-list">{context.companyDatasets.slice(0, 8).map((dataset) => <button key={dataset.id} type="button" onClick={() => context.onSelectDataset(dataset)}><strong>{dataset.fileName}</strong><span>Open this dataset, then generate/export reports from its workspace actions.</span></button>)}</div>;
   }
   if (kind === 'ai') {
     return <div className="timeline-list">{context.enterpriseOps.intelligence.map((insight) => <button key={insight.id} type="button"><strong>{insight.title}</strong><span>{insight.summary} | {Math.round(insight.confidence * 100)}% confidence</span></button>)}</div>;
@@ -8772,6 +8812,7 @@ function DatasetPreviewModal({
   onSaveRows: (dataset: Dataset, records: Record<string, string>[]) => Promise<void>;
   onRestore: (dataset: Dataset) => void;
 }) {
+  const [workspaceMode, setWorkspaceMode] = useState<PreviewMode>(mode);
   const [page, setPage] = useState(1);
   const [filter, setFilter] = useState('');
   const [sortColumn, setSortColumn] = useState(datasetHeaders(dataset)[0] ?? '');
@@ -8785,10 +8826,10 @@ function DatasetPreviewModal({
   const [columnActionMessage, setColumnActionMessage] = useState('');
   const [savedQueries, setSavedQueries] = useState<string[]>([]);
   const pageSize = 10;
-  const previewRows = getPreviewRows(dataset, mode);
-  const activeRows = mode === 'edit' ? editRows : previewRows;
+  const previewRows = getPreviewRows(dataset, workspaceMode);
+  const activeRows = ['edit', 'transform'].includes(workspaceMode) ? editRows : previewRows;
   const allHeaders = getPreviewHeaders(dataset, activeRows);
-  const headers = allHeaders.filter((header) => !hiddenColumns.includes(header) && (!selectedColumns.length || mode !== 'query' || selectedColumn !== 'selected_only' || selectedColumns.includes(header)));
+  const headers = allHeaders.filter((header) => !hiddenColumns.includes(header) && (!selectedColumns.length || workspaceMode !== 'query' || selectedColumn !== 'selected_only' || selectedColumns.includes(header)));
   const columnTypes = inferColumnTypes(dataset.preview, dataset.headers);
   const validation = summarizeValidation(dataset);
   const duplicates = findDuplicateRows(datasetPreview(dataset));
@@ -8818,10 +8859,15 @@ function DatasetPreviewModal({
     compare: 'Before / After Compare',
     history: 'Version History',
     edit: 'Edit Rows',
-    query: 'Query Dataset'
-  }[mode];
+    query: 'Query Dataset',
+    schema: 'Schema Intelligence',
+    transform: 'Transform Dataset',
+    ai: 'AI Insights',
+    pipeline: 'Pipeline Execution'
+  }[workspaceMode];
 
   useEffect(() => {
+    setWorkspaceMode(mode);
     setPage(1);
     setFilter('');
     setSelectedColumn('all');
@@ -8944,6 +8990,62 @@ function DatasetPreviewModal({
     setColumnActionMessage(`${action} staged for selected columns.`);
   }
 
+  function runTransformAction(action: string) {
+    const sourceRows = editRows.length ? editRows : datasetPreview(dataset).map((row) => normalizeEditableRow(row));
+    const firstHeader = allHeaders[0] ?? 'value';
+    if (action === 'remove_duplicates') {
+      const seen = new Set<string>();
+      setEditRows(sourceRows.filter((row) => {
+        const key = JSON.stringify(row);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }));
+      setColumnActionMessage('Duplicate rows removed from the transform buffer. Save to persist.');
+      return;
+    }
+    if (action === 'fill_missing') {
+      setEditRows(sourceRows.map((row) => Object.fromEntries(allHeaders.map((header) => [header, String(row[header] ?? '').trim() || 'Not set']))));
+      setColumnActionMessage('Missing values filled with "Not set". Save to persist.');
+      return;
+    }
+    if (action === 'normalize') {
+      setEditRows(sourceRows.map((row) => normalizePreviewRow(row)));
+      setColumnActionMessage('Whitespace, dates, numbers, and column names normalized. Save to persist.');
+      return;
+    }
+    if (action === 'formula') {
+      setEditRows(sourceRows.map((row) => ({ ...row, ai_quality_flag: recordValues(row).some((value) => !String(value ?? '').trim()) ? 'Review' : 'Ready' })));
+      setColumnActionMessage('Formula column ai_quality_flag created. Save to persist.');
+      return;
+    }
+    if (action === 'type_conversion') {
+      setEditRows(sourceRows.map((row) => Object.fromEntries(Object.entries(row).map(([key, value]) => [key, normalizePreviewValue(String(value ?? ''))]))));
+      setColumnActionMessage('Type conversion staged for dates, numeric strings, and blank values. Save to persist.');
+      return;
+    }
+    if (action === 'pivot') {
+      const counts = sourceRows.reduce<Record<string, number>>((acc, row) => {
+        const key = String(row[firstHeader] ?? 'Not set');
+        acc[key] = (acc[key] ?? 0) + 1;
+        return acc;
+      }, {});
+      setEditRows(Object.entries(counts).map(([value, count]) => ({ [firstHeader]: value, count: String(count) })));
+      setColumnActionMessage(`Pivot created by ${firstHeader}. Save to persist or export as a derived dataset.`);
+      return;
+    }
+    if (action === 'transpose') {
+      const rows = allHeaders.map((header) => ({
+        column: header,
+        ...Object.fromEntries(sourceRows.slice(0, 12).map((row, index) => [`row_${index + 1}`, String(row[header] ?? '')]))
+      }));
+      setEditRows(rows);
+      setColumnActionMessage('Transpose preview created from the first 12 rows. Save to persist or export as a derived dataset.');
+      return;
+    }
+    setColumnActionMessage(`${action} transformation staged.`);
+  }
+
   function deleteSelectedRows() {
     const selected = new Set(selectedRowKeys);
     setEditRows((current) => current.filter((row) => !selected.has(rowKey(row))));
@@ -8980,11 +9082,26 @@ function DatasetPreviewModal({
       <section className="preview-modal" aria-modal="true" role="dialog" aria-label={modeTitle}>
         <div className="panel-header">
           <div>
-            <p className="eyebrow">{modeTitle}</p>
+            <p className="eyebrow">Dataset Workspace</p>
             <h2>{dataset.fileName}</h2>
             <p className="muted">{company?.name ?? 'Company workspace'} - {dataset.fileType?.toUpperCase() ?? 'DATA'} - uploaded {new Date(dataset.uploadedAt).toLocaleString()}</p>
           </div>
           <button className="ghost-button compact" type="button" onClick={onClose}>Close</button>
+        </div>
+
+        <div className="dataset-workspace-tabs" role="tablist" aria-label="Dataset workspace tabs">
+          {[
+            ['upload', 'Preview'],
+            ['schema', 'Schema'],
+            ['transform', 'Transform'],
+            ['validation', 'Validate'],
+            ['ai', 'AI Insights'],
+            ['pipeline', 'Pipeline'],
+            ['history', 'History'],
+            ['export', 'Export']
+          ].map(([key, label]) => (
+            <button className={workspaceMode === key ? 'active' : ''} key={key} type="button" onClick={() => setWorkspaceMode(key as PreviewMode)}>{label}</button>
+          ))}
         </div>
 
         <div className="preview-summary-grid">
@@ -8998,9 +9115,72 @@ function DatasetPreviewModal({
 
         <div className="preview-status-row">
           {['queued', 'running', 'completed', 'failed'].map((state) => (
-            <span className={`pipeline-state ${state} ${state === stageStatusForMode(mode, dataset) ? 'current' : ''}`} key={state}>{state}</span>
+            <span className={`pipeline-state ${state} ${state === stageStatusForMode(workspaceMode, dataset) ? 'current' : ''}`} key={state}>{state}</span>
           ))}
         </div>
+
+        {workspaceMode === 'transform' && (
+          <div className="transform-action-grid">
+            {[
+              ['pivot', 'Pivot dataset'],
+              ['transpose', 'Transpose'],
+              ['remove_duplicates', 'Remove duplicates'],
+              ['fill_missing', 'Fill missing values'],
+              ['normalize', 'Normalize'],
+              ['type_conversion', 'Type conversion'],
+              ['formula', 'Formula column']
+            ].map(([action, label]) => (
+              <button key={action} type="button" onClick={() => runTransformAction(action)}>{label}</button>
+            ))}
+            <button type="button" onClick={() => void saveEditedRows()} disabled={savingRows}>{savingRows ? 'Saving...' : 'Replace existing dataset'}</button>
+            <button type="button" onClick={exportFilteredRows}>Export transform preview</button>
+          </div>
+        )}
+
+        {workspaceMode === 'schema' && (
+          <div className="schema-intelligence-grid">
+            {allHeaders.map((header) => {
+              const values = activeRows.map((row) => String(row[header] ?? '').trim());
+              const missing = values.filter((value) => !value).length;
+              const duplicateValues = findRepeatedValues(values.filter(Boolean)).length;
+              return (
+                <article key={header}>
+                  <strong>{header}</strong>
+                  <span>{columnTypes[header] ?? 'text'} | missing {Math.round((missing / Math.max(values.length, 1)) * 100)}% | duplicate values {duplicateValues}</span>
+                  <button type="button" onClick={() => { setWorkspaceMode('transform'); setSelectedColumns([header]); }}>Transform column</button>
+                </article>
+              );
+            })}
+          </div>
+        )}
+
+        {workspaceMode === 'ai' && (
+          <div className="ai-workspace-grid">
+            {buildPreviewWarnings(dataset, workspaceMode, validation, duplicates).slice(0, 5).map((warning) => (
+              <article key={warning}>
+                <strong>{warning.includes('0 ') ? 'Low risk' : 'Review recommended'}</strong>
+                <span>{warning}</span>
+                <button type="button" onClick={() => setWorkspaceMode('transform')}>Open recommended fix</button>
+              </article>
+            ))}
+            <article>
+              <strong>AI recommendation</strong>
+              <span>Normalize values, remove duplicate rows, validate required columns, then approve before exporting.</span>
+              <button type="button" onClick={() => setWorkspaceMode('pipeline')}>View pipeline</button>
+            </article>
+          </div>
+        )}
+
+        {workspaceMode === 'pipeline' && (
+          <div className="dataset-pipeline-workspace">
+            {['Upload', 'Validate', 'Detect Duplicates', 'Normalize', 'Clean', 'Quality Score', 'Approve', 'Export'].map((stage, index) => (
+              <button key={stage} type="button" onClick={() => setColumnActionMessage(`${stage} logs opened. ${buildPreviewWarnings(dataset, workspaceMode, validation, duplicates)[index % 4] ?? 'No warnings.'}`)}>
+                <strong>{index + 1}. {stage}</strong>
+                <span>{index < 3 ? 'completed' : index === 3 ? 'running' : index === 6 ? 'waiting approval' : 'queued'}</span>
+              </button>
+            ))}
+          </div>
+        )}
 
         <div className="preview-panels">
           <article>
@@ -9017,11 +9197,11 @@ function DatasetPreviewModal({
           </article>
         </div>
 
-        {(mode === 'normalization' || mode === 'cleanup' || mode === 'compare') && (
+        {(workspaceMode === 'normalization' || workspaceMode === 'cleanup' || workspaceMode === 'compare') && (
           <BeforeAfterPreview dataset={dataset} />
         )}
 
-        {mode === 'duplicates' && (
+        {workspaceMode === 'duplicates' && (
           <div className="duplicate-list">
             {duplicates.slice(0, 5).map((duplicate) => (
               <div key={duplicate.key}>
@@ -9101,7 +9281,7 @@ function DatasetPreviewModal({
                   <td><input checked={selectedRowKeys.includes(rowKey(row))} type="checkbox" onChange={() => toggleRow(row)} /></td>
                   {headers.map((header) => (
                   <td className={cellClass(row[header], header)} key={header}>
-                    {mode === 'edit' ? (
+                    {['edit', 'transform'].includes(workspaceMode) ? (
                       <input
                         className="editable-cell-input"
                         value={String(row[header] ?? '')}
@@ -9127,7 +9307,7 @@ function DatasetPreviewModal({
 
         <div className="modal-actions">
           <button className="ghost-button" type="button" onClick={() => onReprocess(dataset.originalDatasetId ? allDatasets.find((entry) => entry.id === dataset.originalDatasetId) ?? dataset : dataset)}>Reprocess</button>
-          {mode === 'edit' && <button className="ghost-button" disabled={savingRows} type="button" onClick={() => void saveEditedRows()}>{savingRows ? 'Saving rows...' : 'Save edited rows'}</button>}
+          {['edit', 'transform'].includes(workspaceMode) && <button className="ghost-button" disabled={savingRows} type="button" onClick={() => void saveEditedRows()}>{savingRows ? 'Saving rows...' : 'Save edited rows'}</button>}
           <button className="ghost-button" type="button" onClick={() => void onApprove(dataset)}>Approve</button>
           <button type="button" onClick={() => onDownload(dataset)}>Download</button>
         </div>
