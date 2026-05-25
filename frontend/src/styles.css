@@ -4583,7 +4583,7 @@ th {
 
 .ingestion-stepper {
   display: grid;
-  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
   gap: 6px;
   overflow-x: auto;
 }
@@ -4611,6 +4611,10 @@ th {
 }
 
 .staged-upload-summary,
+.ingestion-summary-stack,
+.source-selection-panel,
+.processing-action-panel,
+.final-review-card,
 .pipeline-execution-panel,
 .save-option-grid,
 .data-hub-dataset-controls {
@@ -4622,10 +4626,64 @@ th {
   padding: 10px;
 }
 
+.ingestion-summary-stack {
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+}
+
+.ingestion-summary-stack button {
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid color-mix(in srgb, var(--success) 36%, var(--line));
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--success) 8%, var(--panel));
+  color: var(--text);
+  padding: 8px 10px;
+}
+
+.ingestion-summary-stack span,
+.source-selection-panel span,
+.processing-action-panel span,
+.final-review-card span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
+}
+
 .staged-upload-summary,
-.pipeline-execution-panel {
+.pipeline-execution-panel,
+.source-selection-panel,
+.processing-action-panel {
   grid-template-columns: minmax(0, 1fr) max-content;
   align-items: center;
+}
+
+.source-config-grid {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.source-config-grid input,
+.source-config-grid select,
+.source-selection-panel > select {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 800;
+  padding: 7px 9px;
+}
+
+.source-config-grid div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  padding: 9px;
 }
 
 .processing-choice-grid,

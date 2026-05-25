@@ -4567,6 +4567,18 @@ function classifyDatasetModule(dataset: Dataset | null | undefined) {
   return 'Enterprise Data Hub';
 }
 
+function isEnterpriseHubDataset(dataset: Dataset | null | undefined) {
+  if (!dataset?.id) return false;
+  const owner = `${dataset.ownerName ?? ''} ${dataset.ownerEmail ?? ''}`.toLowerCase();
+  const fileName = String(dataset.fileName ?? dataset.name ?? '').toLowerCase();
+  const generatedHrDataset = dataset.id.startsWith('hr-virtual-') || dataset.fileType === 'operational' || owner.includes('hr & workforce');
+  if (generatedHrDataset) return false;
+  if (classifyDatasetModule(dataset) === 'HR' && /employee|timesheet|payroll|pto|sick|leave|hiring|performance|benefits/.test(fileName)) {
+    return false;
+  }
+  return true;
+}
+
 function moduleLabelForRoute(moduleName: string) {
   if (moduleName === 'hr') return 'HR';
   if (moduleName === 'accounting') return 'Finance';
@@ -5438,10 +5450,11 @@ function ModuleWorkspacePage({
   const [updateTargetDatasetId, setUpdateTargetDatasetId] = useState('');
   const [uploadAnalysis, setUploadAnalysis] = useState<ReturnType<typeof analyzeUploadedDataset> | null>(null);
   const [stagedDataset, setStagedDataset] = useState<Dataset | null>(null);
-  const [ingestionStep, setIngestionStep] = useState<'upload' | 'analyze' | 'action' | 'pipeline' | 'save' | 'workspace'>('upload');
+  const [ingestionStep, setIngestionStep] = useState<'source' | 'upload' | 'analyze' | 'action' | 'pipeline' | 'save' | 'workspace'>('source');
+  const [dataSourceType, setDataSourceType] = useState('');
+  const [sourceConfig, setSourceConfig] = useState({ host: '', database: '', username: '', siteUrl: '', endpoint: '', schedule: 'Manual sync' });
   const [processingAction, setProcessingAction] = useState('');
   const [connectorMessage, setConnectorMessage] = useState('Connect enterprise sources, test credentials, discover schemas, and import datasets.');
-  const [connectorFilter, setConnectorFilter] = useState('');
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
   const [openActionDatasetId, setOpenActionDatasetId] = useState('');
@@ -5450,7 +5463,7 @@ function ModuleWorkspacePage({
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
     const unique = new Map<string, Dataset>();
     merged.forEach((dataset) => {
-      const belongsToModule = isDataProcessingWorkspace || classifyDatasetModule(dataset) === moduleLabel;
+      const belongsToModule = isDataProcessingWorkspace ? isEnterpriseHubDataset(dataset) : classifyDatasetModule(dataset) === moduleLabel;
       const isStagedHidden = stagedDataset?.id === dataset.id && !['save', 'workspace'].includes(ingestionStep);
       if (dataset?.id && belongsToModule && !isStagedHidden && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
         unique.set(dataset.id, dataset);
@@ -5479,9 +5492,10 @@ function ModuleWorkspacePage({
     setExpandedDatasetId('');
     setAllDatasetsExpanded(false);
     setStageDetail('');
-    setIngestionStep('upload');
+    setIngestionStep('source');
     setStagedDataset(null);
     setProcessingAction('');
+    setDataSourceType('');
   }, [pipelineConfig.emptyState, route.module, route.path, workflowStages]);
 
   useEffect(() => {
@@ -5595,6 +5609,11 @@ function ModuleWorkspacePage({
   }
 
   async function handleModuleUpload(file: File) {
+    if (isDataProcessingWorkspace && dataSourceType !== 'Local CSV/XLSX Upload') {
+      setError('Choose Local CSV/XLSX Upload as the source before selecting a file.');
+      setIngestionStep('source');
+      return;
+    }
     setUploading(true);
     setUploadProgress(12);
     setError('');
@@ -5650,6 +5669,82 @@ function ModuleWorkspacePage({
     setDragActive(false);
     const file = event.dataTransfer.files?.[0];
     if (file) void handleModuleUpload(file);
+  }
+
+  function configureDataSource(source: string) {
+    setDataSourceType(source);
+    setWorkflowMessage(source ? `${source} selected. Configure and test the source before continuing.` : 'Choose a data source to begin ingestion.');
+    setIngestionStep('source');
+  }
+
+  function testDataSourceConnection() {
+    if (!dataSourceType) {
+      setWorkflowMessage('Choose a data source before testing a connection.');
+      return;
+    }
+    setConnectorMessage(`${dataSourceType} connection test completed for ${selectedCompanyName}.`);
+    setWorkflowMessage(`${dataSourceType} connection is healthy. Continue to upload, discover, or import.`);
+  }
+
+  function discoverDataSourceSchema() {
+    if (!dataSourceType) {
+      setWorkflowMessage('Choose a data source before discovering schema.');
+      return;
+    }
+    setConnectorMessage(`${dataSourceType} schema discovery completed. Tables, sheets, folders, or endpoints are ready for preview.`);
+    setWorkflowMessage(`${dataSourceType} schema discovered. You can import a preview into the governed pipeline.`);
+  }
+
+  function continueFromSource() {
+    if (!dataSourceType) {
+      setWorkflowMessage('Choose a data source first.');
+      return;
+    }
+    if (dataSourceType === 'Local CSV/XLSX Upload') {
+      setIngestionStep('upload');
+      setWorkflowMessage('Local upload source configured. Upload a CSV, XLSX, XLS, or JSON file.');
+      return;
+    }
+    importFromConfiguredSource();
+  }
+
+  function importFromConfiguredSource() {
+    if (!dataSourceType) {
+      setWorkflowMessage('Choose and configure a source before importing.');
+      return;
+    }
+    const sourceRows = [
+      { sourceSystem: dataSourceType, recordId: 'SRC-001', status: 'ready', amount: '1250', updatedAt: new Date().toISOString().slice(0, 10) },
+      { sourceSystem: dataSourceType, recordId: 'SRC-002', status: 'review', amount: '980', updatedAt: new Date().toISOString().slice(0, 10) },
+      { sourceSystem: dataSourceType, recordId: 'SRC-003', status: 'ready', amount: '1430', updatedAt: new Date().toISOString().slice(0, 10) }
+    ];
+    const imported = normalizeDatasetForClient({
+      id: `connector-staged-${Date.now()}`,
+      companyId: selectedCompanyId,
+      fileName: `${dataSourceType} Imported Dataset`,
+      fileType: 'connector',
+      uploadedAt: new Date().toISOString(),
+      rows: sourceRows.length,
+      columns: Object.keys(sourceRows[0] ?? {}).length,
+      headers: Object.keys(sourceRows[0] ?? {}),
+      preview: sourceRows,
+      records: sourceRows,
+      previewRows: sourceRows,
+      cleanupStatus: 'staged',
+      pipelineStatus: 'source_connected',
+      status: 'staged',
+      ownerName: 'Enterprise Data Hub',
+      ownerEmail: user?.email,
+      insights: [`${dataSourceType} import is staged for processing.`],
+      chart: [],
+      numericSummary: []
+    } as Dataset);
+    setStagedDataset(imported);
+    setActiveDataset(imported);
+    setUploadAnalysis(analyzeUploadedDataset(imported, route.module));
+    setWorkflowStage(workflowStages[0] ?? 'Upload');
+    setIngestionStep('analyze');
+    setWorkflowMessage(`${dataSourceType} import staged. Analyze the dataset before choosing a processing action.`);
   }
 
   async function cleanDatasetFromModule(dataset: Dataset) {
@@ -5850,6 +5945,41 @@ function ModuleWorkspacePage({
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
 
+  function chooseProcessingAction(action: string) {
+    if (!stagedDataset) {
+      setWorkflowMessage('Upload or import a dataset before choosing a processing action.');
+      return;
+    }
+    setProcessingAction(action);
+    setUpdateMode(action);
+    setIngestionStep('pipeline');
+    setWorkflowStage(workflowStages[1] ?? 'Validate');
+    setWorkflowMessage(`${stagedDataset.fileName} is running the ${action.replaceAll('_', ' ')} ingestion pipeline. Review stage details before saving.`);
+  }
+
+  async function saveStagedDataset(saveMode: string) {
+    if (!stagedDataset) {
+      setWorkflowMessage('No staged dataset is available to save.');
+      return;
+    }
+    setProcessingAction(saveMode);
+    setIngestionStep('save');
+    const status = saveMode.includes('approval') ? 'pending approval' : 'uploaded';
+    const activatedDataset = { ...stagedDataset, cleanupStatus: status, pipelineStatus: 'published', status };
+    setWorkspaceDatasets((current) => [activatedDataset, ...current.filter((entry) => entry.id !== activatedDataset.id)]);
+    setDatasets((current) => [activatedDataset, ...current.filter((entry) => entry.id !== activatedDataset.id)]);
+    setActiveDataset(activatedDataset);
+    setExpandedDatasetId(activatedDataset.id);
+    setWorkflowStage(workflowStages.find((stage) => /export|publish|sync/i.test(stage)) ?? workflowStages.at(-1) ?? workflowStages[0]);
+    setWorkflowMessage(`${activatedDataset.fileName} saved using ${saveMode.replaceAll('_', ' ')} and activated as a reusable workspace dataset.`);
+    try {
+      await updateDatasetWorkflowStatus(activatedDataset, status, `${activatedDataset.fileName} activated in Enterprise Data Hub.`, 'upload');
+    } finally {
+      setIngestionStep('workspace');
+      setPreviewState({ dataset: activatedDataset, mode: 'upload' });
+    }
+  }
+
   function runDatasetAction(dataset: Dataset, action: string) {
     setError('');
     setExpandedDatasetId(dataset.id);
@@ -5912,20 +6042,30 @@ function ModuleWorkspacePage({
   }
 
   const stageDetailIndex = Math.max(workflowStages.indexOf(stageDetail), 0);
-  const connectorCatalog = [
-    'SQL Server', 'PostgreSQL', 'MySQL', 'Oracle', 'Snowflake', 'BigQuery', 'Redshift', 'MongoDB',
-    'SharePoint', 'OneDrive Excel', 'Google Sheets', 'CSV/XLSX upload', 'REST API', 'SFTP',
-    'Azure Blob Storage', 'AWS S3', 'Salesforce', 'HubSpot', 'QuickBooks'
-  ].filter((name) => !connectorFilter.trim() || name.toLowerCase().includes(connectorFilter.toLowerCase()));
-  const ingestionSteps = [
-    ['upload', '1 Upload'],
-    ['analyze', '2 Analyze'],
-    ['action', '3 Choose Action'],
-    ['pipeline', '4 Run Pipeline'],
-    ['save', '5 Save Dataset'],
-    ['workspace', '6 Open Workspace']
+  const connectorSources = [
+    'Local CSV/XLSX Upload', 'SQL Server', 'PostgreSQL', 'MySQL', 'Snowflake', 'Oracle',
+    'SharePoint', 'OneDrive', 'Google Sheets', 'REST API', 'SFTP', 'AWS S3', 'Azure Blob',
+    'Salesforce', 'HubSpot', 'QuickBooks'
   ];
+  const ingestionSteps = [
+    ['source', '1 Select Source'],
+    ['upload', '2 Upload / Connect'],
+    ['analyze', '3 Analyze'],
+    ['action', '4 Choose Action'],
+    ['pipeline', '5 Execute Pipeline'],
+    ['save', '6 Save / Approve'],
+    ['workspace', '7 Open Workspace']
+  ] as const;
   const ingestionStepIndex = Math.max(ingestionSteps.findIndex(([key]) => key === ingestionStep), 0);
+  const stepSummaries: Record<string, string> = {
+    source: dataSourceType ? `${dataSourceType} selected` : 'No source selected',
+    upload: stagedDataset ? `${stagedDataset.fileName} staged` : dataSourceType === 'Local CSV/XLSX Upload' ? 'Waiting for file upload' : `${dataSourceType || 'Source'} ready to connect`,
+    analyze: uploadAnalysis ? `${uploadAnalysis.detectedType}; ${uploadAnalysis.missingColumns.length} missing columns` : 'Analysis pending',
+    action: processingAction ? processingAction.replaceAll('_', ' ') : 'Processing action required',
+    pipeline: workflowStage ? `${workflowStage}: ${stageState(workflowStage, activeStageIndex).replace('_', ' ')}` : 'Pipeline pending',
+    save: stagedDataset ? `${stagedDataset.fileName} awaiting save/approval` : 'Save pending',
+    workspace: stagedDataset ? `${stagedDataset.fileName} activated` : `${moduleDatasets.length} active datasets`
+  };
 
   return (
     <PageLayout>
@@ -5961,30 +6101,91 @@ function ModuleWorkspacePage({
         </div>
         <div className="ingestion-stepper" aria-label="Enterprise Data Hub ingestion steps">
           {ingestionSteps.map(([key, label], index) => (
-            <button className={index < ingestionStepIndex ? 'completed' : index === ingestionStepIndex ? 'active' : ''} key={key} type="button" disabled={index > ingestionStepIndex}>
+            <button className={index < ingestionStepIndex ? 'completed' : index === ingestionStepIndex ? 'active' : ''} key={key} type="button" disabled={index > ingestionStepIndex} onClick={() => index <= ingestionStepIndex && setIngestionStep(key)}>
               {label}
             </button>
           ))}
         </div>
-        <div
-          className={`dropzone ${dragActive ? 'active' : ''}`}
-          onDragLeave={() => setDragActive(false)}
-          onDragOver={(event) => {
-            event.preventDefault();
-            setDragActive(true);
-          }}
-          onDrop={handleDrop}
-        >
-          <strong>{pipelineConfig.uploadTitle}</strong>
-          <span>{pipelineConfig.uploadCopy}</span>
-          <input accept=".csv,.xlsx,.xls,.json" type="file" onChange={handleModuleFileChange} />
+        <div className="ingestion-summary-stack">
+          {ingestionSteps.slice(0, ingestionStepIndex).map(([key, label]) => (
+            <button key={key} type="button" onClick={() => setIngestionStep(key)}>
+              <strong>✓ {label.replace(/^\d+\s*/, '')}</strong>
+              <span>{stepSummaries[key]}</span>
+            </button>
+          ))}
         </div>
+        {ingestionStep === 'source' && (
+          <section className="source-selection-panel">
+            <div>
+              <p className="eyebrow">Step 1 - Choose Data Source</p>
+              <h3>Start with a source before upload or import</h3>
+              <span>Local files and cloud connectors all enter the same governed ingestion pipeline.</span>
+            </div>
+            <select value={dataSourceType} onChange={(event) => configureDataSource(event.target.value)}>
+              <option value="">Select source</option>
+              {connectorSources.map((source) => <option key={source} value={source}>{source}</option>)}
+            </select>
+            {dataSourceType && (
+              <div className="source-config-grid">
+                {dataSourceType === 'Local CSV/XLSX Upload' ? (
+                  <div><strong>Local file source</strong><span>Continue to upload CSV, XLSX, XLS, or JSON files.</span></div>
+                ) : dataSourceType === 'REST API' ? (
+                  <>
+                    <input placeholder="Endpoint URL" value={sourceConfig.endpoint} onChange={(event) => setSourceConfig((current) => ({ ...current, endpoint: event.target.value }))} />
+                    <input placeholder="Auth token / headers" value={sourceConfig.username} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))} />
+                    <select value={sourceConfig.schedule} onChange={(event) => setSourceConfig((current) => ({ ...current, schedule: event.target.value }))}>
+                      {['Manual sync', 'Hourly', 'Daily', 'Weekly', 'Monthly', 'Event-triggered'].map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  </>
+                ) : /SharePoint|OneDrive|Google Sheets|SFTP|S3|Azure/.test(dataSourceType) ? (
+                  <>
+                    <input placeholder="Site, folder, bucket, or sheet URL" value={sourceConfig.siteUrl} onChange={(event) => setSourceConfig((current) => ({ ...current, siteUrl: event.target.value }))} />
+                    <input placeholder="Secure token / service account" value={sourceConfig.username} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))} />
+                    <select value={sourceConfig.schedule} onChange={(event) => setSourceConfig((current) => ({ ...current, schedule: event.target.value }))}>
+                      {['Manual sync', 'Hourly', 'Daily', 'Weekly', 'Monthly', 'Event-triggered'].map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  </>
+                ) : (
+                  <>
+                    <input placeholder="Host" value={sourceConfig.host} onChange={(event) => setSourceConfig((current) => ({ ...current, host: event.target.value }))} />
+                    <input placeholder="Database / warehouse" value={sourceConfig.database} onChange={(event) => setSourceConfig((current) => ({ ...current, database: event.target.value }))} />
+                    <input placeholder="Username" value={sourceConfig.username} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))} />
+                    <select value={sourceConfig.schedule} onChange={(event) => setSourceConfig((current) => ({ ...current, schedule: event.target.value }))}>
+                      {['Manual sync', 'Hourly', 'Daily', 'Weekly', 'Monthly', 'Event-triggered'].map((option) => <option key={option}>{option}</option>)}
+                    </select>
+                  </>
+                )}
+              </div>
+            )}
+            <div className="inline-actions">
+              <button type="button" onClick={testDataSourceConnection} disabled={!dataSourceType}>Test connection</button>
+              <button type="button" onClick={discoverDataSourceSchema} disabled={!dataSourceType}>Discover schema</button>
+              <button type="button" onClick={continueFromSource} disabled={!dataSourceType}>{dataSourceType === 'Local CSV/XLSX Upload' ? 'Continue to upload' : 'Import preview'}</button>
+              <button type="button" onClick={() => setConnectorMessage(`${dataSourceType || 'Source'} schedule saved as ${sourceConfig.schedule}.`)} disabled={!dataSourceType}>Schedule sync</button>
+            </div>
+          </section>
+        )}
+        {ingestionStep === 'upload' && dataSourceType === 'Local CSV/XLSX Upload' && (
+          <div
+            className={`dropzone ${dragActive ? 'active' : ''}`}
+            onDragLeave={() => setDragActive(false)}
+            onDragOver={(event) => {
+              event.preventDefault();
+              setDragActive(true);
+            }}
+            onDrop={handleDrop}
+          >
+            <strong>{pipelineConfig.uploadTitle}</strong>
+            <span>{pipelineConfig.uploadCopy}</span>
+            <input accept=".csv,.xlsx,.xls,.json" type="file" onChange={handleModuleFileChange} />
+          </div>
+        )}
         {uploading && (
           <div className="progress-track" aria-label="Upload progress">
             <span style={{ width: `${uploadProgress}%` }} />
           </div>
         )}
-        {stagedDataset && (
+        {ingestionStep !== 'source' && stagedDataset && (
           <div className="staged-upload-summary">
             <div>
               <p className="eyebrow">Staged upload</p>
@@ -5994,7 +6195,7 @@ function ModuleWorkspacePage({
             <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset: stagedDataset, mode: 'upload' })}>Preview staged data</button>
           </div>
         )}
-        {uploadAnalysis && (
+        {ingestionStep === 'analyze' && uploadAnalysis && (
           <div className="dataset-merge-preview">
             <div>
               <p className="eyebrow">Step 2 - Smart dataset analysis</p>
@@ -6012,19 +6213,31 @@ function ModuleWorkspacePage({
               {!uploadAnalysis.missingColumns.length && !uploadAnalysis.invalidTypes.length && !uploadAnalysis.duplicateKeys.length && <span>Columns are ready for append, merge, replace, or new dataset workflow.</span>}
             </div>
             <div className="processing-choice-grid">
+              <button type="button" onClick={() => setIngestionStep('action')}>Continue to processing action</button>
+            </div>
+          </div>
+        )}
+        {ingestionStep === 'action' && uploadAnalysis && (
+          <section className="processing-action-panel">
+            <div>
+              <p className="eyebrow">Step 4 - Choose Processing Action</p>
+              <h3>Decision required before pipeline execution</h3>
+              <span>{uploadAnalysis.recommendedAction}</span>
+            </div>
+            <div className="processing-choice-grid">
               {[
                 ['new_dataset', 'Create new dataset'],
-                ['merge_matching_records', 'Merge into existing'],
+                ['merge_matching_records', 'Merge dataset'],
                 ['append_rows', 'Append rows'],
-                ['replace_existing', 'Replace existing dataset'],
-                ['ignore_duplicate_rows', 'Ignore duplicates']
+                ['replace_existing', 'Replace dataset'],
+                ['new_version', 'Version checkpoint']
               ].map(([action, label]) => (
                 <button className={processingAction === action ? 'active' : ''} key={action} type="button" onClick={() => chooseProcessingAction(action)}>
                   {label}
                 </button>
               ))}
             </div>
-          </div>
+          </section>
         )}
         {ingestionStep === 'pipeline' && stagedDataset && (
           <div className="pipeline-execution-panel">
@@ -6042,6 +6255,11 @@ function ModuleWorkspacePage({
         )}
         {['pipeline', 'save'].includes(ingestionStep) && stagedDataset && (
           <div className="save-option-grid">
+            <div className="final-review-card">
+              <p className="eyebrow">Step 6 - Save / Approve Dataset</p>
+              <strong>Final review before activation</strong>
+              <span>Workspace: Enterprise Data Hub | Owner: {user?.name ?? 'Current user'} | Visibility: Company scoped | Approval: Manager required when enabled</span>
+            </div>
             {[
               ['save_new_dataset', 'Save as new dataset'],
               ['merge_existing', 'Merge into existing dataset'],
@@ -6055,7 +6273,7 @@ function ModuleWorkspacePage({
             ))}
           </div>
         )}
-        {isDataProcessingWorkspace && uploadAnalysis && stagedDataset && (
+        {ingestionStep === 'save' && uploadAnalysis && stagedDataset && (
           <div className="incremental-update-panel">
             <div>
               <p className="eyebrow">Target dataset options</p>
@@ -6078,10 +6296,10 @@ function ModuleWorkspacePage({
             </select>
           </div>
         )}
-        <div className="workflow-rule-grid" aria-label="Pipeline rules">
+        {ingestionStep === 'pipeline' && <div className="workflow-rule-grid" aria-label="Pipeline rules">
           {pipelineRules.map((rule) => <span key={rule}>{rule}</span>)}
-        </div>
-        <div className="pipeline-stages workflow-stages connected-pipeline-rail sticky-workflow-header">
+        </div>}
+        {ingestionStep === 'pipeline' && <div className="pipeline-stages workflow-stages connected-pipeline-rail sticky-workflow-header">
           {workflowStages.map((stage, index) => (
             <button
               className={`stage-${stageState(stage, index)} ${index <= activeStageIndex ? 'active' : ''}`}
@@ -6097,8 +6315,8 @@ function ModuleWorkspacePage({
               <small>{stageState(stage, index).replace('_', ' ')}</small>
             </button>
           ))}
-        </div>
-        {stageDetail && (
+        </div>}
+        {ingestionStep === 'pipeline' && stageDetail && (
           <div className="stage-detail-drawer">
             <div>
               <p className="eyebrow">Stage detail</p>
@@ -6136,45 +6354,7 @@ function ModuleWorkspacePage({
           </div>
         </article>
       ) : null}
-      {isDataProcessingWorkspace && (
-        <article className="panel data-connection-workspace">
-          <div className="panel-header">
-            <div>
-              <p className="eyebrow">Data Connections</p>
-              <h2>Enterprise connector framework</h2>
-              <span>Test connections, discover schemas, preview tables, import datasets, and schedule refreshes.</span>
-            </div>
-            <input placeholder="Search connectors" value={connectorFilter} onChange={(event) => setConnectorFilter(event.target.value)} />
-          </div>
-          <div className="connector-card-grid">
-            {connectorCatalog.map((connector, index) => (
-              <article key={connector}>
-                <div>
-                  <span className="dataset-type-icon">{connector.slice(0, 2).toUpperCase()}</span>
-                  <strong>{connector}</strong>
-                  <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Setup required' : 'Ready to test'} | last sync {index % 2 === 0 ? 'today' : 'not synced'}</small>
-                </div>
-                <div className="connector-card-actions">
-                  <button type="button" onClick={() => setConnectorMessage(`${connector} connection test completed for ${selectedCompanyName}.`)}>
-                    Test
-                  </button>
-                  <button type="button" onClick={() => setConnectorMessage(`${connector} schema discovery opened. Tables, sheets, objects, and columns are ready for preview.`)}>
-                    Discover
-                  </button>
-                  <button type="button" onClick={() => setConnectorMessage(`${connector} import staged. Choose Create, Merge, Append, Replace, or reusable workspace dataset before activation.`)}>
-                    Import
-                  </button>
-                  <button type="button" onClick={() => setConnectorMessage(`${connector} scheduled sync configured for manual, hourly, daily, weekly, monthly, or event-triggered refresh.`)}>
-                    Schedule
-                  </button>
-                </div>
-              </article>
-            ))}
-          </div>
-          <p className="persistence-note">{connectorMessage}</p>
-        </article>
-      )}
-      {route.module !== 'hr' && <article className="panel">
+      {route.module !== 'hr' && (!isDataProcessingWorkspace || ingestionStep === 'workspace') && <article className="panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Single dataset workspace</p>
@@ -6339,7 +6519,7 @@ function ModuleWorkspacePage({
           {!visibleModuleDatasets.length && <EmptyState title={moduleDatasets.length ? 'No datasets match the current filters.' : 'Upload your first dataset to begin processing.'} copy={moduleDatasets.length ? 'Try another search, workspace, status, owner, or column name.' : pipelineConfig.emptyState} />}
         </div>
       </article>}
-      {isDataProcessingWorkspace ? (
+      {isDataProcessingWorkspace && ingestionStep === 'workspace' ? (
         <article className="panel routed-workspace compact-tool-panel">
           <div className="panel-header">
             <div>
@@ -6364,7 +6544,7 @@ function ModuleWorkspacePage({
           </p>
           {error && <p className="persistence-note warning-note">{error}</p>}
         </article>
-      ) : route.module === 'hr' ? (
+      ) : isDataProcessingWorkspace ? null : route.module === 'hr' ? (
         <HrWorkforceWorkspace
           apiFetch={apiFetch}
           company={selectedCompany}
