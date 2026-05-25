@@ -5473,6 +5473,12 @@ function ModuleWorkspacePage({
     { id: 'log-1', message: 'Pipeline builder ready. Add blocks, connect stages, then run now or schedule.', status: 'ready', timestamp: new Date().toISOString() }
   ]);
   const [savedPipelineVersion, setSavedPipelineVersion] = useState(1);
+  const [selectedConnector, setSelectedConnector] = useState('SQL Server');
+  const [pipelineStudioMode, setPipelineStudioMode] = useState<'develop' | 'preview' | 'execute' | 'monitor'>('develop');
+  const [pipelineZoom, setPipelineZoom] = useState(88);
+  const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
+  const [selectedDatasetDrawerId, setSelectedDatasetDrawerId] = useState('');
+  const [pipelineSaveState, setPipelineSaveState] = useState('Draft saved locally');
   const [aiCopilotPrompt, setAiCopilotPrompt] = useState('Clean this payroll file and merge with employee records.');
   const [aiCopilotPlan, setAiCopilotPlan] = useState<string[]>([
     'Upload or select a dataset to generate a MeLai plan.',
@@ -6007,6 +6013,10 @@ function ModuleWorkspacePage({
   };
   const pipelineTemplates = ['Payroll import pipeline', 'CRM sync pipeline', 'Finance reconciliation pipeline', 'SharePoint sync pipeline', 'Excel cleanup pipeline', 'Data warehouse sync pipeline'];
   const selectedPipelineBlock = pipelineBlocks.find((block) => block.id === selectedPipelineBlockId) ?? pipelineBlocks[0] ?? null;
+  const selectedConnectorCategory = connectorCategories.find((category) => category.sources.includes(selectedConnector))?.name ?? 'Databases';
+  const pipelineSourceCount = pipelineBlocks.filter((block) => block.type === 'SOURCE').length;
+  const primaryPreviewDataset = stagedDataset ?? moduleDatasets[0] ?? null;
+  const selectedDatasetDrawer = moduleDatasets.find((dataset) => dataset.id === selectedDatasetDrawerId) ?? null;
   const pipelineHealth = pipelineExecutionLogs.some((log) => log.status === 'failed') ? 'warning' : pipelineExecutionLogs.some((log) => log.status === 'running') ? 'running' : 'healthy';
 
   function addPipelineBlock(type: string, label: string) {
@@ -6045,6 +6055,7 @@ function ModuleWorkspacePage({
 
   function savePipelineVersion() {
     setSavedPipelineVersion((version) => version + 1);
+    setPipelineSaveState(`Version ${savedPipelineVersion + 1} saved`);
     setPipelineExecutionLogs((current) => [{ id: `version-${Date.now()}`, message: `Pipeline version ${savedPipelineVersion + 1} saved with ${pipelineBlocks.length} blocks and workspace-scoped permissions.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
   }
 
@@ -6177,6 +6188,29 @@ function ModuleWorkspacePage({
     setPipelineBlocks((current) => current.map((block) => block.status === 'failed' ? { ...block, status: 'running', label: `${block.label} + MeLai repair` } : block));
     setPipelineExecutionLogs((current) => [{ id: `repair-${Date.now()}`, message: 'MeLai repair applied: schema drift cast, missing column fallback, and retry queued.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
     setWorkflowMessage('MeLai repair applied. Pipeline retry is running with the suggested schema fix.');
+  }
+
+  function openConnectorSetup(connector: string) {
+    setSelectedConnector(connector);
+    setExpandedConnectorCategory(connectorCategories.find((category) => category.sources.includes(connector))?.name ?? 'Databases');
+    configureDataSource(connector);
+    setConnectorMessage(`${connector} setup opened. Configure credentials, test connection, discover schema, preview data, and save reusable credentials.`);
+  }
+
+  function exportPipelineDefinition() {
+    const definition = {
+      version: savedPipelineVersion,
+      blocks: pipelineBlocks,
+      schedule: sourceConfig.schedule,
+      updatedAt: new Date().toISOString()
+    };
+    downloadText(JSON.stringify(definition, null, 2), `melai-pipeline-v${savedPipelineVersion}.json`, 'application/json');
+    setPipelineExecutionLogs((current) => [{ id: `export-pipeline-${Date.now()}`, message: `Pipeline definition v${savedPipelineVersion} exported.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function mergeDuplicateDatasets() {
+    setWorkflowMessage('Duplicate dataset merge preview opened. Matching name/schema datasets will be merged, versioned, or appended based on selected rules.');
+    setAllDatasetsExpanded(true);
   }
 
   function chooseProcessingAction(action: string) {
@@ -6326,6 +6360,40 @@ function ModuleWorkspacePage({
             setActiveDataset(dataset);
             setPreviewState({ dataset, mode: 'upload' });
             setWorkflowMessage(`${dataset.fileName} restored as active preview version.`);
+          }}
+        />
+      )}
+      {fullPreviewOpen && primaryPreviewDataset && (
+        <DatasetPreviewModal
+          allDatasets={safeDatasets}
+          company={safeCompanies.find((company) => company.id === primaryPreviewDataset.companyId)}
+          dataset={primaryPreviewDataset}
+          mode="edit"
+          onApprove={approveDataset}
+          onClose={() => setFullPreviewOpen(false)}
+          onDownload={downloadDatasetExport}
+          onReprocess={cleanDatasetFromModule}
+          onSaveRows={saveDatasetRows}
+          onRestore={(dataset) => {
+            setActiveDataset(dataset);
+            setWorkflowMessage(`${dataset.fileName} restored from full-page preview mode.`);
+          }}
+        />
+      )}
+      {selectedDatasetDrawer && (
+        <DatasetPreviewModal
+          allDatasets={safeDatasets}
+          company={safeCompanies.find((company) => company.id === selectedDatasetDrawer.companyId)}
+          dataset={selectedDatasetDrawer}
+          mode="pipeline"
+          onApprove={approveDataset}
+          onClose={() => setSelectedDatasetDrawerId('')}
+          onDownload={downloadDatasetExport}
+          onReprocess={cleanDatasetFromModule}
+          onSaveRows={saveDatasetRows}
+          onRestore={(dataset) => {
+            setActiveDataset(dataset);
+            setSelectedDatasetDrawerId('');
           }}
         />
       )}
@@ -6634,7 +6702,54 @@ function ModuleWorkspacePage({
               <h2>Cloud-native source and destination framework</h2>
               <span>Reuse the same connector catalog for ingestion sources, pipeline destinations, schedules, and workspace sync.</span>
             </div>
-            <button type="button" onClick={() => setDataHubTab('datasets')}>Start ingestion flow</button>
+            <div className="connector-selector-panel">
+              <select value={selectedConnector} onChange={(event) => openConnectorSetup(event.target.value)}>
+                {connectorCategories.flatMap((category) => category.sources).map((connector) => <option key={connector}>{connector}</option>)}
+              </select>
+              <button type="button" onClick={() => setDataHubTab('datasets')}>Start ingestion flow</button>
+            </div>
+          </div>
+          <div className="connector-setup-panel">
+            <div>
+              <p className="eyebrow">{selectedConnectorCategory}</p>
+              <h3>{selectedConnector} setup</h3>
+              <span>Configure credentials, test connection, discover schema, preview rows, save reusable credentials, and schedule sync.</span>
+            </div>
+            {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedConnector) ? (
+              <div className="source-config-grid">
+                <input placeholder="Server / warehouse" />
+                <input placeholder="Database / schema" />
+                <select><option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option></select>
+                <input placeholder="Username / role" />
+              </div>
+            ) : /SharePoint|OneDrive|S3|Azure|Google Sheets/i.test(selectedConnector) ? (
+              <div className="source-config-grid">
+                <input placeholder="Tenant / site / bucket" />
+                <input placeholder="Folder or sheet path" />
+                <select><option>Microsoft login</option><option>Service account</option><option>Access key</option></select>
+                <input placeholder="Sync schedule" />
+              </div>
+            ) : /REST API/i.test(selectedConnector) ? (
+              <div className="source-config-grid">
+                <input placeholder="Endpoint URL" />
+                <select><option>GET</option><option>POST</option></select>
+                <input placeholder="Headers / token" />
+                <input placeholder="Pagination" />
+              </div>
+            ) : (
+              <div className="source-config-grid">
+                <input placeholder="Connector account" />
+                <input placeholder="Object / table / file" />
+                <input placeholder="Authentication profile" />
+                <input placeholder="Sync schedule" />
+              </div>
+            )}
+            <div className="inline-actions">
+              <button type="button" onClick={() => testDataSourceConnection(selectedConnector)}>Test connection</button>
+              <button type="button" onClick={() => discoverDataSourceSchema(selectedConnector)}>Discover tables/files</button>
+              <button type="button" onClick={() => importFromConfiguredSource(selectedConnector)}>Preview data</button>
+              <button type="button" onClick={() => setConnectorMessage(`${selectedConnector} reusable credentials saved with company-scoped permissions.`)}>Save credentials</button>
+            </div>
           </div>
           <div className="connector-accordion">
             {connectorCategories.map((category) => (
@@ -6653,7 +6768,7 @@ function ModuleWorkspacePage({
                           <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Needs credentials' : 'Ready to sync'} | {sourceConfig.schedule}</small>
                         </div>
                         <div className="connector-card-actions">
-                          <button type="button" onClick={() => { configureDataSource(connector); setDataHubTab('datasets'); }}>Configure</button>
+                          <button type="button" onClick={() => openConnectorSetup(connector)}>Configure</button>
                           <button type="button" onClick={() => testDataSourceConnection(connector)}>Test</button>
                           <button type="button" onClick={() => discoverDataSourceSchema(connector)}>Schema</button>
                           <button type="button" onClick={() => { importFromConfiguredSource(connector); setDataHubTab('datasets'); }}>Import</button>
@@ -6683,8 +6798,17 @@ function ModuleWorkspacePage({
               <button type="button" onClick={runPipelineNow}>Run now</button>
               <button type="button" onClick={savePipelineVersion}>Save version</button>
               <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `schedule-${Date.now()}`, message: 'Pipeline scheduled for hourly, daily, weekly, monthly, or triggered runs.', status: 'ready', timestamp: new Date().toISOString() }, ...current])}>Schedule</button>
+              <button type="button" onClick={exportPipelineDefinition}>Export Pipeline</button>
+              <button type="button" onClick={() => setPipelineStudioMode('monitor')}>Monitor Pipeline</button>
               <button className="ghost-button compact" type="button" onClick={retryFailedPipelineStage}>Retry failed</button>
             </div>
+          </div>
+          <div className="pipeline-mode-bar">
+            {['develop', 'preview', 'execute', 'monitor'].map((mode) => (
+              <button className={pipelineStudioMode === mode ? 'active' : ''} key={mode} type="button" onClick={() => setPipelineStudioMode(mode as typeof pipelineStudioMode)}>{mode}</button>
+            ))}
+            <label>Zoom <input min="60" max="120" type="range" value={pipelineZoom} onChange={(event) => setPipelineZoom(Number(event.target.value))} /></label>
+            <span>{pipelineSaveState}</span>
           </div>
           <section className="natural-pipeline-builder">
             <div>
@@ -6711,6 +6835,7 @@ function ModuleWorkspacePage({
             <div className="pipeline-canvas-wrap">
               <div
                 className="pipeline-canvas"
+                style={{ transform: `scale(${pipelineZoom / 100})`, transformOrigin: 'top left' }}
                 onDragOver={(event) => event.preventDefault()}
                 onDrop={(event) => {
                   event.preventDefault();
@@ -6784,6 +6909,41 @@ function ModuleWorkspacePage({
                   </span>
                 </div>
               )}
+              {selectedPipelineBlock && /TRANSFORM|MeLai|VALIDATE|DESTINATION/i.test(selectedPipelineBlock.type) && (
+                <div className="source-specific-config">
+                  <strong>{selectedPipelineBlock.type} experience</strong>
+                  {/TRANSFORM/i.test(selectedPipelineBlock.type) && (
+                    <>
+                      <select><option>{pipelineSourceCount > 1 ? 'Join / merge sources' : selectedPipelineBlock.label}</option><option>Preview before/after</option><option>Generate SQL logic</option></select>
+                      <input placeholder="Join keys / pivot rows / normalize rules" />
+                      <button type="button" onClick={() => setFullPreviewOpen(true)}>Open before/after preview</button>
+                    </>
+                  )}
+                  {/MeLai/i.test(selectedPipelineBlock.type) && (
+                    <>
+                      <input placeholder="Recommendation goal" defaultValue="Explain anomalies and suggest mappings" />
+                      <button type="button" onClick={() => buildAiPipelinePlan(aiCopilotPrompt)}>Generate recommendations</button>
+                    </>
+                  )}
+                  {/VALIDATE/i.test(selectedPipelineBlock.type) && (
+                    <>
+                      <select><option>Required fields</option><option>Datatype issues</option><option>Schema drift</option><option>Duplicate rows</option></select>
+                      <button type="button" onClick={() => setFullPreviewOpen(true)}>Fix validation issues</button>
+                    </>
+                  )}
+                  {/DESTINATION/i.test(selectedPipelineBlock.type) && (
+                    <>
+                      <select><option>Workspace dataset</option><option>SQL Server</option><option>Snowflake</option><option>SharePoint</option><option>CSV / Excel</option></select>
+                      <input placeholder="Output name / path / partition" />
+                      <select><option>Overwrite</option><option>Append</option><option>Version checkpoint</option></select>
+                    </>
+                  )}
+                  <div className="execution-transparency">
+                    <span>Generated logic</span>
+                    <code>{selectedPipelineBlock.label.toLowerCase().replace(/\s+/g, '_')} -- rows: {primaryPreviewDataset?.rows ?? 0}, columns: {primaryPreviewDataset?.columns ?? 0}</code>
+                  </div>
+                </div>
+              )}
               <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.map((block) => block.id === selectedPipelineBlock.id ? { ...block, status: 'failed' } : block))}>Mark failed</button>
               <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.filter((block) => block.id !== selectedPipelineBlock.id))}>Remove block</button>
             </aside>
@@ -6791,6 +6951,48 @@ function ModuleWorkspacePage({
           <div className="pipeline-template-row">
             {pipelineTemplates.map((template) => <button key={template} type="button" onClick={() => applyPipelineTemplate(template)}>{template}</button>)}
           </div>
+          <div className="pipeline-transparency-grid">
+            <article>
+              <p className="eyebrow">Generated query</p>
+              <code>{`SELECT ${datasetHeaders(primaryPreviewDataset).slice(0, 5).join(', ') || '*'} FROM ${primaryPreviewDataset?.fileName ?? 'selected_source'}`}</code>
+            </article>
+            <article>
+              <p className="eyebrow">Execution metrics</p>
+              <strong>{displayNumber(primaryPreviewDataset?.rows ?? 0)} rows</strong>
+              <span>{displayNumber(primaryPreviewDataset?.columns ?? 0)} columns | {pipelineExecutionLogs.length} logs</span>
+            </article>
+            <article>
+              <p className="eyebrow">Adaptive logic</p>
+              <strong>{pipelineSourceCount > 1 ? 'Multi-source joins enabled' : 'Single-source pipeline'}</strong>
+              <span>{pipelineSourceCount > 1 ? 'Join and merge tools are available.' : 'Join/merge appears after adding a second source.'}</span>
+            </article>
+            <article>
+              <p className="eyebrow">Destination</p>
+              <strong>Configurable output</strong>
+              <span>Server, workspace, cloud target, format, partitioning, and schedule.</span>
+            </article>
+          </div>
+          {pipelineStudioMode !== 'develop' && (
+            <div className="pipeline-transparency-panel">
+              <div>
+                <p className="eyebrow">{pipelineStudioMode} workspace</p>
+                <h3>{pipelineStudioMode === 'preview' ? 'Full data preview' : pipelineStudioMode === 'execute' ? 'Execution transparency' : 'Pipeline monitoring'}</h3>
+                <span>See generated logic, row counts, affected columns, execution time, runtime logs, and replay history.</span>
+              </div>
+              <div className="dataset-detail-grid compact">
+                <div><span>Rows</span><strong>{displayNumber(primaryPreviewDataset?.rows ?? 0)}</strong></div>
+                <div><span>Columns</span><strong>{displayNumber(primaryPreviewDataset?.columns ?? 0)}</strong></div>
+                <div><span>Sources</span><strong>{pipelineSourceCount}</strong></div>
+                <div><span>Runtime</span><strong>{pipelineExecutionLogs.length * 240}ms</strong></div>
+              </div>
+              <pre>{`SELECT ${datasetHeaders(primaryPreviewDataset).slice(0, 4).join(', ') || '*'}\nFROM ${primaryPreviewDataset?.fileName ?? 'selected_source'}\n-- MeLai generated logic: validate, transform, publish`}</pre>
+              <div className="inline-actions">
+                <button type="button" onClick={() => setFullPreviewOpen(true)} disabled={!primaryPreviewDataset}>Open full preview</button>
+                <button type="button" onClick={runPipelineNow}>Execute</button>
+                <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `replay-${Date.now()}`, message: 'Execution replay opened with stage-by-stage row counts and logs.', status: 'completed', timestamp: new Date().toISOString() }, ...current])}>Replay</button>
+              </div>
+            </div>
+          )}
         </article>
       )}
       {isDataProcessingWorkspace && dataHubTab === 'transformations' && (
@@ -6801,6 +7003,7 @@ function ModuleWorkspacePage({
               <h2>Low-code transformation studio</h2>
               <span>Preview before save, compare before/after, and publish as new, merged, appended, replaced, or reusable datasets.</span>
             </div>
+            <button type="button" onClick={() => setFullPreviewOpen(true)} disabled={!primaryPreviewDataset}>Open full page preview</button>
           </div>
           <div className="transformation-command-grid">
             {pipelineBlockCatalog.TRANSFORM.map((operation) => (
@@ -6930,6 +7133,8 @@ function ModuleWorkspacePage({
               <option value="archived">Archived</option>
             </select>
             <button type="button" onClick={() => setCompactDatasetMode((value) => !value)}>{compactDatasetMode ? 'Detailed mode' : 'Compact mode'}</button>
+            <button type="button" onClick={mergeDuplicateDatasets}>Merge duplicates</button>
+            <button type="button" onClick={() => setFullPreviewOpen(true)} disabled={!primaryPreviewDataset}>Full preview</button>
             <button type="button" onClick={() => setAllDatasetsExpanded(true)}>Expand all</button>
             <button type="button" onClick={() => { setAllDatasetsExpanded(false); setExpandedDatasetId(''); }}>Collapse all</button>
           </div>
@@ -7080,6 +7285,7 @@ function ModuleWorkspacePage({
                         </div>
                       )}
                     </div>
+                    <button className="ghost-button compact" type="button" onClick={() => setSelectedDatasetDrawerId(dataset.id)}>Detail drawer</button>
                     <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset, mode: 'history' })}>Version history</button>
                   </div>
                 </div>
