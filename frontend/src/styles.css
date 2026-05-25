@@ -4718,7 +4718,7 @@ th {
 }
 
 .data-hub-dataset-controls {
-  grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.35fr) repeat(3, max-content);
+  grid-template-columns: minmax(220px, 1fr) minmax(140px, 0.35fr) repeat(3, max-content);
   align-items: center;
 }
 
@@ -4756,6 +4756,40 @@ th {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.connector-accordion {
+  display: grid;
+  gap: 8px;
+}
+
+.connector-accordion section {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  overflow: hidden;
+}
+
+.connector-category-toggle {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  min-height: 42px;
+  border: 0;
+  background: transparent;
+  color: var(--heading);
+  padding: 9px 12px;
+  font-weight: 900;
+}
+
+.connector-category-toggle span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.compact-connectors {
+  padding: 10px;
 }
 
 .data-hub-command-center,
@@ -4853,9 +4887,9 @@ th {
 
 .pipeline-builder-layout {
   display: grid;
-  grid-template-columns: 210px minmax(360px, 1fr) 210px;
+  grid-template-columns: 156px minmax(620px, 1fr) 190px;
   gap: 10px;
-  min-height: 430px;
+  min-height: 500px;
 }
 
 .pipeline-block-palette,
@@ -4876,15 +4910,24 @@ th {
   overflow: auto;
 }
 
-.pipeline-block-palette section {
+.pipeline-block-palette details {
   display: grid;
   gap: 5px;
+}
+
+.pipeline-block-palette summary {
+  cursor: pointer;
+  color: var(--heading);
+  font-size: 12px;
+  font-weight: 950;
+  list-style: none;
 }
 
 .pipeline-block-palette button {
   text-align: left;
   font-size: 12px;
-  min-height: 30px;
+  min-height: 28px;
+  padding-inline: 7px;
 }
 
 .pipeline-canvas-wrap {
@@ -4900,8 +4943,8 @@ th {
 
 .pipeline-canvas {
   position: relative;
-  min-width: 1180px;
-  min-height: 420px;
+  min-width: 1240px;
+  min-height: 490px;
 }
 
 .pipeline-canvas-lines {
@@ -5050,13 +5093,55 @@ th {
 }
 
 .lineage-map div:not(:last-child)::after {
-  content: "→";
+  content: "->";
   position: absolute;
   right: -13px;
   top: 50%;
   transform: translateY(-50%);
   color: var(--accent);
   font-weight: 950;
+}
+
+.source-specific-config {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 8px;
+}
+
+.source-specific-config input {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+.data-hub-dataset-explorer .dataset-table-head {
+  display: none;
+}
+
+.data-hub-dataset-explorer .enterprise-dataset-list {
+  gap: 6px;
+}
+
+.data-hub-dataset-explorer .enterprise-dataset-row {
+  border-radius: 10px;
+}
+
+.data-hub-dataset-explorer .dataset-row-summary {
+  grid-template-columns: minmax(220px, 1.4fr) 130px 110px 120px minmax(150px, 0.8fr);
+  min-height: 46px;
+  padding: 8px 10px;
+}
+
+.data-hub-dataset-explorer .dataset-row-details {
+  padding: 10px;
 }
 
 .execution-log-list {
@@ -5113,7 +5198,7 @@ th {
   }
 
   .lineage-map div:not(:last-child)::after {
-    content: "↓";
+    content: "v";
     right: 50%;
     top: auto;
     bottom: -17px;

@@ -1213,6 +1213,7 @@ export function App() {
       setAuthMessage('Welcome back.');
       setStatus('Live');
       setCurrentView('dashboard');
+      navigate('/');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Authentication failed.';
       console.error('[Metenova Auth] Authentication request failed', {
@@ -5443,7 +5444,7 @@ function ModuleWorkspacePage({
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
   const [allDatasetsExpanded, setAllDatasetsExpanded] = useState(false);
   const [dataHubDatasetSearch, setDataHubDatasetSearch] = useState('');
-  const [dataHubDatasetGroup, setDataHubDatasetGroup] = useState('all');
+  const [dataHubDatasetStatus, setDataHubDatasetStatus] = useState('all');
   const [compactDatasetMode, setCompactDatasetMode] = useState(true);
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
   const [updateMode, setUpdateMode] = useState('new_dataset');
@@ -5464,7 +5465,7 @@ function ModuleWorkspacePage({
     { id: 'source-1', type: 'SOURCE', label: 'CSV Upload', status: 'ready', x: 8, y: 44 },
     { id: 'transform-1', type: 'TRANSFORM', label: 'Normalize columns', status: 'ready', x: 250, y: 44 },
     { id: 'validate-1', type: 'VALIDATE', label: 'Schema validation', status: 'ready', x: 492, y: 44 },
-    { id: 'ai-1', type: 'AI PROCESS', label: 'AI anomaly detection', status: 'ready', x: 734, y: 44 },
+    { id: 'melai-1', type: 'Powered by MeLai', label: 'MeLai anomaly detection', status: 'ready', x: 734, y: 44 },
     { id: 'destination-1', type: 'DESTINATION', label: 'Save Dataset', status: 'ready', x: 976, y: 44 }
   ]);
   const [selectedPipelineBlockId, setSelectedPipelineBlockId] = useState('source-1');
@@ -5474,7 +5475,7 @@ function ModuleWorkspacePage({
   const [savedPipelineVersion, setSavedPipelineVersion] = useState(1);
   const [aiCopilotPrompt, setAiCopilotPrompt] = useState('Clean this payroll file and merge with employee records.');
   const [aiCopilotPlan, setAiCopilotPlan] = useState<string[]>([
-    'Upload or select a dataset to generate an AI plan.',
+    'Upload or select a dataset to generate a MeLai plan.',
     'The copilot will detect type, map columns, validate quality, and build a pipeline graph.'
   ]);
   const [naturalPipelinePrompt, setNaturalPipelinePrompt] = useState('Take SharePoint payroll files daily, clean duplicates, and export to SQL Server.');
@@ -5485,6 +5486,7 @@ function ModuleWorkspacePage({
     { id: 'rule-payroll-schema', trigger: 'Payroll schema drift detected', action: 'Create approval and suggest column mapping', enabled: true },
     { id: 'rule-failed-sync', trigger: 'Connector sync fails twice', action: 'Retry and escalate to workspace owner', enabled: false }
   ]);
+  const [expandedConnectorCategory, setExpandedConnectorCategory] = useState('Databases');
   const moduleDatasets = useMemo(() => {
     const moduleLabel = moduleLabelForRoute(route.module);
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
@@ -5492,14 +5494,20 @@ function ModuleWorkspacePage({
     merged.forEach((dataset) => {
       const belongsToModule = isDataProcessingWorkspace ? isEnterpriseHubDataset(dataset) : classifyDatasetModule(dataset) === moduleLabel;
       const isStagedHidden = stagedDataset?.id === dataset.id && !['save', 'workspace'].includes(ingestionStep);
-      if (dataset?.id && belongsToModule && !isStagedHidden && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
-        unique.set(dataset.id, dataset);
+      if (dataset?.id && belongsToModule && !isStagedHidden && (!selectedCompanyId || dataset.companyId === selectedCompanyId)) {
+        const canonicalKey = isDataProcessingWorkspace
+          ? `${dataset.companyId}|${String(dataset.fileName ?? dataset.name ?? '').toLowerCase().replace(/\s+/g, ' ').trim()}|${datasetHeaders(dataset).join('|').toLowerCase()}`
+          : dataset.id;
+        const current = unique.get(canonicalKey);
+        if (!current || new Date(dataset.uploadedAt).getTime() > new Date(current.uploadedAt).getTime()) {
+          unique.set(canonicalKey, dataset);
+        }
       }
     });
     return [...unique.values()].sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
   }, [ingestionStep, isDataProcessingWorkspace, route.module, safeDatasets, selectedCompanyId, stagedDataset?.id, workspaceDatasets]);
   const visibleModuleDatasets = moduleDatasets
-    .filter((dataset) => dataHubDatasetGroup === 'all' || classifyDatasetModule(dataset) === dataHubDatasetGroup)
+    .filter((dataset) => dataHubDatasetStatus === 'all' || String(dataset.cleanupStatus ?? dataset.status ?? dataset.pipelineStatus ?? '').toLowerCase().includes(dataHubDatasetStatus))
     .filter((dataset) => !dataHubDatasetSearch.trim() || [
       dataset.fileName,
       dataset.ownerEmail,
@@ -5982,13 +5990,18 @@ function ModuleWorkspacePage({
     ['connectors', 'Connectors'],
     ['pipelines', 'Pipelines'],
     ['transformations', 'Transformations'],
-    ['ai', 'AI Studio'],
-    ['monitoring', 'Monitoring']
+    ['ai', 'MeLai Studio'],
+    ['monitoring', 'MeLai Monitoring']
   ] as const;
+  const connectorCategories = [
+    { name: 'Databases', sources: ['SQL Server', 'PostgreSQL', 'MySQL', 'Snowflake', 'Oracle'] },
+    { name: 'Cloud Storage', sources: ['SharePoint', 'OneDrive', 'Google Sheets', 'SFTP', 'AWS S3', 'Azure Blob'] },
+    { name: 'Business Systems', sources: ['Salesforce', 'HubSpot', 'QuickBooks', 'REST API'] }
+  ];
   const pipelineBlockCatalog = {
     SOURCE: ['CSV Upload', 'Excel Upload', 'SQL Server', 'PostgreSQL', 'MySQL', 'Snowflake', 'Oracle', 'SharePoint', 'OneDrive', 'REST API', 'SFTP', 'AWS S3', 'Azure Blob', 'Salesforce', 'QuickBooks', 'HubSpot', 'Google Sheets'],
     TRANSFORM: ['Pivot', 'Unpivot', 'Transpose', 'Merge', 'Append', 'Join', 'Split Columns', 'Rename Columns', 'Normalize', 'Aggregate', 'Group By', 'Filter Rows', 'Remove Nulls', 'Formula Builder', 'AI Mapping'],
-    AI: ['Duplicate Detection', 'Anomaly Detection', 'Smart Categorization', 'Column Matching', 'AI Recommendations', 'Data Quality AI', 'Predictive Insights'],
+    MELAI: ['Duplicate Detection', 'Anomaly Detection', 'Smart Categorization', 'Column Matching', 'MeLai Recommendations', 'Data Quality Intelligence', 'Predictive Insights'],
     VALIDATION: ['Schema Validation', 'Required Fields', 'Data Type Validation', 'Duplicate Validation', 'Business Rules'],
     DESTINATION: ['Save Dataset', 'Export CSV', 'Export Excel', 'SQL Server Destination', 'Snowflake Destination', 'REST API Push', 'SharePoint Export', 'Email Report', 'Dashboard Sync']
   };
@@ -5999,7 +6012,7 @@ function ModuleWorkspacePage({
   function addPipelineBlock(type: string, label: string) {
     const block = {
       id: `${type.toLowerCase()}-${Date.now()}`,
-      type: type === 'AI' ? 'AI PROCESS' : type,
+      type: type === 'MELAI' ? 'Powered by MeLai' : type,
       label,
       status: 'ready',
       x: 40 + (pipelineBlocks.length % 5) * 210,
@@ -6019,7 +6032,7 @@ function ModuleWorkspacePage({
     setPipelineBlocks((current) => current.map((block, index) => ({ ...block, status: index === current.length - 1 ? 'running' : 'completed' })));
     setPipelineExecutionLogs((current) => [
       { id: `run-${runId}`, message: `Run now started across ${pipelineBlocks.length} blocks. ${moduleDatasets.length} enterprise datasets available for output.`, status: 'running', timestamp: new Date().toISOString() },
-      { id: `rows-${runId}`, message: `${moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0).toLocaleString()} rows scanned for validation, AI quality, and destination sync.`, status: 'completed', timestamp: new Date().toISOString() },
+      { id: `rows-${runId}`, message: `${moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0).toLocaleString()} rows scanned for validation, MeLai quality, and destination sync.`, status: 'completed', timestamp: new Date().toISOString() },
       ...current
     ]);
     setWorkflowMessage('Pipeline execution started. Stage monitoring, logs, row counts, and retry actions are available in the Pipelines and Monitoring tabs.');
@@ -6045,7 +6058,7 @@ function ModuleWorkspacePage({
           : ['SharePoint', 'Remove Nulls', 'Data Quality AI', 'Schema Validation', 'Save Dataset'];
     setPipelineBlocks(templateBlocks.map((label, index) => ({
       id: `template-${index}-${Date.now()}`,
-      type: index === 0 ? 'SOURCE' : index === 1 ? 'TRANSFORM' : index === 2 ? 'AI PROCESS' : index === 3 ? 'VALIDATE' : 'DESTINATION',
+      type: index === 0 ? 'SOURCE' : index === 1 ? 'TRANSFORM' : index === 2 ? 'Powered by MeLai' : index === 3 ? 'VALIDATE' : 'DESTINATION',
       label,
       status: 'ready',
       x: 8 + index * 220,
@@ -6063,7 +6076,7 @@ function ModuleWorkspacePage({
     if (command.includes('transform')) setDataHubTab('transformations');
     if (command.includes('ai') || command.includes('copilot')) setDataHubTab('ai');
     if (command.includes('failed') || command.includes('monitor')) setDataHubTab('monitoring');
-    setPipelineExecutionLogs((current) => [{ id: `command-${Date.now()}`, message: `Metenova AI command processed: "${dataHubCommand || 'open data hub'}".`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+    setPipelineExecutionLogs((current) => [{ id: `command-${Date.now()}`, message: `MeLai command processed: "${dataHubCommand || 'open data hub'}".`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
   }
 
   function buildAiPipelinePlan(prompt: string) {
@@ -6073,13 +6086,13 @@ function ModuleWorkspacePage({
     const plan = [
       `Detected ${detectedType}.`,
       `Suggested merge target: ${mergeTarget}.`,
-      'Map columns with AI column matching before merge.',
+      'Map columns with MeLai column matching before merge.',
       'Run duplicate detection and schema validation.',
       'Normalize values, remove nulls, and flag invalid types.',
       'Publish as governed dataset with lineage and approval history.'
     ];
     setAiCopilotPlan(plan);
-    setWorkflowMessage(`AI Copilot created a workflow plan for: ${prompt}`);
+    setWorkflowMessage(`MeLai Copilot created a workflow plan for: ${prompt}`);
     return plan;
   }
 
@@ -6087,9 +6100,9 @@ function ModuleWorkspacePage({
     const plan = buildAiPipelinePlan(aiCopilotPrompt);
     const generatedBlocks = [
       ['SOURCE', /sharepoint/i.test(aiCopilotPrompt) ? 'SharePoint' : /sql/i.test(aiCopilotPrompt) ? 'SQL Server' : 'Excel Upload'],
-      ['TRANSFORM', plan.some((item) => /normalize/i.test(item)) ? 'Normalize' : 'AI Mapping'],
+      ['TRANSFORM', plan.some((item) => /normalize/i.test(item)) ? 'Normalize' : 'MeLai Mapping'],
       ['VALIDATE', 'Required Fields'],
-      ['AI PROCESS', /duplicate/i.test(aiCopilotPrompt) ? 'Duplicate Detection' : 'Data Quality AI'],
+      ['Powered by MeLai', /duplicate/i.test(aiCopilotPrompt) ? 'Duplicate Detection' : 'MeLai Data Quality'],
       ['DESTINATION', /snowflake/i.test(aiCopilotPrompt) ? 'Snowflake Destination' : /sql server/i.test(aiCopilotPrompt) ? 'SQL Server Destination' : 'Save Dataset']
     ];
     setPipelineBlocks(generatedBlocks.map(([type, label], index) => ({
@@ -6101,7 +6114,7 @@ function ModuleWorkspacePage({
       y: 44
     })));
     setDataHubTab('pipelines');
-    setPipelineExecutionLogs((current) => [{ id: `ai-plan-log-${Date.now()}`, message: 'AI plan applied: visual pipeline generated with mapping, validation, AI quality, and destination stages.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
+    setPipelineExecutionLogs((current) => [{ id: `ai-plan-log-${Date.now()}`, message: 'MeLai plan applied: visual pipeline generated with mapping, validation, quality, and destination stages.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
   }
 
   function generatePipelineFromNaturalLanguage() {
@@ -6114,7 +6127,7 @@ function ModuleWorkspacePage({
       { id: `nl-source-${Date.now()}`, type: 'SOURCE', label: source, status: 'ready', x: 8, y: 44 },
       { id: `nl-transform-${Date.now()}`, type: 'TRANSFORM', label: prompt.includes('duplicate') ? 'Remove duplicates' : 'Normalize', status: 'ready', x: 230, y: 44 },
       { id: `nl-validate-${Date.now()}`, type: 'VALIDATE', label: 'Schema Validation', status: 'ready', x: 452, y: 44 },
-      { id: `nl-ai-${Date.now()}`, type: 'AI PROCESS', label: 'AI Recommendations', status: 'ready', x: 674, y: 44 },
+      { id: `nl-melai-${Date.now()}`, type: 'Powered by MeLai', label: 'MeLai Recommendations', status: 'ready', x: 674, y: 44 },
       { id: `nl-destination-${Date.now()}`, type: 'DESTINATION', label: destination, status: 'ready', x: 896, y: 44 }
     ]);
     setPipelineExecutionLogs((current) => [{ id: `nl-${Date.now()}`, message: `Natural language pipeline generated with ${cadence} schedule: ${naturalPipelinePrompt}`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
@@ -6161,9 +6174,9 @@ function ModuleWorkspacePage({
   }
 
   function applySuggestedRepair() {
-    setPipelineBlocks((current) => current.map((block) => block.status === 'failed' ? { ...block, status: 'running', label: `${block.label} + AI repair` } : block));
-    setPipelineExecutionLogs((current) => [{ id: `repair-${Date.now()}`, message: 'AI repair applied: schema drift cast, missing column fallback, and retry queued.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
-    setWorkflowMessage('AI repair applied. Pipeline retry is running with the suggested schema fix.');
+    setPipelineBlocks((current) => current.map((block) => block.status === 'failed' ? { ...block, status: 'running', label: `${block.label} + MeLai repair` } : block));
+    setPipelineExecutionLogs((current) => [{ id: `repair-${Date.now()}`, message: 'MeLai repair applied: schema drift cast, missing column fallback, and retry queued.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
+    setWorkflowMessage('MeLai repair applied. Pipeline retry is running with the suggested schema fix.');
   }
 
   function chooseProcessingAction(action: string) {
@@ -6321,11 +6334,11 @@ function ModuleWorkspacePage({
           <div className="data-hub-command-row">
             <div>
               <p className="eyebrow">Enterprise Data Hub</p>
-              <h2>AI operations and pipeline engine</h2>
+              <h2>MeLai Command Center</h2>
               <span>Ingest, orchestrate, transform, validate, monitor, and publish reusable enterprise datasets.</span>
             </div>
             <div className="data-hub-command-bar">
-              <input placeholder="Ask Metenova AI: run pipeline, search datasets, show failed jobs..." value={dataHubCommand} onChange={(event) => setDataHubCommand(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && runDataHubCommand()} />
+              <input placeholder="Ask MeLai: run pipeline, search datasets, show failed jobs..." value={dataHubCommand} onChange={(event) => setDataHubCommand(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && runDataHubCommand()} />
               <button type="button" onClick={runDataHubCommand}>Run command</button>
               <button className="ghost-button compact" type="button" onClick={startVoiceAssistant}>Voice</button>
             </div>
@@ -6340,7 +6353,7 @@ function ModuleWorkspacePage({
           <div className="operation-command-strip">
             <div><span>Pipeline health</span><strong>{pipelineHealth}</strong></div>
             <div><span>Running jobs</span><strong>{pipelineExecutionLogs.filter((log) => log.status === 'running').length}</strong></div>
-            <div><span>AI alerts</span><strong>{aiCopilotPlan.filter((item) => /missing|duplicate|drift|invalid/i.test(item)).length}</strong></div>
+            <div><span>MeLai alerts</span><strong>{aiCopilotPlan.filter((item) => /missing|duplicate|drift|invalid/i.test(item)).length}</strong></div>
             <div><span>Marketplace</span><strong>{marketplacePublished.length}</strong></div>
             <div><span>Automation</span><strong>{automationRules.filter((rule) => rule.enabled).length} active</strong></div>
           </div>
@@ -6623,22 +6636,33 @@ function ModuleWorkspacePage({
             </div>
             <button type="button" onClick={() => setDataHubTab('datasets')}>Start ingestion flow</button>
           </div>
-          <div className="connector-card-grid">
-            {connectorSources.filter((source) => source !== 'Local CSV/XLSX Upload').map((connector, index) => (
-              <article key={connector}>
-                <div>
-                  <span className="dataset-type-icon">{connector.slice(0, 2).toUpperCase()}</span>
-                  <strong>{connector}</strong>
-                  <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Needs credentials' : 'Ready to sync'} | schedule {sourceConfig.schedule}</small>
-                </div>
-                <div className="connector-card-actions">
-                  <button type="button" onClick={() => { configureDataSource(connector); setDataHubTab('datasets'); }}>Configure</button>
-                  <button type="button" onClick={() => testDataSourceConnection(connector)}>Test</button>
-                  <button type="button" onClick={() => discoverDataSourceSchema(connector)}>Discover</button>
-                  <button type="button" onClick={() => { importFromConfiguredSource(connector); setDataHubTab('datasets'); }}>Import</button>
-                  <button type="button" onClick={() => setConnectorMessage(`${connector} scheduled for ${sourceConfig.schedule}. Incremental refresh and sync history are enabled.`)}>Schedule</button>
-                </div>
-              </article>
+          <div className="connector-accordion">
+            {connectorCategories.map((category) => (
+              <section className={expandedConnectorCategory === category.name ? 'open' : ''} key={category.name}>
+                <button className="connector-category-toggle" type="button" onClick={() => setExpandedConnectorCategory(expandedConnectorCategory === category.name ? '' : category.name)}>
+                  <strong>{category.name}</strong>
+                  <span>{category.sources.length} connectors</span>
+                </button>
+                {expandedConnectorCategory === category.name && (
+                  <div className="connector-card-grid compact-connectors">
+                    {category.sources.map((connector, index) => (
+                      <article key={connector}>
+                        <div>
+                          <span className="dataset-type-icon">{connector.slice(0, 2).toUpperCase()}</span>
+                          <strong>{connector}</strong>
+                          <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Needs credentials' : 'Ready to sync'} | {sourceConfig.schedule}</small>
+                        </div>
+                        <div className="connector-card-actions">
+                          <button type="button" onClick={() => { configureDataSource(connector); setDataHubTab('datasets'); }}>Configure</button>
+                          <button type="button" onClick={() => testDataSourceConnection(connector)}>Test</button>
+                          <button type="button" onClick={() => discoverDataSourceSchema(connector)}>Schema</button>
+                          <button type="button" onClick={() => { importFromConfiguredSource(connector); setDataHubTab('datasets'); }}>Import</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
             ))}
           </div>
           <p className="persistence-note">{connectorMessage}</p>
@@ -6648,11 +6672,14 @@ function ModuleWorkspacePage({
         <article className="panel data-hub-workspace-panel pipeline-builder-shell">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Data Pipeline Builder</p>
-              <h2>Visual operational pipeline canvas</h2>
-              <span>Connect source, transform, validate, AI process, and destination blocks into reusable workspace pipelines.</span>
+              <p className="eyebrow">MeLai Pipeline Builder</p>
+              <h2>Pipeline Development Workspace</h2>
+              <span>Build orchestration, transformations, automation, destinations, and schedules separate from ingestion.</span>
             </div>
             <div className="inline-actions">
+              <button type="button" onClick={() => { setPipelineBlocks([]); setPipelineExecutionLogs((current) => [{ id: `create-${Date.now()}`, message: 'New pipeline draft created.', status: 'ready', timestamp: new Date().toISOString() }, ...current]); }}>Create Pipeline</button>
+              <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `develop-${Date.now()}`, message: 'Development mode opened with canvas editing, templates, logs, and schedule controls.', status: 'ready', timestamp: new Date().toISOString() }, ...current])}>Develop Pipeline</button>
+              <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `open-${Date.now()}`, message: `Opened pipeline version ${savedPipelineVersion} with ${pipelineBlocks.length} stages.`, status: 'completed', timestamp: new Date().toISOString() }, ...current])}>Open Existing</button>
               <button type="button" onClick={runPipelineNow}>Run now</button>
               <button type="button" onClick={savePipelineVersion}>Save version</button>
               <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `schedule-${Date.now()}`, message: 'Pipeline scheduled for hourly, daily, weekly, monthly, or triggered runs.', status: 'ready', timestamp: new Date().toISOString() }, ...current])}>Schedule</button>
@@ -6662,7 +6689,7 @@ function ModuleWorkspacePage({
           <section className="natural-pipeline-builder">
             <div>
               <p className="eyebrow">Natural language builder</p>
-              <strong>Describe the pipeline and Metenova AI will generate the graph.</strong>
+              <strong>Describe the pipeline and MeLai will generate the graph.</strong>
               <span>Example: Take SharePoint payroll files daily, clean duplicates, and export to SQL Server.</span>
             </div>
             <input value={naturalPipelinePrompt} onChange={(event) => setNaturalPipelinePrompt(event.target.value)} />
@@ -6671,14 +6698,14 @@ function ModuleWorkspacePage({
           <div className="pipeline-builder-layout">
             <aside className="pipeline-block-palette">
               {Object.entries(pipelineBlockCatalog).map(([type, labels]) => (
-                <section key={type}>
-                  <strong>{type}</strong>
+                <details key={type} open={type === 'SOURCE'}>
+                  <summary>{type}</summary>
                   {labels.slice(0, 8).map((label) => (
                     <button draggable key={`${type}-${label}`} type="button" onClick={() => addPipelineBlock(type, label)} onDragStart={(event) => event.dataTransfer.setData('text/plain', `${type}|${label}`)}>
                       {label}
                     </button>
                   ))}
-                </section>
+                </details>
               ))}
             </aside>
             <div className="pipeline-canvas-wrap">
@@ -6718,6 +6745,45 @@ function ModuleWorkspacePage({
               <p className="eyebrow">Selected block</p>
               <h3>{selectedPipelineBlock?.label ?? 'No block selected'}</h3>
               <span>{selectedPipelineBlock?.type ?? 'Choose a block'} | version {savedPipelineVersion}</span>
+              {selectedPipelineBlock?.type === 'SOURCE' && (
+                <div className="source-specific-config">
+                  <strong>Connection experience</strong>
+                  {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label) ? (
+                    <>
+                      <input placeholder="Server / warehouse" />
+                      <input placeholder="Database / schema" />
+                      <input placeholder="Port / role / encryption" />
+                    </>
+                  ) : /SharePoint|OneDrive|S3|Azure/i.test(selectedPipelineBlock.label) ? (
+                    <>
+                      <input placeholder="Site URL / bucket / folder" />
+                      <input placeholder="Authentication profile" />
+                      <input placeholder="Sync schedule" />
+                    </>
+                  ) : /REST API/i.test(selectedPipelineBlock.label) ? (
+                    <>
+                      <input placeholder="Endpoint" />
+                      <input placeholder="Headers / token" />
+                      <input placeholder="Pagination method" />
+                    </>
+                  ) : (
+                    <>
+                      <input placeholder="File or source profile" />
+                      <input placeholder="Worksheet / table preview" />
+                    </>
+                  )}
+                  <button type="button" onClick={() => testDataSourceConnection(selectedPipelineBlock.label)}>Test connection</button>
+                  <span>
+                    Recommended transformations: {/Excel|CSV/i.test(selectedPipelineBlock.label)
+                      ? 'sheet mapping, transpose, pivot, cleanup'
+                      : /Salesforce|HubSpot|CRM/i.test(selectedPipelineBlock.label)
+                        ? 'deduplication, lead normalization, contact matching'
+                        : /QuickBooks|Invoice|Finance/i.test(selectedPipelineBlock.label)
+                          ? 'reconciliation, invoice grouping, currency normalization'
+                          : 'schema validation, type conversion, MeLai recommendations'}
+                  </span>
+                </div>
+              )}
               <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.map((block) => block.id === selectedPipelineBlock.id ? { ...block, status: 'failed' } : block))}>Mark failed</button>
               <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.filter((block) => block.id !== selectedPipelineBlock.id))}>Remove block</button>
             </aside>
@@ -6750,8 +6816,8 @@ function ModuleWorkspacePage({
         <article className="panel data-hub-workspace-panel ai-studio-panel">
           <div className="panel-header">
             <div>
-              <p className="eyebrow">Metenova AI Copilot</p>
-              <h2>AI-powered data operations studio</h2>
+              <p className="eyebrow">MeLai Copilot</p>
+              <h2>MeLai Studio</h2>
               <span>Foundation for voice and natural-language commands like run payroll sync, merge CRM duplicates, or show failed jobs.</span>
             </div>
             <button type="button" onClick={startVoiceAssistant}>Talk to Metenova AI</button>
@@ -6759,13 +6825,13 @@ function ModuleWorkspacePage({
           <section className="ai-copilot-planner">
             <div>
               <p className="eyebrow">Signature feature</p>
-              <h3>ChatGPT + enterprise data engineering</h3>
+              <h3>MeLai + enterprise data engineering</h3>
               <span>Type a business request and the copilot detects type, maps columns, suggests merge keys, builds a pipeline, and recommends validations.</span>
             </div>
             <textarea value={aiCopilotPrompt} onChange={(event) => setAiCopilotPrompt(event.target.value)} />
             <div className="inline-actions">
-              <button type="button" onClick={() => buildAiPipelinePlan(aiCopilotPrompt)}>Generate AI plan</button>
-              <button type="button" onClick={applyAiPlan}>Apply AI Plan</button>
+              <button type="button" onClick={() => buildAiPipelinePlan(aiCopilotPrompt)}>Generate MeLai plan</button>
+              <button type="button" onClick={applyAiPlan}>Apply MeLai Plan</button>
             </div>
             <div className="ai-plan-list">
               {aiCopilotPlan.map((step) => <span key={step}>{step}</span>)}
@@ -6820,13 +6886,13 @@ function ModuleWorkspacePage({
           <div className="auto-repair-panel">
             <div>
               <p className="eyebrow">Auto pipeline repair</p>
-              <h3>AI diagnosis</h3>
+              <h3>MeLai diagnosis</h3>
               <span>Detected schema drift in EmployeeID column. Suggested automatic cast to string and retry of failed validation stages.</span>
             </div>
             <button type="button" onClick={applySuggestedRepair}>Apply Suggested Fix</button>
           </div>
           <div className="lineage-map">
-            {['Source system', 'Validation', 'AI cleanup', 'Governed dataset', 'Workspace dashboard', 'Executive KPI'].map((node, index) => (
+            {['Source system', 'Validation', 'MeLai cleanup', 'Governed dataset', 'Workspace dashboard', 'Executive KPI'].map((node, index) => (
               <div key={node}>
                 <strong>{node}</strong>
                 <span>{index === 0 ? dataSourceType || 'Excel Upload' : index === 3 ? moduleDatasets[0]?.fileName ?? 'Reusable Dataset' : 'tracked'}</span>
@@ -6844,24 +6910,24 @@ function ModuleWorkspacePage({
           </div>
         </article>
       )}
-      {route.module !== 'hr' && (!isDataProcessingWorkspace || dataHubTab === 'datasets') && <article className="panel">
+      {route.module !== 'hr' && (!isDataProcessingWorkspace || dataHubTab === 'datasets') && <article className="panel data-hub-dataset-explorer">
         <div className="panel-header">
           <div>
-            <p className="eyebrow">Single dataset workspace</p>
+            <p className="eyebrow">Enterprise dataset explorer</p>
             <h2>Enterprise Data Hub Datasets</h2>
           </div>
           <span className="dataset-count">{moduleDatasets.length.toLocaleString()} active</span>
         </div>
         {isDataProcessingWorkspace && (
           <div className="data-hub-dataset-controls">
-            <input placeholder="Search datasets, columns, owners, AI status..." value={dataHubDatasetSearch} onChange={(event) => setDataHubDatasetSearch(event.target.value)} />
-            <select value={dataHubDatasetGroup} onChange={(event) => setDataHubDatasetGroup(event.target.value)}>
-              <option value="all">All workspaces</option>
-              <option value="HR">HR</option>
-              <option value="Finance">Finance</option>
-              <option value="Engineering">Engineering</option>
-              <option value="CRM">CRM</option>
-              <option value="Enterprise Data Hub">Data Hub</option>
+            <input placeholder="Search datasets, columns, owners, MeLai status..." value={dataHubDatasetSearch} onChange={(event) => setDataHubDatasetSearch(event.target.value)} />
+            <select value={dataHubDatasetStatus} onChange={(event) => setDataHubDatasetStatus(event.target.value)}>
+              <option value="all">All statuses</option>
+              <option value="uploaded">Uploaded</option>
+              <option value="published">Published</option>
+              <option value="completed">Completed</option>
+              <option value="approval">Needs approval</option>
+              <option value="archived">Archived</option>
             </select>
             <button type="button" onClick={() => setCompactDatasetMode((value) => !value)}>{compactDatasetMode ? 'Detailed mode' : 'Compact mode'}</button>
             <button type="button" onClick={() => setAllDatasetsExpanded(true)}>Expand all</button>
@@ -6976,7 +7042,7 @@ function ModuleWorkspacePage({
                             ['transform', 'Transform'],
                             ['normalize', 'Normalize'],
                             ...(!dataset.originalDatasetId ? [['clean', 'Clean']] : []),
-                            ['ai', 'AI Insights'],
+                            ['ai', 'MeLai Insights'],
                             ['pipeline', 'Pipeline'],
                             ['activity', 'Activity'],
                             ['lineage', 'Lineage'],
