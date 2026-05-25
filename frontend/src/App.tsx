@@ -5472,6 +5472,19 @@ function ModuleWorkspacePage({
     { id: 'log-1', message: 'Pipeline builder ready. Add blocks, connect stages, then run now or schedule.', status: 'ready', timestamp: new Date().toISOString() }
   ]);
   const [savedPipelineVersion, setSavedPipelineVersion] = useState(1);
+  const [aiCopilotPrompt, setAiCopilotPrompt] = useState('Clean this payroll file and merge with employee records.');
+  const [aiCopilotPlan, setAiCopilotPlan] = useState<string[]>([
+    'Upload or select a dataset to generate an AI plan.',
+    'The copilot will detect type, map columns, validate quality, and build a pipeline graph.'
+  ]);
+  const [naturalPipelinePrompt, setNaturalPipelinePrompt] = useState('Take SharePoint payroll files daily, clean duplicates, and export to SQL Server.');
+  const [voiceStatus, setVoiceStatus] = useState('Voice assistant ready.');
+  const [marketplacePublished, setMarketplacePublished] = useState<string[]>([]);
+  const [automationRules, setAutomationRules] = useState([
+    { id: 'rule-duplicate-invoices', trigger: 'Duplicate invoices detected', action: 'Pause export and notify finance manager', enabled: true },
+    { id: 'rule-payroll-schema', trigger: 'Payroll schema drift detected', action: 'Create approval and suggest column mapping', enabled: true },
+    { id: 'rule-failed-sync', trigger: 'Connector sync fails twice', action: 'Retry and escalate to workspace owner', enabled: false }
+  ]);
   const moduleDatasets = useMemo(() => {
     const moduleLabel = moduleLabelForRoute(route.module);
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
@@ -6053,6 +6066,106 @@ function ModuleWorkspacePage({
     setPipelineExecutionLogs((current) => [{ id: `command-${Date.now()}`, message: `Metenova AI command processed: "${dataHubCommand || 'open data hub'}".`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
   }
 
+  function buildAiPipelinePlan(prompt: string) {
+    const lowerPrompt = prompt.toLowerCase();
+    const detectedType = /payroll/.test(lowerPrompt) ? 'Payroll dataset' : /crm|lead|customer/.test(lowerPrompt) ? 'CRM dataset' : /invoice|finance/.test(lowerPrompt) ? 'Finance dataset' : 'Operational dataset';
+    const mergeTarget = /employee/.test(lowerPrompt) || /payroll/.test(lowerPrompt) ? 'Employee Records Dataset' : moduleDatasets[0]?.fileName ?? 'Reusable enterprise dataset';
+    const plan = [
+      `Detected ${detectedType}.`,
+      `Suggested merge target: ${mergeTarget}.`,
+      'Map columns with AI column matching before merge.',
+      'Run duplicate detection and schema validation.',
+      'Normalize values, remove nulls, and flag invalid types.',
+      'Publish as governed dataset with lineage and approval history.'
+    ];
+    setAiCopilotPlan(plan);
+    setWorkflowMessage(`AI Copilot created a workflow plan for: ${prompt}`);
+    return plan;
+  }
+
+  function applyAiPlan() {
+    const plan = buildAiPipelinePlan(aiCopilotPrompt);
+    const generatedBlocks = [
+      ['SOURCE', /sharepoint/i.test(aiCopilotPrompt) ? 'SharePoint' : /sql/i.test(aiCopilotPrompt) ? 'SQL Server' : 'Excel Upload'],
+      ['TRANSFORM', plan.some((item) => /normalize/i.test(item)) ? 'Normalize' : 'AI Mapping'],
+      ['VALIDATE', 'Required Fields'],
+      ['AI PROCESS', /duplicate/i.test(aiCopilotPrompt) ? 'Duplicate Detection' : 'Data Quality AI'],
+      ['DESTINATION', /snowflake/i.test(aiCopilotPrompt) ? 'Snowflake Destination' : /sql server/i.test(aiCopilotPrompt) ? 'SQL Server Destination' : 'Save Dataset']
+    ];
+    setPipelineBlocks(generatedBlocks.map(([type, label], index) => ({
+      id: `ai-plan-${index}-${Date.now()}`,
+      type,
+      label,
+      status: index === 0 ? 'running' : 'ready',
+      x: 8 + index * 220,
+      y: 44
+    })));
+    setDataHubTab('pipelines');
+    setPipelineExecutionLogs((current) => [{ id: `ai-plan-log-${Date.now()}`, message: 'AI plan applied: visual pipeline generated with mapping, validation, AI quality, and destination stages.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function generatePipelineFromNaturalLanguage() {
+    const prompt = naturalPipelinePrompt.toLowerCase();
+    const source = prompt.includes('sharepoint') ? 'SharePoint' : prompt.includes('s3') ? 'AWS S3' : prompt.includes('api') ? 'REST API' : prompt.includes('sql') ? 'SQL Server' : 'Excel Upload';
+    const destination = prompt.includes('snowflake') ? 'Snowflake Destination' : prompt.includes('sql server') ? 'SQL Server Destination' : prompt.includes('dashboard') ? 'Dashboard Sync' : 'Save Dataset';
+    const cadence = prompt.includes('daily') ? 'Daily' : prompt.includes('hour') ? 'Hourly' : prompt.includes('weekly') ? 'Weekly' : 'Manual sync';
+    setSourceConfig((current) => ({ ...current, schedule: cadence }));
+    setPipelineBlocks([
+      { id: `nl-source-${Date.now()}`, type: 'SOURCE', label: source, status: 'ready', x: 8, y: 44 },
+      { id: `nl-transform-${Date.now()}`, type: 'TRANSFORM', label: prompt.includes('duplicate') ? 'Remove duplicates' : 'Normalize', status: 'ready', x: 230, y: 44 },
+      { id: `nl-validate-${Date.now()}`, type: 'VALIDATE', label: 'Schema Validation', status: 'ready', x: 452, y: 44 },
+      { id: `nl-ai-${Date.now()}`, type: 'AI PROCESS', label: 'AI Recommendations', status: 'ready', x: 674, y: 44 },
+      { id: `nl-destination-${Date.now()}`, type: 'DESTINATION', label: destination, status: 'ready', x: 896, y: 44 }
+    ]);
+    setPipelineExecutionLogs((current) => [{ id: `nl-${Date.now()}`, message: `Natural language pipeline generated with ${cadence} schedule: ${naturalPipelinePrompt}`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function startVoiceAssistant() {
+    const speechApi = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+    if (!speechApi) {
+      setVoiceStatus('Voice recognition is not available in this browser yet. Command text mode is ready.');
+      setDataHubCommand('show failed jobs');
+      setDataHubTab('monitoring');
+      return;
+    }
+    const recognition = new speechApi();
+    recognition.lang = 'en-US';
+    recognition.onresult = (event: any) => {
+      const transcript = String(event.results?.[0]?.[0]?.transcript ?? '');
+      setVoiceStatus(`Voice command captured: ${transcript}`);
+      setDataHubCommand(transcript);
+    };
+    recognition.onerror = () => setVoiceStatus('Voice command could not be captured. Text command mode remains available.');
+    recognition.start();
+    setVoiceStatus('Listening for an enterprise operation command...');
+  }
+
+  function getSmartProfile(dataset: Dataset | null | undefined) {
+    const rows = datasetPreview(dataset);
+    const headers = datasetHeaders(dataset);
+    const totalCells = Math.max(rows.length * Math.max(headers.length, 1), 1);
+    const nullCells = rows.reduce((sum, row) => sum + headers.filter((header) => !String(row?.[header] ?? '').trim()).length, 0);
+    const duplicates = findDuplicateRows(rows).reduce((sum, item) => sum + item.count, 0);
+    return {
+      missingPct: Math.round((nullCells / totalCells) * 100),
+      duplicatePct: rows.length ? Math.round((duplicates / rows.length) * 100) : 0,
+      schemaDrift: uploadAnalysis?.missingColumns.length ?? 0,
+      anomalyScore: Math.min(99, validationWarningCount(dataset as Dataset) * 12 + duplicates),
+      sensitiveColumns: headers.filter((header) => /ssn|tax|salary|email|phone|dob/i.test(header)).length
+    };
+  }
+
+  function publishMarketplaceDataset(dataset: Dataset) {
+    setMarketplacePublished((current) => current.includes(dataset.id) ? current : [dataset.id, ...current]);
+    setWorkflowMessage(`${dataset.fileName} published as a governed marketplace dataset with lineage, certification, and workspace sharing controls.`);
+  }
+
+  function applySuggestedRepair() {
+    setPipelineBlocks((current) => current.map((block) => block.status === 'failed' ? { ...block, status: 'running', label: `${block.label} + AI repair` } : block));
+    setPipelineExecutionLogs((current) => [{ id: `repair-${Date.now()}`, message: 'AI repair applied: schema drift cast, missing column fallback, and retry queued.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
+    setWorkflowMessage('AI repair applied. Pipeline retry is running with the suggested schema fix.');
+  }
+
   function chooseProcessingAction(action: string) {
     if (!stagedDataset) {
       setWorkflowMessage('Upload or import a dataset before choosing a processing action.');
@@ -6103,6 +6216,13 @@ function ModuleWorkspacePage({
     if (action === 'activity') {
       setPreviewState({ dataset, mode: 'history' });
       setWorkflowMessage(`${dataset.fileName} activity opened: uploads, transforms, approvals, exports, and sync history are available in History.`);
+    }
+    if (action === 'lineage') {
+      setDataHubTab('monitoring');
+      setWorkflowMessage(`${dataset.fileName} lineage opened: source system, transformations, approvals, exports, and dashboard consumption are linked in Monitoring.`);
+    }
+    if (action === 'marketplace') {
+      publishMarketplaceDataset(dataset);
     }
     if (action === 'deleteRows') {
       setPreviewState({ dataset, mode: 'edit' });
@@ -6207,6 +6327,7 @@ function ModuleWorkspacePage({
             <div className="data-hub-command-bar">
               <input placeholder="Ask Metenova AI: run pipeline, search datasets, show failed jobs..." value={dataHubCommand} onChange={(event) => setDataHubCommand(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && runDataHubCommand()} />
               <button type="button" onClick={runDataHubCommand}>Run command</button>
+              <button className="ghost-button compact" type="button" onClick={startVoiceAssistant}>Voice</button>
             </div>
           </div>
           <div className="data-hub-subnav" role="tablist" aria-label="Enterprise Data Hub navigation">
@@ -6216,6 +6337,14 @@ function ModuleWorkspacePage({
               </button>
             ))}
           </div>
+          <div className="operation-command-strip">
+            <div><span>Pipeline health</span><strong>{pipelineHealth}</strong></div>
+            <div><span>Running jobs</span><strong>{pipelineExecutionLogs.filter((log) => log.status === 'running').length}</strong></div>
+            <div><span>AI alerts</span><strong>{aiCopilotPlan.filter((item) => /missing|duplicate|drift|invalid/i.test(item)).length}</strong></div>
+            <div><span>Marketplace</span><strong>{marketplacePublished.length}</strong></div>
+            <div><span>Automation</span><strong>{automationRules.filter((rule) => rule.enabled).length} active</strong></div>
+          </div>
+          <p className="persistence-note">{voiceStatus}</p>
         </article>
       )}
       {isDataProcessingWorkspace && dataHubTab === 'datasets' ? <article className="panel module-upload-panel">
@@ -6530,6 +6659,15 @@ function ModuleWorkspacePage({
               <button className="ghost-button compact" type="button" onClick={retryFailedPipelineStage}>Retry failed</button>
             </div>
           </div>
+          <section className="natural-pipeline-builder">
+            <div>
+              <p className="eyebrow">Natural language builder</p>
+              <strong>Describe the pipeline and Metenova AI will generate the graph.</strong>
+              <span>Example: Take SharePoint payroll files daily, clean duplicates, and export to SQL Server.</span>
+            </div>
+            <input value={naturalPipelinePrompt} onChange={(event) => setNaturalPipelinePrompt(event.target.value)} />
+            <button type="button" onClick={generatePipelineFromNaturalLanguage}>Generate pipeline</button>
+          </section>
           <div className="pipeline-builder-layout">
             <aside className="pipeline-block-palette">
               {Object.entries(pipelineBlockCatalog).map(([type, labels]) => (
@@ -6616,8 +6754,23 @@ function ModuleWorkspacePage({
               <h2>AI-powered data operations studio</h2>
               <span>Foundation for voice and natural-language commands like run payroll sync, merge CRM duplicates, or show failed jobs.</span>
             </div>
-            <button type="button" onClick={() => setDataHubCommand('show failed jobs')}>Try command</button>
+            <button type="button" onClick={startVoiceAssistant}>Talk to Metenova AI</button>
           </div>
+          <section className="ai-copilot-planner">
+            <div>
+              <p className="eyebrow">Signature feature</p>
+              <h3>ChatGPT + enterprise data engineering</h3>
+              <span>Type a business request and the copilot detects type, maps columns, suggests merge keys, builds a pipeline, and recommends validations.</span>
+            </div>
+            <textarea value={aiCopilotPrompt} onChange={(event) => setAiCopilotPrompt(event.target.value)} />
+            <div className="inline-actions">
+              <button type="button" onClick={() => buildAiPipelinePlan(aiCopilotPrompt)}>Generate AI plan</button>
+              <button type="button" onClick={applyAiPlan}>Apply AI Plan</button>
+            </div>
+            <div className="ai-plan-list">
+              {aiCopilotPlan.map((step) => <span key={step}>{step}</span>)}
+            </div>
+          </section>
           <div className="ai-suggestion-grid">
             {['Detected payroll dataset', 'Suggested merge target', 'Possible duplicate employee IDs', 'Recommended transformation', 'Detected schema drift', 'Detected invalid columns'].map((suggestion, index) => (
               <article key={suggestion}>
@@ -6626,6 +6779,25 @@ function ModuleWorkspacePage({
                 <button type="button" onClick={() => setWorkflowMessage(`${suggestion}: recommendation accepted and added to the active pipeline plan.`)}>Apply suggestion</button>
               </article>
             ))}
+          </div>
+          <div className="marketplace-automation-grid">
+            <article>
+              <h3>Enterprise data marketplace</h3>
+              <span>{marketplacePublished.length} certified reusable datasets published for governed workspace sharing.</span>
+              {moduleDatasets.slice(0, 4).map((dataset) => (
+                <button key={dataset.id} type="button" onClick={() => publishMarketplaceDataset(dataset)}>
+                  {marketplacePublished.includes(dataset.id) ? 'Certified' : 'Publish'} {dataset.fileName}
+                </button>
+              ))}
+            </article>
+            <article>
+              <h3>Smart workflow automation</h3>
+              {automationRules.map((rule) => (
+                <button key={rule.id} type="button" onClick={() => setAutomationRules((current) => current.map((entry) => entry.id === rule.id ? { ...entry, enabled: !entry.enabled } : entry))}>
+                  {rule.enabled ? 'On' : 'Off'} | IF {rule.trigger} THEN {rule.action}
+                </button>
+              ))}
+            </article>
           </div>
         </article>
       )}
@@ -6644,6 +6816,22 @@ function ModuleWorkspacePage({
             <div><span>Failed jobs</span><strong>{pipelineExecutionLogs.filter((log) => log.status === 'failed').length}</strong></div>
             <div><span>Data volume</span><strong>{displayNumber(moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0))}</strong></div>
             <div><span>Retry counts</span><strong>{pipelineExecutionLogs.filter((log) => /retry/i.test(log.message)).length}</strong></div>
+          </div>
+          <div className="auto-repair-panel">
+            <div>
+              <p className="eyebrow">Auto pipeline repair</p>
+              <h3>AI diagnosis</h3>
+              <span>Detected schema drift in EmployeeID column. Suggested automatic cast to string and retry of failed validation stages.</span>
+            </div>
+            <button type="button" onClick={applySuggestedRepair}>Apply Suggested Fix</button>
+          </div>
+          <div className="lineage-map">
+            {['Source system', 'Validation', 'AI cleanup', 'Governed dataset', 'Workspace dashboard', 'Executive KPI'].map((node, index) => (
+              <div key={node}>
+                <strong>{node}</strong>
+                <span>{index === 0 ? dataSourceType || 'Excel Upload' : index === 3 ? moduleDatasets[0]?.fileName ?? 'Reusable Dataset' : 'tracked'}</span>
+              </div>
+            ))}
           </div>
           <div className="execution-log-list">
             {pipelineExecutionLogs.map((log) => (
@@ -6732,6 +6920,18 @@ function ModuleWorkspacePage({
                       <strong>{dataset.cleanupMetrics?.anomaliesDetected ?? validationWarningCount(dataset)}</strong>
                     </div>
                   </div>
+                  {(() => {
+                    const profile = getSmartProfile(dataset);
+                    return (
+                      <div className="smart-profile-grid">
+                        <div><span>Missing %</span><strong>{profile.missingPct}%</strong></div>
+                        <div><span>Duplicate %</span><strong>{profile.duplicatePct}%</strong></div>
+                        <div><span>Schema drift</span><strong>{profile.schemaDrift}</strong></div>
+                        <div><span>Anomaly score</span><strong>{profile.anomalyScore}</strong></div>
+                        <div><span>Sensitive columns</span><strong>{profile.sensitiveColumns}</strong></div>
+                      </div>
+                    );
+                  })()}
                   <EnterpriseReportPanel
                     dataset={dataset}
                     generating={generatingReportId === dataset.id}
@@ -6779,6 +6979,8 @@ function ModuleWorkspacePage({
                             ['ai', 'AI Insights'],
                             ['pipeline', 'Pipeline'],
                             ['activity', 'Activity'],
+                            ['lineage', 'Lineage'],
+                            ['marketplace', marketplacePublished.includes(dataset.id) ? 'Certified' : 'Publish Dataset'],
                             ['history', 'History'],
                             ['approve', 'Approve'],
                             ['export', 'Export'],

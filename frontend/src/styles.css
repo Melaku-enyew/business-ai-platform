@@ -4788,7 +4788,7 @@ th {
 
 .data-hub-command-bar {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) max-content;
+  grid-template-columns: minmax(180px, 1fr) max-content max-content;
   gap: 8px;
 }
 
@@ -4821,6 +4821,34 @@ th {
   border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
   background: var(--accent-wash);
   color: var(--accent-text);
+}
+
+.operation-command-strip,
+.smart-profile-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+}
+
+.operation-command-strip div,
+.smart-profile-grid div,
+.auto-repair-panel,
+.ai-copilot-planner,
+.marketplace-automation-grid article {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.operation-command-strip span,
+.smart-profile-grid span,
+.ai-plan-list span {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 850;
+  text-transform: uppercase;
 }
 
 .pipeline-builder-layout {
@@ -4888,6 +4916,13 @@ th {
   stroke: color-mix(in srgb, var(--accent) 56%, var(--line));
   stroke-width: 3;
   stroke-dasharray: 8 5;
+  animation: pipeline-flow 1.4s linear infinite;
+}
+
+@keyframes pipeline-flow {
+  to {
+    stroke-dashoffset: -26;
+  }
 }
 
 .pipeline-node {
@@ -4929,17 +4964,99 @@ th {
 
 .pipeline-template-row,
 .transformation-command-grid,
-.ai-suggestion-grid {
+.ai-suggestion-grid,
+.marketplace-automation-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
   gap: 8px;
 }
 
 .transformation-command-grid button,
-.ai-suggestion-grid article {
+.ai-suggestion-grid article,
+.marketplace-automation-grid article,
+.ai-copilot-planner {
   display: grid;
   gap: 6px;
   text-align: left;
+}
+
+.natural-pipeline-builder,
+.auto-repair-panel {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(220px, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.natural-pipeline-builder input,
+.ai-copilot-planner textarea {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 800;
+  padding: 8px 10px;
+}
+
+.ai-copilot-planner textarea {
+  min-height: 72px;
+  resize: vertical;
+}
+
+.ai-plan-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 7px;
+}
+
+.ai-plan-list span {
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  padding: 6px 9px;
+  text-transform: none;
+}
+
+.marketplace-automation-grid button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 850;
+  text-align: left;
+  padding: 7px 10px;
+}
+
+.lineage-map {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  gap: 8px;
+  align-items: stretch;
+}
+
+.lineage-map div {
+  position: relative;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.lineage-map div:not(:last-child)::after {
+  content: "→";
+  position: absolute;
+  right: -13px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--accent);
+  font-weight: 950;
 }
 
 .execution-log-list {
@@ -4984,8 +5101,23 @@ th {
 
 @media (max-width: 1100px) {
   .data-hub-command-row,
-  .pipeline-builder-layout {
+  .pipeline-builder-layout,
+  .natural-pipeline-builder,
+  .auto-repair-panel,
+  .lineage-map {
     grid-template-columns: 1fr;
+  }
+
+  .data-hub-command-bar {
+    grid-template-columns: 1fr;
+  }
+
+  .lineage-map div:not(:last-child)::after {
+    content: "↓";
+    right: 50%;
+    top: auto;
+    bottom: -17px;
+    transform: translateX(50%);
   }
 
   .pipeline-block-palette {
