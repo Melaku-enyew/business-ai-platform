@@ -4758,6 +4758,242 @@ th {
   gap: 6px;
 }
 
+.data-hub-command-center,
+.data-hub-workspace-panel {
+  display: grid;
+  gap: 12px;
+}
+
+.data-hub-command-row {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(280px, 1fr);
+  gap: 12px;
+  align-items: end;
+}
+
+.data-hub-command-row h2,
+.data-hub-workspace-panel h2,
+.pipeline-detail-panel h3 {
+  color: var(--heading);
+  margin: 0;
+}
+
+.data-hub-command-row span,
+.data-hub-workspace-panel span,
+.pipeline-detail-panel span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.data-hub-command-bar {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) max-content;
+  gap: 8px;
+}
+
+.data-hub-command-bar input,
+.data-hub-command-bar button,
+.data-hub-subnav button,
+.pipeline-template-row button,
+.pipeline-block-palette button,
+.pipeline-detail-panel button,
+.transformation-command-grid button,
+.ai-suggestion-grid button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 850;
+  padding: 7px 10px;
+}
+
+.data-hub-subnav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.data-hub-subnav button.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.pipeline-builder-layout {
+  display: grid;
+  grid-template-columns: 210px minmax(360px, 1fr) 210px;
+  gap: 10px;
+  min-height: 430px;
+}
+
+.pipeline-block-palette,
+.pipeline-detail-panel,
+.execution-log-list,
+.ai-suggestion-grid article {
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.pipeline-block-palette {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  max-height: 430px;
+  overflow: auto;
+}
+
+.pipeline-block-palette section {
+  display: grid;
+  gap: 5px;
+}
+
+.pipeline-block-palette button {
+  text-align: left;
+  font-size: 12px;
+  min-height: 30px;
+}
+
+.pipeline-canvas-wrap {
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background:
+    linear-gradient(var(--line) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line) 1px, transparent 1px),
+    var(--panel);
+  background-size: 32px 32px;
+}
+
+.pipeline-canvas {
+  position: relative;
+  min-width: 1180px;
+  min-height: 420px;
+}
+
+.pipeline-canvas-lines {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.pipeline-canvas-lines line {
+  stroke: color-mix(in srgb, var(--accent) 56%, var(--line));
+  stroke-width: 3;
+  stroke-dasharray: 8 5;
+}
+
+.pipeline-node {
+  position: absolute;
+  width: 160px;
+  min-height: 74px;
+  display: grid;
+  gap: 3px;
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow-soft);
+  cursor: grab;
+}
+
+.pipeline-node.selected {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--line));
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.pipeline-node.completed {
+  border-color: color-mix(in srgb, var(--success) 50%, var(--line));
+}
+
+.pipeline-node.failed {
+  border-color: color-mix(in srgb, var(--danger) 60%, var(--line));
+}
+
+.pipeline-node.running {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--line));
+}
+
+.pipeline-detail-panel {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+}
+
+.pipeline-template-row,
+.transformation-command-grid,
+.ai-suggestion-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+
+.transformation-command-grid button,
+.ai-suggestion-grid article {
+  display: grid;
+  gap: 6px;
+  text-align: left;
+}
+
+.execution-log-list {
+  display: grid;
+  gap: 7px;
+  max-height: 260px;
+  overflow: auto;
+}
+
+.execution-log-list > div {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr) max-content;
+  gap: 8px;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 7px;
+}
+
+.status-pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 3px 7px;
+  font-size: 11px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.status-pill.completed,
+.dataset-count.healthy {
+  color: var(--success);
+}
+
+.status-pill.running,
+.dataset-count.running {
+  color: var(--warning);
+}
+
+.status-pill.failed,
+.dataset-count.warning {
+  color: var(--danger);
+}
+
+@media (max-width: 1100px) {
+  .data-hub-command-row,
+  .pipeline-builder-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .pipeline-block-palette {
+    grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+    max-height: none;
+  }
+}
+
 .enterprise-dataset-row.compact-row .dataset-row-summary {
   padding-top: 9px;
   padding-bottom: 9px;

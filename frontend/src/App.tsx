@@ -5458,6 +5458,20 @@ function ModuleWorkspacePage({
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
   const [openActionDatasetId, setOpenActionDatasetId] = useState('');
+  const [dataHubTab, setDataHubTab] = useState<'datasets' | 'connectors' | 'pipelines' | 'transformations' | 'ai' | 'monitoring'>('datasets');
+  const [dataHubCommand, setDataHubCommand] = useState('');
+  const [pipelineBlocks, setPipelineBlocks] = useState([
+    { id: 'source-1', type: 'SOURCE', label: 'CSV Upload', status: 'ready', x: 8, y: 44 },
+    { id: 'transform-1', type: 'TRANSFORM', label: 'Normalize columns', status: 'ready', x: 250, y: 44 },
+    { id: 'validate-1', type: 'VALIDATE', label: 'Schema validation', status: 'ready', x: 492, y: 44 },
+    { id: 'ai-1', type: 'AI PROCESS', label: 'AI anomaly detection', status: 'ready', x: 734, y: 44 },
+    { id: 'destination-1', type: 'DESTINATION', label: 'Save Dataset', status: 'ready', x: 976, y: 44 }
+  ]);
+  const [selectedPipelineBlockId, setSelectedPipelineBlockId] = useState('source-1');
+  const [pipelineExecutionLogs, setPipelineExecutionLogs] = useState([
+    { id: 'log-1', message: 'Pipeline builder ready. Add blocks, connect stages, then run now or schedule.', status: 'ready', timestamp: new Date().toISOString() }
+  ]);
+  const [savedPipelineVersion, setSavedPipelineVersion] = useState(1);
   const moduleDatasets = useMemo(() => {
     const moduleLabel = moduleLabelForRoute(route.module);
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
@@ -5677,22 +5691,26 @@ function ModuleWorkspacePage({
     setIngestionStep('source');
   }
 
-  function testDataSourceConnection() {
-    if (!dataSourceType) {
+  function testDataSourceConnection(sourceOverride = '') {
+    const source = sourceOverride || dataSourceType;
+    if (!source) {
       setWorkflowMessage('Choose a data source before testing a connection.');
       return;
     }
-    setConnectorMessage(`${dataSourceType} connection test completed for ${selectedCompanyName}.`);
-    setWorkflowMessage(`${dataSourceType} connection is healthy. Continue to upload, discover, or import.`);
+    setDataSourceType(source);
+    setConnectorMessage(`${source} connection test completed for ${selectedCompanyName}.`);
+    setWorkflowMessage(`${source} connection is healthy. Continue to upload, discover, or import.`);
   }
 
-  function discoverDataSourceSchema() {
-    if (!dataSourceType) {
+  function discoverDataSourceSchema(sourceOverride = '') {
+    const source = sourceOverride || dataSourceType;
+    if (!source) {
       setWorkflowMessage('Choose a data source before discovering schema.');
       return;
     }
-    setConnectorMessage(`${dataSourceType} schema discovery completed. Tables, sheets, folders, or endpoints are ready for preview.`);
-    setWorkflowMessage(`${dataSourceType} schema discovered. You can import a preview into the governed pipeline.`);
+    setDataSourceType(source);
+    setConnectorMessage(`${source} schema discovery completed. Tables, sheets, folders, or endpoints are ready for preview.`);
+    setWorkflowMessage(`${source} schema discovered. You can import a preview into the governed pipeline.`);
   }
 
   function continueFromSource() {
@@ -5708,20 +5726,22 @@ function ModuleWorkspacePage({
     importFromConfiguredSource();
   }
 
-  function importFromConfiguredSource() {
-    if (!dataSourceType) {
+  function importFromConfiguredSource(sourceOverride = '') {
+    const source = sourceOverride || dataSourceType;
+    if (!source) {
       setWorkflowMessage('Choose and configure a source before importing.');
       return;
     }
+    setDataSourceType(source);
     const sourceRows = [
-      { sourceSystem: dataSourceType, recordId: 'SRC-001', status: 'ready', amount: '1250', updatedAt: new Date().toISOString().slice(0, 10) },
-      { sourceSystem: dataSourceType, recordId: 'SRC-002', status: 'review', amount: '980', updatedAt: new Date().toISOString().slice(0, 10) },
-      { sourceSystem: dataSourceType, recordId: 'SRC-003', status: 'ready', amount: '1430', updatedAt: new Date().toISOString().slice(0, 10) }
+      { sourceSystem: source, recordId: 'SRC-001', status: 'ready', amount: '1250', updatedAt: new Date().toISOString().slice(0, 10) },
+      { sourceSystem: source, recordId: 'SRC-002', status: 'review', amount: '980', updatedAt: new Date().toISOString().slice(0, 10) },
+      { sourceSystem: source, recordId: 'SRC-003', status: 'ready', amount: '1430', updatedAt: new Date().toISOString().slice(0, 10) }
     ];
     const imported = normalizeDatasetForClient({
       id: `connector-staged-${Date.now()}`,
       companyId: selectedCompanyId,
-      fileName: `${dataSourceType} Imported Dataset`,
+      fileName: `${source} Imported Dataset`,
       fileType: 'connector',
       uploadedAt: new Date().toISOString(),
       rows: sourceRows.length,
@@ -5735,7 +5755,7 @@ function ModuleWorkspacePage({
       status: 'staged',
       ownerName: 'Enterprise Data Hub',
       ownerEmail: user?.email,
-      insights: [`${dataSourceType} import is staged for processing.`],
+      insights: [`${source} import is staged for processing.`],
       chart: [],
       numericSummary: []
     } as Dataset);
@@ -5744,7 +5764,7 @@ function ModuleWorkspacePage({
     setUploadAnalysis(analyzeUploadedDataset(imported, route.module));
     setWorkflowStage(workflowStages[0] ?? 'Upload');
     setIngestionStep('analyze');
-    setWorkflowMessage(`${dataSourceType} import staged. Analyze the dataset before choosing a processing action.`);
+    setWorkflowMessage(`${source} import staged. Analyze the dataset before choosing a processing action.`);
   }
 
   async function cleanDatasetFromModule(dataset: Dataset) {
@@ -5944,6 +5964,94 @@ function ModuleWorkspacePage({
     .filter((record) => !selectedCompanyId || record.companyId === selectedCompanyId)
     .filter((record) => filter === 'all' || record.status === filter)
     .filter((record) => !search.trim() || [record.title, record.status].some((value) => value.toLowerCase().includes(search.toLowerCase())));
+  const dataHubTabs = [
+    ['datasets', 'Datasets'],
+    ['connectors', 'Connectors'],
+    ['pipelines', 'Pipelines'],
+    ['transformations', 'Transformations'],
+    ['ai', 'AI Studio'],
+    ['monitoring', 'Monitoring']
+  ] as const;
+  const pipelineBlockCatalog = {
+    SOURCE: ['CSV Upload', 'Excel Upload', 'SQL Server', 'PostgreSQL', 'MySQL', 'Snowflake', 'Oracle', 'SharePoint', 'OneDrive', 'REST API', 'SFTP', 'AWS S3', 'Azure Blob', 'Salesforce', 'QuickBooks', 'HubSpot', 'Google Sheets'],
+    TRANSFORM: ['Pivot', 'Unpivot', 'Transpose', 'Merge', 'Append', 'Join', 'Split Columns', 'Rename Columns', 'Normalize', 'Aggregate', 'Group By', 'Filter Rows', 'Remove Nulls', 'Formula Builder', 'AI Mapping'],
+    AI: ['Duplicate Detection', 'Anomaly Detection', 'Smart Categorization', 'Column Matching', 'AI Recommendations', 'Data Quality AI', 'Predictive Insights'],
+    VALIDATION: ['Schema Validation', 'Required Fields', 'Data Type Validation', 'Duplicate Validation', 'Business Rules'],
+    DESTINATION: ['Save Dataset', 'Export CSV', 'Export Excel', 'SQL Server Destination', 'Snowflake Destination', 'REST API Push', 'SharePoint Export', 'Email Report', 'Dashboard Sync']
+  };
+  const pipelineTemplates = ['Payroll import pipeline', 'CRM sync pipeline', 'Finance reconciliation pipeline', 'SharePoint sync pipeline', 'Excel cleanup pipeline', 'Data warehouse sync pipeline'];
+  const selectedPipelineBlock = pipelineBlocks.find((block) => block.id === selectedPipelineBlockId) ?? pipelineBlocks[0] ?? null;
+  const pipelineHealth = pipelineExecutionLogs.some((log) => log.status === 'failed') ? 'warning' : pipelineExecutionLogs.some((log) => log.status === 'running') ? 'running' : 'healthy';
+
+  function addPipelineBlock(type: string, label: string) {
+    const block = {
+      id: `${type.toLowerCase()}-${Date.now()}`,
+      type: type === 'AI' ? 'AI PROCESS' : type,
+      label,
+      status: 'ready',
+      x: 40 + (pipelineBlocks.length % 5) * 210,
+      y: 44 + Math.floor(pipelineBlocks.length / 5) * 130
+    };
+    setPipelineBlocks((current) => [...current, block]);
+    setSelectedPipelineBlockId(block.id);
+    setPipelineExecutionLogs((current) => [{ id: `log-${Date.now()}`, message: `${label} block added to the pipeline canvas.`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function movePipelineBlock(blockId: string, x: number, y: number) {
+    setPipelineBlocks((current) => current.map((block) => block.id === blockId ? { ...block, x: Math.max(0, x), y: Math.max(0, y) } : block));
+  }
+
+  function runPipelineNow() {
+    const runId = Date.now();
+    setPipelineBlocks((current) => current.map((block, index) => ({ ...block, status: index === current.length - 1 ? 'running' : 'completed' })));
+    setPipelineExecutionLogs((current) => [
+      { id: `run-${runId}`, message: `Run now started across ${pipelineBlocks.length} blocks. ${moduleDatasets.length} enterprise datasets available for output.`, status: 'running', timestamp: new Date().toISOString() },
+      { id: `rows-${runId}`, message: `${moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0).toLocaleString()} rows scanned for validation, AI quality, and destination sync.`, status: 'completed', timestamp: new Date().toISOString() },
+      ...current
+    ]);
+    setWorkflowMessage('Pipeline execution started. Stage monitoring, logs, row counts, and retry actions are available in the Pipelines and Monitoring tabs.');
+  }
+
+  function retryFailedPipelineStage() {
+    setPipelineBlocks((current) => current.map((block) => block.status === 'failed' ? { ...block, status: 'running' } : block));
+    setPipelineExecutionLogs((current) => [{ id: `retry-${Date.now()}`, message: 'Failed stages queued for retry with the current connector credentials and dataset snapshot.', status: 'running', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function savePipelineVersion() {
+    setSavedPipelineVersion((version) => version + 1);
+    setPipelineExecutionLogs((current) => [{ id: `version-${Date.now()}`, message: `Pipeline version ${savedPipelineVersion + 1} saved with ${pipelineBlocks.length} blocks and workspace-scoped permissions.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function applyPipelineTemplate(template: string) {
+    const templateBlocks = template.includes('Payroll')
+      ? ['Excel Upload', 'Normalize columns', 'Duplicate Detection', 'Required Fields', 'Dashboard Sync']
+      : template.includes('CRM')
+        ? ['Salesforce', 'Merge', 'Column Matching', 'Business Rules', 'Save Dataset']
+        : template.includes('Finance')
+          ? ['SQL Server', 'Join', 'Anomaly Detection', 'Required Fields', 'Export Excel']
+          : ['SharePoint', 'Remove Nulls', 'Data Quality AI', 'Schema Validation', 'Save Dataset'];
+    setPipelineBlocks(templateBlocks.map((label, index) => ({
+      id: `template-${index}-${Date.now()}`,
+      type: index === 0 ? 'SOURCE' : index === 1 ? 'TRANSFORM' : index === 2 ? 'AI PROCESS' : index === 3 ? 'VALIDATE' : 'DESTINATION',
+      label,
+      status: 'ready',
+      x: 8 + index * 220,
+      y: 44
+    })));
+    setSelectedPipelineBlockId('');
+    setPipelineExecutionLogs((current) => [{ id: `template-log-${Date.now()}`, message: `${template} loaded as a reusable enterprise pipeline template.`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function runDataHubCommand() {
+    const command = dataHubCommand.toLowerCase();
+    if (command.includes('pipeline')) setDataHubTab('pipelines');
+    if (command.includes('connector')) setDataHubTab('connectors');
+    if (command.includes('dataset') || command.includes('search')) setDataHubTab('datasets');
+    if (command.includes('transform')) setDataHubTab('transformations');
+    if (command.includes('ai') || command.includes('copilot')) setDataHubTab('ai');
+    if (command.includes('failed') || command.includes('monitor')) setDataHubTab('monitoring');
+    setPipelineExecutionLogs((current) => [{ id: `command-${Date.now()}`, message: `Metenova AI command processed: "${dataHubCommand || 'open data hub'}".`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
 
   function chooseProcessingAction(action: string) {
     if (!stagedDataset) {
@@ -6088,7 +6196,29 @@ function ModuleWorkspacePage({
           }}
         />
       )}
-      {isDataProcessingWorkspace ? <article className="panel module-upload-panel">
+      {isDataProcessingWorkspace && (
+        <article className="panel data-hub-command-center">
+          <div className="data-hub-command-row">
+            <div>
+              <p className="eyebrow">Enterprise Data Hub</p>
+              <h2>AI operations and pipeline engine</h2>
+              <span>Ingest, orchestrate, transform, validate, monitor, and publish reusable enterprise datasets.</span>
+            </div>
+            <div className="data-hub-command-bar">
+              <input placeholder="Ask Metenova AI: run pipeline, search datasets, show failed jobs..." value={dataHubCommand} onChange={(event) => setDataHubCommand(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && runDataHubCommand()} />
+              <button type="button" onClick={runDataHubCommand}>Run command</button>
+            </div>
+          </div>
+          <div className="data-hub-subnav" role="tablist" aria-label="Enterprise Data Hub navigation">
+            {dataHubTabs.map(([key, label]) => (
+              <button className={dataHubTab === key ? 'active' : ''} key={key} type="button" onClick={() => setDataHubTab(key)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        </article>
+      )}
+      {isDataProcessingWorkspace && dataHubTab === 'datasets' ? <article className="panel module-upload-panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">{route.moduleLabel} dataset workspace</p>
@@ -6354,7 +6484,179 @@ function ModuleWorkspacePage({
           </div>
         </article>
       ) : null}
-      {route.module !== 'hr' && (!isDataProcessingWorkspace || ingestionStep === 'workspace') && <article className="panel">
+      {isDataProcessingWorkspace && dataHubTab === 'connectors' && (
+        <article className="panel data-hub-workspace-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Connectors</p>
+              <h2>Cloud-native source and destination framework</h2>
+              <span>Reuse the same connector catalog for ingestion sources, pipeline destinations, schedules, and workspace sync.</span>
+            </div>
+            <button type="button" onClick={() => setDataHubTab('datasets')}>Start ingestion flow</button>
+          </div>
+          <div className="connector-card-grid">
+            {connectorSources.filter((source) => source !== 'Local CSV/XLSX Upload').map((connector, index) => (
+              <article key={connector}>
+                <div>
+                  <span className="dataset-type-icon">{connector.slice(0, 2).toUpperCase()}</span>
+                  <strong>{connector}</strong>
+                  <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Needs credentials' : 'Ready to sync'} | schedule {sourceConfig.schedule}</small>
+                </div>
+                <div className="connector-card-actions">
+                  <button type="button" onClick={() => { configureDataSource(connector); setDataHubTab('datasets'); }}>Configure</button>
+                  <button type="button" onClick={() => testDataSourceConnection(connector)}>Test</button>
+                  <button type="button" onClick={() => discoverDataSourceSchema(connector)}>Discover</button>
+                  <button type="button" onClick={() => { importFromConfiguredSource(connector); setDataHubTab('datasets'); }}>Import</button>
+                  <button type="button" onClick={() => setConnectorMessage(`${connector} scheduled for ${sourceConfig.schedule}. Incremental refresh and sync history are enabled.`)}>Schedule</button>
+                </div>
+              </article>
+            ))}
+          </div>
+          <p className="persistence-note">{connectorMessage}</p>
+        </article>
+      )}
+      {isDataProcessingWorkspace && dataHubTab === 'pipelines' && (
+        <article className="panel data-hub-workspace-panel pipeline-builder-shell">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Data Pipeline Builder</p>
+              <h2>Visual operational pipeline canvas</h2>
+              <span>Connect source, transform, validate, AI process, and destination blocks into reusable workspace pipelines.</span>
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={runPipelineNow}>Run now</button>
+              <button type="button" onClick={savePipelineVersion}>Save version</button>
+              <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `schedule-${Date.now()}`, message: 'Pipeline scheduled for hourly, daily, weekly, monthly, or triggered runs.', status: 'ready', timestamp: new Date().toISOString() }, ...current])}>Schedule</button>
+              <button className="ghost-button compact" type="button" onClick={retryFailedPipelineStage}>Retry failed</button>
+            </div>
+          </div>
+          <div className="pipeline-builder-layout">
+            <aside className="pipeline-block-palette">
+              {Object.entries(pipelineBlockCatalog).map(([type, labels]) => (
+                <section key={type}>
+                  <strong>{type}</strong>
+                  {labels.slice(0, 8).map((label) => (
+                    <button draggable key={`${type}-${label}`} type="button" onClick={() => addPipelineBlock(type, label)} onDragStart={(event) => event.dataTransfer.setData('text/plain', `${type}|${label}`)}>
+                      {label}
+                    </button>
+                  ))}
+                </section>
+              ))}
+            </aside>
+            <div className="pipeline-canvas-wrap">
+              <div
+                className="pipeline-canvas"
+                onDragOver={(event) => event.preventDefault()}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  const [type, label] = event.dataTransfer.getData('text/plain').split('|');
+                  if (type && label) addPipelineBlock(type, label);
+                }}
+              >
+                <svg className="pipeline-canvas-lines" aria-hidden="true">
+                  {pipelineBlocks.slice(0, -1).map((block, index) => {
+                    const next = pipelineBlocks[index + 1];
+                    return <line key={`${block.id}-${next.id}`} x1={block.x + 140} y1={block.y + 36} x2={next.x} y2={next.y + 36} />;
+                  })}
+                </svg>
+                {pipelineBlocks.map((block) => (
+                  <button
+                    className={`pipeline-node ${selectedPipelineBlockId === block.id ? 'selected' : ''} ${block.status}`}
+                    draggable
+                    key={block.id}
+                    style={{ left: block.x, top: block.y }}
+                    type="button"
+                    onClick={() => setSelectedPipelineBlockId(block.id)}
+                    onDragEnd={(event) => movePipelineBlock(block.id, event.currentTarget.offsetLeft + event.nativeEvent.offsetX - 70, event.currentTarget.offsetTop + event.nativeEvent.offsetY - 30)}
+                  >
+                    <small>{block.type}</small>
+                    <strong>{block.label}</strong>
+                    <span>{block.status}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <aside className="pipeline-detail-panel">
+              <p className="eyebrow">Selected block</p>
+              <h3>{selectedPipelineBlock?.label ?? 'No block selected'}</h3>
+              <span>{selectedPipelineBlock?.type ?? 'Choose a block'} | version {savedPipelineVersion}</span>
+              <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.map((block) => block.id === selectedPipelineBlock.id ? { ...block, status: 'failed' } : block))}>Mark failed</button>
+              <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.filter((block) => block.id !== selectedPipelineBlock.id))}>Remove block</button>
+            </aside>
+          </div>
+          <div className="pipeline-template-row">
+            {pipelineTemplates.map((template) => <button key={template} type="button" onClick={() => applyPipelineTemplate(template)}>{template}</button>)}
+          </div>
+        </article>
+      )}
+      {isDataProcessingWorkspace && dataHubTab === 'transformations' && (
+        <article className="panel data-hub-workspace-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Transformations</p>
+              <h2>Low-code transformation studio</h2>
+              <span>Preview before save, compare before/after, and publish as new, merged, appended, replaced, or reusable datasets.</span>
+            </div>
+          </div>
+          <div className="transformation-command-grid">
+            {pipelineBlockCatalog.TRANSFORM.map((operation) => (
+              <button key={operation} type="button" onClick={() => setWorkflowMessage(`${operation} staged. Preview output, estimate affected rows, then choose save as new, merge, append, or replace.`)}>
+                <strong>{operation}</strong>
+                <span>{displayNumber(moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0))} rows available</span>
+              </button>
+            ))}
+          </div>
+        </article>
+      )}
+      {isDataProcessingWorkspace && dataHubTab === 'ai' && (
+        <article className="panel data-hub-workspace-panel ai-studio-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Metenova AI Copilot</p>
+              <h2>AI-powered data operations studio</h2>
+              <span>Foundation for voice and natural-language commands like run payroll sync, merge CRM duplicates, or show failed jobs.</span>
+            </div>
+            <button type="button" onClick={() => setDataHubCommand('show failed jobs')}>Try command</button>
+          </div>
+          <div className="ai-suggestion-grid">
+            {['Detected payroll dataset', 'Suggested merge target', 'Possible duplicate employee IDs', 'Recommended transformation', 'Detected schema drift', 'Detected invalid columns'].map((suggestion, index) => (
+              <article key={suggestion}>
+                <strong>{suggestion}</strong>
+                <span>{index % 2 === 0 ? 'High confidence operational recommendation.' : 'Review suggested mapping before execution.'}</span>
+                <button type="button" onClick={() => setWorkflowMessage(`${suggestion}: recommendation accepted and added to the active pipeline plan.`)}>Apply suggestion</button>
+              </article>
+            ))}
+          </div>
+        </article>
+      )}
+      {isDataProcessingWorkspace && dataHubTab === 'monitoring' && (
+        <article className="panel data-hub-workspace-panel">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Monitoring</p>
+              <h2>Pipeline and connector observability</h2>
+              <span>Track running jobs, failed jobs, throughput, sync health, retries, row volume, and execution timelines.</span>
+            </div>
+            <span className={`dataset-count ${pipelineHealth}`}>{pipelineHealth}</span>
+          </div>
+          <div className="dataset-detail-grid">
+            <div><span>Running jobs</span><strong>{pipelineExecutionLogs.filter((log) => log.status === 'running').length}</strong></div>
+            <div><span>Failed jobs</span><strong>{pipelineExecutionLogs.filter((log) => log.status === 'failed').length}</strong></div>
+            <div><span>Data volume</span><strong>{displayNumber(moduleDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0))}</strong></div>
+            <div><span>Retry counts</span><strong>{pipelineExecutionLogs.filter((log) => /retry/i.test(log.message)).length}</strong></div>
+          </div>
+          <div className="execution-log-list">
+            {pipelineExecutionLogs.map((log) => (
+              <div key={log.id}>
+                <span className={`status-pill ${log.status}`}>{log.status}</span>
+                <strong>{log.message}</strong>
+                <small>{new Date(log.timestamp).toLocaleString()}</small>
+              </div>
+            ))}
+          </div>
+        </article>
+      )}
+      {route.module !== 'hr' && (!isDataProcessingWorkspace || dataHubTab === 'datasets') && <article className="panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Single dataset workspace</p>
@@ -6519,7 +6821,7 @@ function ModuleWorkspacePage({
           {!visibleModuleDatasets.length && <EmptyState title={moduleDatasets.length ? 'No datasets match the current filters.' : 'Upload your first dataset to begin processing.'} copy={moduleDatasets.length ? 'Try another search, workspace, status, owner, or column name.' : pipelineConfig.emptyState} />}
         </div>
       </article>}
-      {isDataProcessingWorkspace && ingestionStep === 'workspace' ? (
+      {isDataProcessingWorkspace && dataHubTab === 'datasets' && ingestionStep === 'workspace' ? (
         <article className="panel routed-workspace compact-tool-panel">
           <div className="panel-header">
             <div>
