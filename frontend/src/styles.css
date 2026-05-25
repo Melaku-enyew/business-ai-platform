@@ -4581,6 +4581,130 @@ th {
   text-align: left;
 }
 
+.ingestion-stepper {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(110px, 1fr));
+  gap: 6px;
+  overflow-x: auto;
+}
+
+.ingestion-stepper button {
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.ingestion-stepper button.completed {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--line));
+  background: color-mix(in srgb, var(--success) 10%, var(--panel));
+  color: var(--heading);
+}
+
+.ingestion-stepper button.active {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.staged-upload-summary,
+.pipeline-execution-panel,
+.save-option-grid,
+.data-hub-dataset-controls {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.staged-upload-summary,
+.pipeline-execution-panel {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+}
+
+.processing-choice-grid,
+.save-option-grid,
+.connector-card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+
+.processing-choice-grid button,
+.save-option-grid button,
+.data-hub-dataset-controls button,
+.data-hub-dataset-controls select,
+.data-hub-dataset-controls input,
+.data-connection-workspace input,
+.connector-card-actions button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 850;
+  padding: 6px 9px;
+}
+
+.processing-choice-grid button.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.data-hub-dataset-controls {
+  grid-template-columns: minmax(180px, 1fr) minmax(130px, 0.35fr) repeat(3, max-content);
+  align-items: center;
+}
+
+.data-connection-workspace .panel-header {
+  align-items: end;
+}
+
+.connector-card-grid article {
+  display: grid;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.connector-card-grid article > div:first-child {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.connector-card-grid strong {
+  color: var(--heading);
+  font-weight: 950;
+}
+
+.connector-card-grid small {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.connector-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.enterprise-dataset-row.compact-row .dataset-row-summary {
+  padding-top: 9px;
+  padding-bottom: 9px;
+}
+
 .cockpit-kpi {
   position: relative;
   overflow: hidden;

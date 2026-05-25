@@ -5429,10 +5429,19 @@ function ModuleWorkspacePage({
   const [dragActive, setDragActive] = useState(false);
   const [previewState, setPreviewState] = useState<{ dataset: Dataset; mode: PreviewMode } | null>(null);
   const [expandedDatasetId, setExpandedDatasetId] = useState('');
+  const [allDatasetsExpanded, setAllDatasetsExpanded] = useState(false);
+  const [dataHubDatasetSearch, setDataHubDatasetSearch] = useState('');
+  const [dataHubDatasetGroup, setDataHubDatasetGroup] = useState('all');
+  const [compactDatasetMode, setCompactDatasetMode] = useState(true);
   const [lastModuleFile, setLastModuleFile] = useState<File | null>(null);
   const [updateMode, setUpdateMode] = useState('new_dataset');
   const [updateTargetDatasetId, setUpdateTargetDatasetId] = useState('');
   const [uploadAnalysis, setUploadAnalysis] = useState<ReturnType<typeof analyzeUploadedDataset> | null>(null);
+  const [stagedDataset, setStagedDataset] = useState<Dataset | null>(null);
+  const [ingestionStep, setIngestionStep] = useState<'upload' | 'analyze' | 'action' | 'pipeline' | 'save' | 'workspace'>('upload');
+  const [processingAction, setProcessingAction] = useState('');
+  const [connectorMessage, setConnectorMessage] = useState('Connect enterprise sources, test credentials, discover schemas, and import datasets.');
+  const [connectorFilter, setConnectorFilter] = useState('');
   const [workspaceDatasets, setWorkspaceDatasets] = useState<Dataset[]>([]);
   const [generatingReportId, setGeneratingReportId] = useState('');
   const [openActionDatasetId, setOpenActionDatasetId] = useState('');
@@ -5442,12 +5451,23 @@ function ModuleWorkspacePage({
     const unique = new Map<string, Dataset>();
     merged.forEach((dataset) => {
       const belongsToModule = isDataProcessingWorkspace || classifyDatasetModule(dataset) === moduleLabel;
-      if (dataset?.id && belongsToModule && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
+      const isStagedHidden = stagedDataset?.id === dataset.id && !['save', 'workspace'].includes(ingestionStep);
+      if (dataset?.id && belongsToModule && !isStagedHidden && (!selectedCompanyId || dataset.companyId === selectedCompanyId) && !unique.has(dataset.id)) {
         unique.set(dataset.id, dataset);
       }
     });
     return [...unique.values()].sort((a, b) => new Date(b.uploadedAt).getTime() - new Date(a.uploadedAt).getTime());
-  }, [isDataProcessingWorkspace, route.module, safeDatasets, selectedCompanyId, workspaceDatasets]);
+  }, [ingestionStep, isDataProcessingWorkspace, route.module, safeDatasets, selectedCompanyId, stagedDataset?.id, workspaceDatasets]);
+  const visibleModuleDatasets = moduleDatasets
+    .filter((dataset) => dataHubDatasetGroup === 'all' || classifyDatasetModule(dataset) === dataHubDatasetGroup)
+    .filter((dataset) => !dataHubDatasetSearch.trim() || [
+      dataset.fileName,
+      dataset.ownerEmail,
+      dataset.cleanupStatus,
+      dataset.pipelineStatus,
+      classifyDatasetModule(dataset),
+      ...datasetHeaders(dataset)
+    ].join(' ').toLowerCase().includes(dataHubDatasetSearch.toLowerCase()));
   const activeStageIndex = Math.max(workflowStages.indexOf(workflowStage), 0);
   const selectedCompany = safeCompanies.find((company) => company.id === selectedCompanyId) ?? safeCompanies[0] ?? null;
   const selectedCompanyName = selectedCompany?.name ?? 'No company selected';
@@ -5457,7 +5477,11 @@ function ModuleWorkspacePage({
     setWorkflowStage(workflowStages[0] ?? 'Upload');
     setWorkflowMessage(pipelineConfig.emptyState);
     setExpandedDatasetId('');
+    setAllDatasetsExpanded(false);
     setStageDetail('');
+    setIngestionStep('upload');
+    setStagedDataset(null);
+    setProcessingAction('');
   }, [pipelineConfig.emptyState, route.module, route.path, workflowStages]);
 
   useEffect(() => {
@@ -5577,6 +5601,8 @@ function ModuleWorkspacePage({
     setLastModuleFile(file);
     setWorkflowMessage(`Uploading ${file.name}...`);
     setWorkflowStage(workflowStages[0]);
+    setIngestionStep('upload');
+    setProcessingAction('');
     try {
       window.setTimeout(() => setUploadProgress(48), 120);
       const dataset = await uploadDataset(file, undefined, selectedCompanyId);
@@ -5585,16 +5611,13 @@ function ModuleWorkspacePage({
       }
       const analysis = analyzeUploadedDataset(dataset, route.module);
       setUploadAnalysis(analysis);
+      setStagedDataset(dataset);
+      setIngestionStep('analyze');
       setUploadProgress(100);
-      setWorkflowStage(workflowStages[1] ?? workflowStages[0]);
-      const updateContext = updateMode === 'new_dataset'
-        ? 'created as a new dataset'
-        : `${updateMode.replaceAll('_', ' ')} queued against ${moduleDatasets.find((item) => item.id === updateTargetDatasetId)?.fileName ?? 'selected dataset'}`;
-      setWorkflowMessage(`${dataset.fileName} uploaded to ${selectedCompanyName}, ${updateContext}. Detected ${analysis.detectedType}; recommendation: ${analysis.recommendedAction}.`);
+      setWorkflowStage(workflowStages[0] ?? 'Upload');
+      setWorkflowMessage(`${dataset.fileName} uploaded to staging. Detected ${analysis.detectedType}; choose a processing action before activating it in the Data Hub.`);
       setActiveDataset(dataset);
-      setWorkspaceDatasets((current) => [dataset, ...current.filter((entry) => entry.id !== dataset.id)]);
-      setExpandedDatasetId(dataset.id);
-      setPreviewState({ dataset, mode: 'upload' });
+      setExpandedDatasetId('');
     } catch (uploadError) {
       const message = uploadError instanceof Error ? uploadError.message : 'Upload failed.';
       console.error('[Metenova Module Upload] Workflow upload failed', {
@@ -5831,8 +5854,18 @@ function ModuleWorkspacePage({
     setError('');
     setExpandedDatasetId(dataset.id);
     if (action === 'preview') setPreviewState({ dataset, mode: 'upload' });
+    if (action === 'open') setPreviewState({ dataset, mode: 'upload' });
     if (action === 'edit') setPreviewState({ dataset, mode: 'edit' });
     if (action === 'query') setPreviewState({ dataset, mode: 'query' });
+    if (action === 'schema') setPreviewState({ dataset, mode: 'schema' });
+    if (action === 'transform') setPreviewState({ dataset, mode: 'transform' });
+    if (action === 'ai') setPreviewState({ dataset, mode: 'ai' });
+    if (action === 'pipeline') setPreviewState({ dataset, mode: 'pipeline' });
+    if (action === 'history') setPreviewState({ dataset, mode: 'history' });
+    if (action === 'activity') {
+      setPreviewState({ dataset, mode: 'history' });
+      setWorkflowMessage(`${dataset.fileName} activity opened: uploads, transforms, approvals, exports, and sync history are available in History.`);
+    }
     if (action === 'deleteRows') {
       setPreviewState({ dataset, mode: 'edit' });
       setWorkflowMessage(`${dataset.fileName} opened in row edit mode. Clear row values or remove data before saving a versioned edit.`);
@@ -5879,6 +5912,20 @@ function ModuleWorkspacePage({
   }
 
   const stageDetailIndex = Math.max(workflowStages.indexOf(stageDetail), 0);
+  const connectorCatalog = [
+    'SQL Server', 'PostgreSQL', 'MySQL', 'Oracle', 'Snowflake', 'BigQuery', 'Redshift', 'MongoDB',
+    'SharePoint', 'OneDrive Excel', 'Google Sheets', 'CSV/XLSX upload', 'REST API', 'SFTP',
+    'Azure Blob Storage', 'AWS S3', 'Salesforce', 'HubSpot', 'QuickBooks'
+  ].filter((name) => !connectorFilter.trim() || name.toLowerCase().includes(connectorFilter.toLowerCase()));
+  const ingestionSteps = [
+    ['upload', '1 Upload'],
+    ['analyze', '2 Analyze'],
+    ['action', '3 Choose Action'],
+    ['pipeline', '4 Run Pipeline'],
+    ['save', '5 Save Dataset'],
+    ['workspace', '6 Open Workspace']
+  ];
+  const ingestionStepIndex = Math.max(ingestionSteps.findIndex(([key]) => key === ingestionStep), 0);
 
   return (
     <PageLayout>
@@ -5905,12 +5952,19 @@ function ModuleWorkspacePage({
         <div className="panel-header">
           <div>
             <p className="eyebrow">{route.moduleLabel} dataset workspace</p>
-            <h2>{pipelineConfig.uploadTitle}</h2>
+            <h2>Guided Enterprise Ingestion</h2>
           </div>
           <select value={selectedCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
             {!safeCompanies.some((company) => company.id === selectedCompanyId) && <option value="">Select company</option>}
             {safeCompanies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
           </select>
+        </div>
+        <div className="ingestion-stepper" aria-label="Enterprise Data Hub ingestion steps">
+          {ingestionSteps.map(([key, label], index) => (
+            <button className={index < ingestionStepIndex ? 'completed' : index === ingestionStepIndex ? 'active' : ''} key={key} type="button" disabled={index > ingestionStepIndex}>
+              {label}
+            </button>
+          ))}
         </div>
         <div
           className={`dropzone ${dragActive ? 'active' : ''}`}
@@ -5930,12 +5984,83 @@ function ModuleWorkspacePage({
             <span style={{ width: `${uploadProgress}%` }} />
           </div>
         )}
-        {isDataProcessingWorkspace && (
+        {stagedDataset && (
+          <div className="staged-upload-summary">
+            <div>
+              <p className="eyebrow">Staged upload</p>
+              <strong>{stagedDataset.fileName}</strong>
+              <span>{displayNumber(stagedDataset.rows)} rows | {displayNumber(stagedDataset.columns)} columns | {stagedDataset.fileType?.toUpperCase() ?? 'DATA'}</span>
+            </div>
+            <button className="ghost-button compact" type="button" onClick={() => setPreviewState({ dataset: stagedDataset, mode: 'upload' })}>Preview staged data</button>
+          </div>
+        )}
+        {uploadAnalysis && (
+          <div className="dataset-merge-preview">
+            <div>
+              <p className="eyebrow">Step 2 - Smart dataset analysis</p>
+              <strong>Detected dataset type: {uploadAnalysis.detectedType}</strong>
+              <span>{uploadAnalysis.recommendedAction}</span>
+            </div>
+            <div className="dataset-detail-grid compact">
+              <div><span>Missing columns</span><strong>{uploadAnalysis.missingColumns.length || 'None'}</strong></div>
+              <div><span>Extra columns</span><strong>{uploadAnalysis.extraColumns.length || 'None'}</strong></div>
+              <div><span>Invalid types</span><strong>{uploadAnalysis.invalidTypes.length || 'None'}</strong></div>
+              <div><span>Duplicate keys</span><strong>{uploadAnalysis.duplicateKeys.length || 'None'}</strong></div>
+            </div>
+            <div className="workflow-history-strip">
+              {[...uploadAnalysis.missingColumns.map((column) => `Missing: ${column}`), ...uploadAnalysis.invalidTypes, ...uploadAnalysis.duplicateKeys.map((key) => `Duplicate key: ${key}`)].slice(0, 8).map((item) => <span key={item}>{item}</span>)}
+              {!uploadAnalysis.missingColumns.length && !uploadAnalysis.invalidTypes.length && !uploadAnalysis.duplicateKeys.length && <span>Columns are ready for append, merge, replace, or new dataset workflow.</span>}
+            </div>
+            <div className="processing-choice-grid">
+              {[
+                ['new_dataset', 'Create new dataset'],
+                ['merge_matching_records', 'Merge into existing'],
+                ['append_rows', 'Append rows'],
+                ['replace_existing', 'Replace existing dataset'],
+                ['ignore_duplicate_rows', 'Ignore duplicates']
+              ].map(([action, label]) => (
+                <button className={processingAction === action ? 'active' : ''} key={action} type="button" onClick={() => chooseProcessingAction(action)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+        {ingestionStep === 'pipeline' && stagedDataset && (
+          <div className="pipeline-execution-panel">
+            <div>
+              <p className="eyebrow">Step 4 - Pipeline execution</p>
+              <strong>{processingAction.replaceAll('_', ' ')} pipeline is ready to run</strong>
+              <span>Click any stage below for logs, metrics, retry, cancel, or rerun actions.</span>
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={() => setWorkflowStage(workflowStages[2] ?? 'Detect Duplicates')}>Run next stage</button>
+              <button type="button" onClick={() => setWorkflowMessage(`${stagedDataset.fileName} retry queued for ${workflowStage}.`)}>Retry stage</button>
+              <button className="ghost-button compact danger" type="button" onClick={() => setWorkflowMessage(`${stagedDataset.fileName} pipeline cancelled before activation.`)}>Cancel</button>
+            </div>
+          </div>
+        )}
+        {['pipeline', 'save'].includes(ingestionStep) && stagedDataset && (
+          <div className="save-option-grid">
+            {[
+              ['save_new_dataset', 'Save as new dataset'],
+              ['merge_existing', 'Merge into existing dataset'],
+              ['append_existing', 'Append into existing dataset'],
+              ['replace_existing', 'Replace existing dataset'],
+              ['reusable_workspace_dataset', 'Create reusable workspace dataset']
+            ].map(([action, label]) => (
+              <button key={action} type="button" onClick={() => void saveStagedDataset(action)}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+        {isDataProcessingWorkspace && uploadAnalysis && stagedDataset && (
           <div className="incremental-update-panel">
             <div>
-              <p className="eyebrow">Incremental dataset updates</p>
-              <strong>How do you want to process this upload?</strong>
-              <span>Compare before applying, append rows, merge matching records, replace, or create a version checkpoint.</span>
+              <p className="eyebrow">Target dataset options</p>
+              <strong>Optional save target</strong>
+              <span>Select a target only when merging, appending, replacing, or creating a version checkpoint.</span>
             </div>
             <select value={updateMode} onChange={(event) => setUpdateMode(event.target.value)}>
               <option value="new_dataset">Create new dataset</option>
@@ -5951,32 +6076,6 @@ function ModuleWorkspacePage({
               <option value="">Select target dataset</option>
               {moduleDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
             </select>
-          </div>
-        )}
-        {uploadAnalysis && (
-          <div className="dataset-merge-preview">
-            <div>
-              <p className="eyebrow">Smart dataset analysis</p>
-              <strong>Detected dataset type: {uploadAnalysis.detectedType}</strong>
-              <span>{uploadAnalysis.recommendedAction}</span>
-            </div>
-            <div className="dataset-detail-grid compact">
-              <div><span>Missing columns</span><strong>{uploadAnalysis.missingColumns.length || 'None'}</strong></div>
-              <div><span>Extra columns</span><strong>{uploadAnalysis.extraColumns.length || 'None'}</strong></div>
-              <div><span>Invalid types</span><strong>{uploadAnalysis.invalidTypes.length || 'None'}</strong></div>
-              <div><span>Duplicate keys</span><strong>{uploadAnalysis.duplicateKeys.length || 'None'}</strong></div>
-            </div>
-            <div className="workflow-history-strip">
-              {[...uploadAnalysis.missingColumns.map((column) => `Missing: ${column}`), ...uploadAnalysis.invalidTypes, ...uploadAnalysis.duplicateKeys.map((key) => `Duplicate key: ${key}`)].slice(0, 8).map((item) => <span key={item}>{item}</span>)}
-              {!uploadAnalysis.missingColumns.length && !uploadAnalysis.invalidTypes.length && !uploadAnalysis.duplicateKeys.length && <span>Columns are ready for append, merge, replace, or new version workflow.</span>}
-            </div>
-            <div className="inline-actions">
-              {['Create new dataset', 'Merge into existing dataset', 'Append rows', 'Replace records', 'Ignore duplicates', 'Cancel upload'].map((action) => (
-                <button className={action === 'Cancel upload' ? 'ghost-button compact danger' : 'ghost-button compact'} key={action} type="button" onClick={() => setWorkflowMessage(`${action} selected. ${uploadAnalysis.detectedType} is staged for review before persistence changes.`)}>
-                  {action}
-                </button>
-              ))}
-            </div>
           </div>
         )}
         <div className="workflow-rule-grid" aria-label="Pipeline rules">
@@ -6037,14 +6136,68 @@ function ModuleWorkspacePage({
           </div>
         </article>
       ) : null}
+      {isDataProcessingWorkspace && (
+        <article className="panel data-connection-workspace">
+          <div className="panel-header">
+            <div>
+              <p className="eyebrow">Data Connections</p>
+              <h2>Enterprise connector framework</h2>
+              <span>Test connections, discover schemas, preview tables, import datasets, and schedule refreshes.</span>
+            </div>
+            <input placeholder="Search connectors" value={connectorFilter} onChange={(event) => setConnectorFilter(event.target.value)} />
+          </div>
+          <div className="connector-card-grid">
+            {connectorCatalog.map((connector, index) => (
+              <article key={connector}>
+                <div>
+                  <span className="dataset-type-icon">{connector.slice(0, 2).toUpperCase()}</span>
+                  <strong>{connector}</strong>
+                  <small>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Setup required' : 'Ready to test'} | last sync {index % 2 === 0 ? 'today' : 'not synced'}</small>
+                </div>
+                <div className="connector-card-actions">
+                  <button type="button" onClick={() => setConnectorMessage(`${connector} connection test completed for ${selectedCompanyName}.`)}>
+                    Test
+                  </button>
+                  <button type="button" onClick={() => setConnectorMessage(`${connector} schema discovery opened. Tables, sheets, objects, and columns are ready for preview.`)}>
+                    Discover
+                  </button>
+                  <button type="button" onClick={() => setConnectorMessage(`${connector} import staged. Choose Create, Merge, Append, Replace, or reusable workspace dataset before activation.`)}>
+                    Import
+                  </button>
+                  <button type="button" onClick={() => setConnectorMessage(`${connector} scheduled sync configured for manual, hourly, daily, weekly, monthly, or event-triggered refresh.`)}>
+                    Schedule
+                  </button>
+                </div>
+              </article>
+            ))}
+          </div>
+          <p className="persistence-note">{connectorMessage}</p>
+        </article>
+      )}
       {route.module !== 'hr' && <article className="panel">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Single dataset workspace</p>
-            <h2>Enterprise dataset grid</h2>
+            <h2>Enterprise Data Hub Datasets</h2>
           </div>
           <span className="dataset-count">{moduleDatasets.length.toLocaleString()} active</span>
         </div>
+        {isDataProcessingWorkspace && (
+          <div className="data-hub-dataset-controls">
+            <input placeholder="Search datasets, columns, owners, AI status..." value={dataHubDatasetSearch} onChange={(event) => setDataHubDatasetSearch(event.target.value)} />
+            <select value={dataHubDatasetGroup} onChange={(event) => setDataHubDatasetGroup(event.target.value)}>
+              <option value="all">All workspaces</option>
+              <option value="HR">HR</option>
+              <option value="Finance">Finance</option>
+              <option value="Engineering">Engineering</option>
+              <option value="CRM">CRM</option>
+              <option value="Enterprise Data Hub">Data Hub</option>
+            </select>
+            <button type="button" onClick={() => setCompactDatasetMode((value) => !value)}>{compactDatasetMode ? 'Detailed mode' : 'Compact mode'}</button>
+            <button type="button" onClick={() => setAllDatasetsExpanded(true)}>Expand all</button>
+            <button type="button" onClick={() => { setAllDatasetsExpanded(false); setExpandedDatasetId(''); }}>Collapse all</button>
+          </div>
+        )}
         {isDataProcessingWorkspace && (
           <div className="sticky-action-toolbar" role="tablist" aria-label="Data processing tools">
             {[
@@ -6065,8 +6218,8 @@ function ModuleWorkspacePage({
             <span>Company</span>
             <span>Uploaded by</span>
           </div>
-          {moduleDatasets.map((dataset) => (
-            <article className={`enterprise-dataset-row ${expandedDatasetId === dataset.id ? 'expanded' : ''}`} key={dataset.id}>
+          {visibleModuleDatasets.map((dataset) => (
+            <article className={`enterprise-dataset-row ${compactDatasetMode ? 'compact-row' : ''} ${allDatasetsExpanded || expandedDatasetId === dataset.id ? 'expanded' : ''}`} key={dataset.id}>
               <button className="dataset-row-summary" type="button" onClick={() => setExpandedDatasetId(expandedDatasetId === dataset.id ? '' : dataset.id)}>
                 <span>
                   <strong>{dataset.fileName}</strong>
@@ -6077,7 +6230,7 @@ function ModuleWorkspacePage({
                 <span>{safeCompanies.find((company) => company.id === dataset.companyId)?.name ?? selectedCompanyName}</span>
                 <span>{dataset.ownerName ?? dataset.ownerEmail ?? 'Workspace user'}</span>
               </button>
-              {expandedDatasetId === dataset.id && (
+              {(allDatasetsExpanded || expandedDatasetId === dataset.id) && (
                 <div className="dataset-row-details">
                   <div className="dataset-detail-grid">
                     <div>
@@ -6132,12 +6285,19 @@ function ModuleWorkspacePage({
                         <div className="dataset-action-dropdown">
                           {[
                             ['preview', 'Preview Rows'],
+                            ['open', 'Open Workspace'],
                             ['edit', 'Edit Rows'],
                             ['query', 'Query Dataset'],
                             ['compare', 'Compare Versions'],
                             ['validate', 'Validate'],
+                            ['schema', 'Schema'],
+                            ['transform', 'Transform'],
                             ['normalize', 'Normalize'],
                             ...(!dataset.originalDatasetId ? [['clean', 'Clean']] : []),
+                            ['ai', 'AI Insights'],
+                            ['pipeline', 'Pipeline'],
+                            ['activity', 'Activity'],
+                            ['history', 'History'],
                             ['approve', 'Approve'],
                             ['export', 'Export'],
                             ['reprocess', 'Reprocess'],
@@ -6176,7 +6336,7 @@ function ModuleWorkspacePage({
               )}
             </article>
           ))}
-          {!moduleDatasets.length && <EmptyState title="Upload your first dataset to begin processing." copy={pipelineConfig.emptyState} />}
+          {!visibleModuleDatasets.length && <EmptyState title={moduleDatasets.length ? 'No datasets match the current filters.' : 'Upload your first dataset to begin processing.'} copy={moduleDatasets.length ? 'Try another search, workspace, status, owner, or column name.' : pipelineConfig.emptyState} />}
         </div>
       </article>}
       {isDataProcessingWorkspace ? (
@@ -8988,6 +9148,41 @@ function DatasetPreviewModal({
       return;
     }
     setColumnActionMessage(`${action} staged for selected columns.`);
+  }
+
+  function chooseProcessingAction(action: string) {
+    if (!stagedDataset) {
+      setWorkflowMessage('Upload a dataset before choosing a processing action.');
+      return;
+    }
+    setProcessingAction(action);
+    setUpdateMode(action);
+    setIngestionStep('pipeline');
+    setWorkflowStage(workflowStages[1] ?? 'Validate');
+    setWorkflowMessage(`${stagedDataset.fileName} is running the ${action.replaceAll('_', ' ')} ingestion pipeline. Review stage details before saving.`);
+  }
+
+  async function saveStagedDataset(saveMode: string) {
+    if (!stagedDataset) {
+      setWorkflowMessage('No staged dataset is available to save.');
+      return;
+    }
+    setProcessingAction(saveMode);
+    setIngestionStep('save');
+    const status = saveMode.includes('approval') ? 'pending approval' : 'uploaded';
+    const activatedDataset = { ...stagedDataset, cleanupStatus: status, pipelineStatus: 'published', status };
+    setWorkspaceDatasets((current) => [activatedDataset, ...current.filter((entry) => entry.id !== activatedDataset.id)]);
+    setDatasets((current) => [activatedDataset, ...current.filter((entry) => entry.id !== activatedDataset.id)]);
+    setActiveDataset(activatedDataset);
+    setExpandedDatasetId(activatedDataset.id);
+    setWorkflowStage(workflowStages.find((stage) => /export|publish|sync/i.test(stage)) ?? workflowStages.at(-1) ?? workflowStages[0]);
+    setWorkflowMessage(`${activatedDataset.fileName} saved using ${saveMode.replaceAll('_', ' ')} and activated as a reusable workspace dataset.`);
+    try {
+      await updateDatasetWorkflowStatus(activatedDataset, status, `${activatedDataset.fileName} activated in Enterprise Data Hub.`, 'upload');
+    } finally {
+      setIngestionStep('workspace');
+      setPreviewState({ dataset: activatedDataset, mode: 'upload' });
+    }
   }
 
   function runTransformAction(action: string) {
