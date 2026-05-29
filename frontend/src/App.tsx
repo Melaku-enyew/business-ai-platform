@@ -101,6 +101,7 @@ type AppView =
   | 'hr'
   | 'crm'
   | 'dataProcessing'
+  | 'enterpriseOS'
   | 'companies'
   | 'analytics'
   | 'reports'
@@ -508,6 +509,7 @@ const moduleNav: Array<{ group: string; view: AppView; label: string; icon: stri
   { group: 'Operations', view: 'engineering', label: 'Engineering & Projects', icon: 'EP' },
   { group: 'Operations', view: 'crm', label: 'CRM & Sales', icon: 'CS' },
   { group: 'Data & Intelligence', view: 'dataProcessing', label: 'Enterprise Data Hub', icon: 'DH' },
+  { group: 'Data & Intelligence', view: 'enterpriseOS', label: 'MeLai OS', icon: 'OS' },
   { group: 'Data & Intelligence', view: 'analytics', label: 'Analytics', icon: 'AN' },
   { group: 'Administration', view: 'adminUsers', label: 'Admin Center', icon: 'AD', adminOnly: true },
   { group: 'Administration', view: 'settings', label: 'Settings', icon: 'ST' },
@@ -3087,6 +3089,16 @@ export function App() {
               navigate
             )}
           </section>
+        ) : currentView === 'enterpriseOS' ? (
+          <EnterpriseOSWorkspace
+            company={selectedCompany}
+            datasets={companyDatasets}
+            moduleRecords={moduleRecords}
+            navigate={navigate}
+            notifications={notifications}
+            onOpenView={openView}
+            reports={companyReports}
+          />
         ) : currentView === 'analytics' ? (
           <section className="module-page">
             <article className="panel">
@@ -7735,6 +7747,150 @@ function ModuleBusinessDashboard({ records, route, selectedCompany }: { records:
           </article>
         )}
       </div>
+    </section>
+  );
+}
+
+function EnterpriseOSWorkspace({
+  company,
+  datasets,
+  moduleRecords,
+  navigate,
+  notifications,
+  onOpenView,
+  reports
+}: {
+  company: Company | null;
+  datasets: Dataset[];
+  moduleRecords: Partial<Record<AppView, { total: number; open: number }>>;
+  navigate: ReturnType<typeof useNavigate>;
+  notifications: NotificationItem[];
+  onOpenView: (view: AppView) => void;
+  reports: ReportHistoryItem[];
+}) {
+  const [activeWorkspace, setActiveWorkspace] = useState('tax');
+  const [command, setCommand] = useState('Why did expenses increase?');
+  const [osMessage, setOsMessage] = useState('MeLai Enterprise OS is monitoring operations across finance, HR, CRM, tax, documents, approvals, and pipelines.');
+  const financeDatasets = datasets.filter((dataset) => classifyDatasetModule(dataset) === 'Finance');
+  const hrDatasets = datasets.filter((dataset) => classifyDatasetModule(dataset) === 'HR');
+  const riskSignals = datasets.reduce((sum, dataset) => sum + validationWarningCount(dataset) + findDuplicateRows(dataset.preview).length, 0);
+  const financeHealth = Math.max(48, 94 - financeDatasets.length * 2 - riskSignals);
+  const workforceHealth = Math.max(52, 92 - hrDatasets.length);
+  const complianceScore = Math.max(45, 90 - Math.min(riskSignals, 35));
+  const automationScore = Math.min(98, 62 + reports.length * 3 + datasets.length);
+  const businessPulse = Math.round((financeHealth + workforceHealth + complianceScore + automationScore) / 4);
+  const workspaceDefinitions = [
+    { key: 'tax', label: 'Tax Intelligence', icon: 'TX', metric: `${complianceScore}%`, path: '/accounting/financial-reports' },
+    { key: 'metrics', label: 'Business Performance Intelligence', icon: 'BP', metric: `${businessPulse}%`, path: '/analytics/dashboard' },
+    { key: 'performance', label: 'Performance Workspace', icon: 'PF', metric: `${moduleRecords.accounting?.open ?? 0} delays`, path: '/analytics/dashboard' },
+    { key: 'digitalTwin', label: 'Enterprise Digital Twin', icon: 'DT', metric: `${datasets.length} signals`, path: '/data-processing/workspace' },
+    { key: 'compliance', label: 'Audit & Compliance', icon: 'AC', metric: `${riskSignals} risks`, path: '/admin/audit-logs' },
+    { key: 'approvals', label: 'Smart Approval Center', icon: 'AP', metric: `${notifications.filter((item) => item.status !== 'read').length} tasks`, path: '/dashboard' },
+    { key: 'knowledge', label: 'Enterprise Knowledge AI', icon: 'KB', metric: `${reports.length} reports`, path: '/assistant' },
+    { key: 'processStudio', label: 'Business Process Studio', icon: 'PS', metric: 'Rules live', path: '/data-processing/workspace' },
+    { key: 'forecasting', label: 'Forecasting Lab', icon: 'FL', metric: 'Predictive', path: '/analytics/dashboard' },
+    { key: 'documents', label: 'Document Operations', icon: 'DO', metric: 'Extract', path: '/data-processing/workspace' },
+    { key: 'vendors', label: 'Vendor & Contract Intelligence', icon: 'VC', metric: `${financeDatasets.length} finance`, path: '/accounting/expenses' },
+    { key: 'marketplace', label: 'Automation Marketplace', icon: 'AM', metric: '12 templates', path: '/data-processing/workspace' },
+    { key: 'score', label: 'Business Operating Score', icon: 'OS', metric: `${businessPulse}%`, path: '/dashboard' }
+  ];
+  const active = workspaceDefinitions.find((workspace) => workspace.key === activeWorkspace) ?? workspaceDefinitions[0];
+  const workspaceDetails: Record<string, string[]> = {
+    tax: ['Payroll tax engine', 'Multi-state tax forecasting', 'Deduction recommendations', 'Filing readiness score', 'Audit-risk transactions', 'Tax document generation'],
+    metrics: ['Finance Health: ' + financeHealth + '%', 'Workforce Health: ' + workforceHealth + '%', 'Revenue Momentum: Strong', 'Operational Risk: ' + (riskSignals > 8 ? 'Medium' : 'Low'), 'Automation savings tracked'],
+    performance: ['Employee productivity', 'Department efficiency', 'Workflow bottlenecks', 'Automation impact', 'Delay explanations', 'Process efficiency'],
+    digitalTwin: ['Live pipelines', 'HR activity', 'Finance activity', 'CRM activity', 'Sync status', 'Workflow execution'],
+    compliance: ['Audit trails', 'Approval history', 'Financial traceability', 'Evidence packages', 'Data lineage', 'Governance alerts'],
+    approvals: ['Payroll approvals', 'Invoice approvals', 'Export approvals', 'Workflow approvals', 'Dataset approvals', 'Escalation routing'],
+    knowledge: ['Search datasets', 'Search reports', 'Search workflows', 'Search approvals', 'Search logs', 'Explain business changes'],
+    processStudio: ['Trigger builder', 'Approval rules', 'Alert routing', 'Pause exports', 'Notify owners', 'Reusable workflows'],
+    forecasting: ['Revenue forecast', 'Payroll growth', 'Staffing needs', 'Tax exposure', 'Operating costs', 'Trend risks'],
+    documents: ['Invoice extraction', 'Contract parsing', 'Tax form ingestion', 'Spreadsheet conversion', 'Workflow routing', 'Anomaly detection'],
+    vendors: ['Vendor performance', 'Contract renewals', 'Payment trends', 'Vendor risk', 'Spend analysis', 'Cost optimization'],
+    marketplace: ['Payroll automations', 'Invoice workflows', 'Tax workflows', 'HR sync pipelines', 'Finance reconciliation', 'Approval templates'],
+    score: ['Operational score', 'Automation score', 'Finance score', 'Workforce score', 'Compliance score', 'AI maturity score']
+  };
+
+  function runWorkspaceAction(action: string) {
+    if (action === 'open') {
+      if (active.path === '/dashboard') onOpenView('dashboard');
+      else if (active.path === '/assistant') onOpenView('assistant');
+      else navigate(active.path);
+      return;
+    }
+    if (action === 'command') {
+      setOsMessage(`MeLai answer: "${command}" reviewed ${datasets.length} datasets, ${reports.length} reports, ${notifications.length} notifications, and current workspace activity.`);
+      return;
+    }
+    setOsMessage(`${active.label}: ${action} completed with company-scoped data, audit trace, and MeLai recommendations.`);
+  }
+
+  return (
+    <section className="module-page enterprise-os-workspace">
+      <article className="panel enterprise-os-hero">
+        <div>
+          <p className="eyebrow">MeLai Enterprise Operating System</p>
+          <h2>{company?.name ?? 'Company'} intelligent operations layer</h2>
+          <span>Predictive operations, tax intelligence, digital twin monitoring, audit governance, approvals, forecasting, documents, vendors, and automation templates.</span>
+        </div>
+        <div className="business-pulse-card">
+          <span>Business Pulse Score</span>
+          <strong>{businessPulse}%</strong>
+          <small>{riskSignals > 8 ? 'Medium operational risk' : 'Healthy operational momentum'}</small>
+        </div>
+      </article>
+      <div className="enterprise-os-score-row">
+        <div><span>Finance Health</span><strong>{financeHealth}%</strong></div>
+        <div><span>Workforce Health</span><strong>{workforceHealth}%</strong></div>
+        <div><span>Compliance</span><strong>{complianceScore}%</strong></div>
+        <div><span>Automation</span><strong>{automationScore}%</strong></div>
+        <div><span>AI Maturity</span><strong>{Math.min(99, 58 + datasets.length + reports.length)}%</strong></div>
+      </div>
+      <article className="panel enterprise-command-bar">
+        <input value={command} onChange={(event) => setCommand(event.target.value)} placeholder="Ask MeLai: show failed finance pipelines, explain revenue drop, find payroll changes..." />
+        <button type="button" onClick={() => runWorkspaceAction('command')}>Ask MeLai</button>
+        <button type="button" onClick={() => runWorkspaceAction('voice command')}>Voice command</button>
+      </article>
+      <section className="enterprise-os-grid">
+        {workspaceDefinitions.map((workspace) => (
+          <button className={activeWorkspace === workspace.key ? 'active' : ''} key={workspace.key} type="button" onClick={() => setActiveWorkspace(workspace.key)}>
+            <span className="dataset-type-icon">{workspace.icon}</span>
+            <strong>{workspace.label}</strong>
+            <small>{workspace.metric}</small>
+          </button>
+        ))}
+      </section>
+      <article className="panel enterprise-os-detail">
+        <div className="panel-header">
+          <div>
+            <p className="eyebrow">{active.icon} workspace</p>
+            <h2>{active.label}</h2>
+            <span>{osMessage}</span>
+          </div>
+          <div className="inline-actions">
+            <button type="button" onClick={() => runWorkspaceAction('open')}>Open connected workspace</button>
+            <button type="button" onClick={() => runWorkspaceAction('scan')}>Run scan</button>
+            <button type="button" onClick={() => runWorkspaceAction('generate report')}>Generate report</button>
+            <button type="button" onClick={() => runWorkspaceAction('create automation')}>Create automation</button>
+          </div>
+        </div>
+        <div className="enterprise-os-capability-grid">
+          {(workspaceDetails[activeWorkspace] ?? []).map((item) => (
+            <button key={item} type="button" onClick={() => runWorkspaceAction(item)}>
+              <strong>{item}</strong>
+              <span>Operational action ready</span>
+            </button>
+          ))}
+        </div>
+        <div className="enterprise-os-live-map">
+          {['Enterprise Data Hub', 'HR', 'Finance', 'CRM', 'Analytics', 'Approvals', 'Executive KPI'].map((node, index) => (
+            <div key={node}>
+              <strong>{node}</strong>
+              <span>{index === 0 ? `${datasets.length} datasets` : index === 5 ? `${notifications.length} alerts` : 'connected'}</span>
+            </div>
+          ))}
+        </div>
+      </article>
     </section>
   );
 }

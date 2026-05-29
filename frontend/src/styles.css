@@ -3065,6 +3065,148 @@ th {
   padding: 9px 11px;
 }
 
+.enterprise-os-workspace {
+  display: grid;
+  gap: 12px;
+}
+
+.enterprise-os-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.enterprise-os-hero h2,
+.enterprise-os-detail h2 {
+  margin: 0;
+  color: var(--heading);
+}
+
+.enterprise-os-hero span,
+.enterprise-os-grid small,
+.enterprise-os-detail span,
+.enterprise-os-live-map span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 760;
+}
+
+.business-pulse-card {
+  min-width: 170px;
+  display: grid;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 14px;
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  padding: 14px;
+}
+
+.business-pulse-card strong {
+  font-size: 34px;
+  line-height: 1;
+}
+
+.enterprise-os-score-row,
+.enterprise-os-grid,
+.enterprise-os-capability-grid,
+.enterprise-os-live-map {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(155px, 1fr));
+  gap: 8px;
+}
+
+.enterprise-os-score-row div,
+.enterprise-os-grid button,
+.enterprise-os-capability-grid button,
+.enterprise-os-live-map div {
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: var(--panel-strong);
+  box-shadow: var(--shadow-soft);
+}
+
+.enterprise-os-score-row div {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+}
+
+.enterprise-os-score-row strong {
+  color: var(--heading);
+  font-size: 20px;
+  font-weight: 950;
+}
+
+.enterprise-command-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) max-content max-content;
+  gap: 8px;
+  align-items: center;
+}
+
+.enterprise-command-bar input,
+.enterprise-command-bar button {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  font-weight: 850;
+  padding: 8px 10px;
+}
+
+.enterprise-os-grid button {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  gap: 3px 8px;
+  align-items: center;
+  min-height: 64px;
+  color: var(--text);
+  text-align: left;
+  padding: 10px;
+}
+
+.enterprise-os-grid button.active {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.enterprise-os-grid small {
+  grid-column: 2;
+}
+
+.enterprise-os-detail {
+  display: grid;
+  gap: 12px;
+}
+
+.enterprise-os-capability-grid button {
+  display: grid;
+  gap: 4px;
+  min-height: 58px;
+  color: var(--text);
+  text-align: left;
+  padding: 10px;
+}
+
+.enterprise-os-capability-grid button:hover,
+.enterprise-command-bar button:hover {
+  border-color: color-mix(in srgb, var(--accent) 48%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.enterprise-os-live-map div {
+  position: relative;
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+}
+
 .hr-workforce-workspace,
 .hr-operations-grid,
 .hr-ai-panel,
