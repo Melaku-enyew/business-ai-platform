@@ -4917,9 +4917,15 @@ th {
 
 .pipeline-builder-layout {
   display: grid;
-  grid-template-columns: 156px minmax(620px, 1fr) 190px;
-  gap: 10px;
-  min-height: 500px;
+  grid-template-columns: 138px minmax(760px, 1fr) 320px;
+  gap: 12px;
+  min-height: 620px;
+}
+
+.fullscreen-pipeline {
+  position: relative;
+  z-index: 5;
+  margin-inline: calc(var(--content-padding, 0px) * -1);
 }
 
 .pipeline-block-palette,
@@ -4936,7 +4942,7 @@ th {
   display: grid;
   align-content: start;
   gap: 10px;
-  max-height: 430px;
+  max-height: 560px;
   overflow: auto;
 }
 
@@ -4973,8 +4979,8 @@ th {
 
 .pipeline-canvas {
   position: relative;
-  min-width: 1240px;
-  min-height: 490px;
+  min-width: 1520px;
+  min-height: 620px;
 }
 
 .pipeline-canvas-lines {
@@ -5000,8 +5006,8 @@ th {
 
 .pipeline-node {
   position: absolute;
-  width: 160px;
-  min-height: 74px;
+  width: 186px;
+  min-height: 92px;
   display: grid;
   gap: 3px;
   text-align: left;
@@ -5010,6 +5016,13 @@ th {
   background: var(--panel-strong);
   box-shadow: var(--shadow-soft);
   cursor: grab;
+}
+
+.pipeline-node em {
+  color: var(--muted);
+  font-size: 10px;
+  font-style: normal;
+  font-weight: 850;
 }
 
 .pipeline-node.selected {
@@ -5029,10 +5042,23 @@ th {
   border-color: color-mix(in srgb, var(--warning) 60%, var(--line));
 }
 
+.pipeline-node.warning,
+.pipeline-node.queued {
+  border-color: color-mix(in srgb, var(--warning) 60%, var(--line));
+  background: color-mix(in srgb, var(--warning) 9%, var(--panel-strong));
+}
+
+.pipeline-node.idle,
+.pipeline-node.ready {
+  border-color: var(--line);
+}
+
 .pipeline-detail-panel {
   display: grid;
   align-content: start;
   gap: 8px;
+  max-height: 620px;
+  overflow: auto;
 }
 
 .pipeline-template-row,
@@ -5091,6 +5117,53 @@ th {
 
 .pipeline-mode-bar input {
   width: 110px;
+}
+
+.pipeline-step-flow {
+  display: grid;
+  grid-template-columns: repeat(7, minmax(110px, 1fr));
+  gap: 7px;
+}
+
+.pipeline-step-flow button,
+.node-inspector-tabs button {
+  min-height: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  padding: 7px 9px;
+}
+
+.pipeline-step-flow button small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.pipeline-step-flow button strong {
+  color: var(--heading);
+  font-size: 12px;
+}
+
+.pipeline-step-flow button.active,
+.node-inspector-tabs button.active {
+  border-color: color-mix(in srgb, var(--accent) 50%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.pipeline-step-flow button.completed {
+  border-color: color-mix(in srgb, var(--success) 45%, var(--line));
+}
+
+.node-inspector-tabs {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
 }
 
 .pipeline-transparency-grid {
@@ -5227,6 +5300,56 @@ th {
   padding: 6px 8px;
 }
 
+.source-specific-config select,
+.source-specific-config textarea {
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 800;
+  padding: 6px 8px;
+}
+
+.source-specific-config textarea {
+  min-height: 76px;
+  resize: vertical;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+
+.node-edit-panel {
+  background: color-mix(in srgb, var(--accent) 7%, var(--panel));
+}
+
+.mini-result-grid,
+.validation-workbench,
+.before-after-preview,
+.melai-recommendation-stack {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+  padding: 8px;
+}
+
+.mini-result-grid,
+.before-after-preview {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.before-after-preview code {
+  display: block;
+  white-space: pre-wrap;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--heading);
+  font-size: 11px;
+  padding: 7px;
+}
+
 .data-hub-dataset-explorer .dataset-table-head {
   display: none;
 }
@@ -5293,6 +5416,7 @@ th {
   .data-hub-command-row,
   .pipeline-builder-layout,
   .pipeline-mode-bar,
+  .pipeline-step-flow,
   .natural-pipeline-builder,
   .auto-repair-panel,
   .connector-setup-panel,

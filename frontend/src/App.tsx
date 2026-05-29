@@ -5479,6 +5479,9 @@ function ModuleWorkspacePage({
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
   const [selectedDatasetDrawerId, setSelectedDatasetDrawerId] = useState('');
   const [pipelineSaveState, setPipelineSaveState] = useState('Draft saved locally');
+  const [pipelineFullscreen, setPipelineFullscreen] = useState(false);
+  const [pipelineStepIndex, setPipelineStepIndex] = useState(0);
+  const [pipelineInspectorTab, setPipelineInspectorTab] = useState<'setup' | 'preview' | 'logs'>('setup');
   const [aiCopilotPrompt, setAiCopilotPrompt] = useState('Clean this payroll file and merge with employee records.');
   const [aiCopilotPlan, setAiCopilotPlan] = useState<string[]>([
     'Upload or select a dataset to generate a MeLai plan.',
@@ -6013,11 +6016,14 @@ function ModuleWorkspacePage({
   };
   const pipelineTemplates = ['Payroll import pipeline', 'CRM sync pipeline', 'Finance reconciliation pipeline', 'SharePoint sync pipeline', 'Excel cleanup pipeline', 'Data warehouse sync pipeline'];
   const selectedPipelineBlock = pipelineBlocks.find((block) => block.id === selectedPipelineBlockId) ?? pipelineBlocks[0] ?? null;
+  const allConnectorSources = connectorCategories.flatMap((category) => category.sources);
   const selectedConnectorCategory = connectorCategories.find((category) => category.sources.includes(selectedConnector))?.name ?? 'Databases';
   const pipelineSourceCount = pipelineBlocks.filter((block) => block.type === 'SOURCE').length;
   const primaryPreviewDataset = stagedDataset ?? moduleDatasets[0] ?? null;
   const selectedDatasetDrawer = moduleDatasets.find((dataset) => dataset.id === selectedDatasetDrawerId) ?? null;
   const pipelineHealth = pipelineExecutionLogs.some((log) => log.status === 'failed') ? 'warning' : pipelineExecutionLogs.some((log) => log.status === 'running') ? 'running' : 'healthy';
+  const pipelineEngineeringSteps = ['Load source', 'Preview data', 'Transform', 'Validate', 'Fix issues', 'Destination', 'Execute'];
+  const selectedPipelineIndex = Math.max(0, pipelineBlocks.findIndex((block) => block.id === selectedPipelineBlockId));
 
   function addPipelineBlock(type: string, label: string) {
     const block = {
@@ -6035,6 +6041,70 @@ function ModuleWorkspacePage({
 
   function movePipelineBlock(blockId: string, x: number, y: number) {
     setPipelineBlocks((current) => current.map((block) => block.id === blockId ? { ...block, x: Math.max(0, x), y: Math.max(0, y) } : block));
+  }
+
+  function openPipelineNode(blockId: string) {
+    const block = pipelineBlocks.find((entry) => entry.id === blockId);
+    setSelectedPipelineBlockId(blockId);
+    setPipelineStudioMode('develop');
+    setPipelineInspectorTab('setup');
+    if (block?.type === 'SOURCE') {
+      if (allConnectorSources.includes(block.label)) setSelectedConnector(block.label);
+      setDataSourceType(block.label);
+    }
+    setPipelineSaveState(`${block?.label ?? 'Pipeline node'} inspector opened`);
+    setPipelineExecutionLogs((current) => [{
+      id: `inspect-${Date.now()}`,
+      message: `${block?.label ?? 'Pipeline node'} opened in the engineering inspector.`,
+      status: 'ready',
+      timestamp: new Date().toISOString()
+    }, ...current]);
+  }
+
+  function updatePipelineBlock(blockId: string, patch: Partial<{ label: string; status: string }>) {
+    setPipelineBlocks((current) => current.map((block) => block.id === blockId ? { ...block, ...patch } : block));
+    setPipelineSaveState('Unsaved node changes');
+  }
+
+  function runPipelineBlock(blockId: string) {
+    const block = pipelineBlocks.find((entry) => entry.id === blockId);
+    if (!block) return;
+    setPipelineBlocks((current) => current.map((entry) => entry.id === blockId ? { ...entry, status: 'running' } : entry));
+    setPipelineExecutionLogs((current) => [{
+      id: `node-run-${Date.now()}`,
+      message: `${block.label} started. Preview, schema, row counts, and logs are being generated.`,
+      status: 'running',
+      timestamp: new Date().toISOString()
+    }, ...current]);
+    window.setTimeout(() => {
+      setPipelineBlocks((current) => current.map((entry) => entry.id === blockId ? { ...entry, status: block.type === 'VALIDATE' ? 'warning' : 'completed' } : entry));
+      setPipelineExecutionLogs((current) => [{
+        id: `node-complete-${Date.now()}`,
+        message: `${block.label} ${block.type === 'VALIDATE' ? 'completed with review warnings' : 'completed successfully'}.`,
+        status: block.type === 'VALIDATE' ? 'warning' : 'completed',
+        timestamp: new Date().toISOString()
+      }, ...current]);
+    }, 650);
+  }
+
+  function advancePipelineStep() {
+    setPipelineStepIndex((current) => Math.min(pipelineEngineeringSteps.length - 1, current + 1));
+    const nextBlock = pipelineBlocks[Math.min(pipelineBlocks.length - 1, selectedPipelineIndex + 1)];
+    if (nextBlock) openPipelineNode(nextBlock.id);
+  }
+
+  function openSourceWorkflow(label: string) {
+    if (allConnectorSources.includes(label)) setSelectedConnector(label);
+    setDataSourceType(label);
+    setPipelineInspectorTab('preview');
+    setPipelineStudioMode('preview');
+    setConnectorMessage(`${label} pipeline workflow opened with connection setup, schema discovery, preview, schedule, and logs.`);
+    setPipelineExecutionLogs((current) => [{
+      id: `source-workflow-${Date.now()}`,
+      message: `${label} source workflow opened.`,
+      status: 'ready',
+      timestamp: new Date().toISOString()
+    }, ...current]);
   }
 
   function runPipelineNow() {
@@ -6784,7 +6854,7 @@ function ModuleWorkspacePage({
         </article>
       )}
       {isDataProcessingWorkspace && dataHubTab === 'pipelines' && (
-        <article className="panel data-hub-workspace-panel pipeline-builder-shell">
+        <article className={`panel data-hub-workspace-panel pipeline-builder-shell ${pipelineFullscreen ? 'fullscreen-pipeline' : ''}`}>
           <div className="panel-header">
             <div>
               <p className="eyebrow">MeLai Pipeline Builder</p>
@@ -6800,6 +6870,7 @@ function ModuleWorkspacePage({
               <button type="button" onClick={() => setPipelineExecutionLogs((current) => [{ id: `schedule-${Date.now()}`, message: 'Pipeline scheduled for hourly, daily, weekly, monthly, or triggered runs.', status: 'ready', timestamp: new Date().toISOString() }, ...current])}>Schedule</button>
               <button type="button" onClick={exportPipelineDefinition}>Export Pipeline</button>
               <button type="button" onClick={() => setPipelineStudioMode('monitor')}>Monitor Pipeline</button>
+              <button type="button" onClick={() => setPipelineFullscreen((value) => !value)}>{pipelineFullscreen ? 'Exit fullscreen' : 'Fullscreen'}</button>
               <button className="ghost-button compact" type="button" onClick={retryFailedPipelineStage}>Retry failed</button>
             </div>
           </div>
@@ -6809,6 +6880,19 @@ function ModuleWorkspacePage({
             ))}
             <label>Zoom <input min="60" max="120" type="range" value={pipelineZoom} onChange={(event) => setPipelineZoom(Number(event.target.value))} /></label>
             <span>{pipelineSaveState}</span>
+          </div>
+          <div className="pipeline-step-flow">
+            {pipelineEngineeringSteps.map((step, index) => (
+              <button
+                className={index === pipelineStepIndex ? 'active' : index < pipelineStepIndex ? 'completed' : ''}
+                key={step}
+                type="button"
+                onClick={() => setPipelineStepIndex(index)}
+              >
+                <small>Step {index + 1}</small>
+                <strong>{step}</strong>
+              </button>
+            ))}
           </div>
           <section className="natural-pipeline-builder">
             <div>
@@ -6849,19 +6933,20 @@ function ModuleWorkspacePage({
                     return <line key={`${block.id}-${next.id}`} x1={block.x + 140} y1={block.y + 36} x2={next.x} y2={next.y + 36} />;
                   })}
                 </svg>
-                {pipelineBlocks.map((block) => (
+                {pipelineBlocks.map((block, index) => (
                   <button
                     className={`pipeline-node ${selectedPipelineBlockId === block.id ? 'selected' : ''} ${block.status}`}
                     draggable
                     key={block.id}
                     style={{ left: block.x, top: block.y }}
                     type="button"
-                    onClick={() => setSelectedPipelineBlockId(block.id)}
+                    onClick={() => openPipelineNode(block.id)}
                     onDragEnd={(event) => movePipelineBlock(block.id, event.currentTarget.offsetLeft + event.nativeEvent.offsetX - 70, event.currentTarget.offsetTop + event.nativeEvent.offsetY - 30)}
                   >
                     <small>{block.type}</small>
                     <strong>{block.label}</strong>
                     <span>{block.status}</span>
+                    <em>{displayNumber((index + 1) * 1240)} rows | {(index + 1) * 220}ms</em>
                   </button>
                 ))}
               </div>
@@ -6870,20 +6955,56 @@ function ModuleWorkspacePage({
               <p className="eyebrow">Selected block</p>
               <h3>{selectedPipelineBlock?.label ?? 'No block selected'}</h3>
               <span>{selectedPipelineBlock?.type ?? 'Choose a block'} | version {savedPipelineVersion}</span>
+              {selectedPipelineBlock && (
+                <div className="node-inspector-tabs">
+                  {(['setup', 'preview', 'logs'] as const).map((tab) => (
+                    <button className={pipelineInspectorTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => setPipelineInspectorTab(tab)}>{tab}</button>
+                  ))}
+                </div>
+              )}
+              {selectedPipelineBlock && (
+                <div className="source-specific-config node-edit-panel">
+                  <strong>Node controls</strong>
+                  <input value={selectedPipelineBlock.label} onChange={(event) => updatePipelineBlock(selectedPipelineBlock.id, { label: event.target.value })} />
+                  <select value={selectedPipelineBlock.status} onChange={(event) => updatePipelineBlock(selectedPipelineBlock.id, { status: event.target.value })}>
+                    <option value="idle">idle</option>
+                    <option value="queued">queued</option>
+                    <option value="running">running</option>
+                    <option value="completed">completed</option>
+                    <option value="warning">warning</option>
+                    <option value="failed">failed</option>
+                    <option value="ready">ready</option>
+                  </select>
+                  <div className="inline-actions">
+                    <button type="button" onClick={() => runPipelineBlock(selectedPipelineBlock.id)}>Run node</button>
+                    <button type="button" onClick={advancePipelineStep}>Next step</button>
+                  </div>
+                </div>
+              )}
               {selectedPipelineBlock?.type === 'SOURCE' && (
                 <div className="source-specific-config">
-                  <strong>Connection experience</strong>
+                  <strong>{selectedPipelineBlock.label} source workflow</strong>
                   {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label) ? (
                     <>
-                      <input placeholder="Server / warehouse" />
-                      <input placeholder="Database / schema" />
-                      <input placeholder="Port / role / encryption" />
+                      <input placeholder="Server / warehouse" defaultValue={/SQL Server/i.test(selectedPipelineBlock.label) ? 'sql-prod.company.local' : ''} />
+                      <input placeholder="Database / schema" defaultValue={/SQL Server/i.test(selectedPipelineBlock.label) ? 'OperationsDW' : ''} />
+                      <select><option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option></select>
+                      <textarea placeholder="SQL query editor">SELECT TOP 100 * FROM employee_payroll_source</textarea>
+                      <div className="mini-result-grid"><span>Tables discovered</span><strong>12</strong><span>Preview rows</span><strong>100</strong></div>
                     </>
                   ) : /SharePoint|OneDrive|S3|Azure/i.test(selectedPipelineBlock.label) ? (
                     <>
                       <input placeholder="Site URL / bucket / folder" />
                       <input placeholder="Authentication profile" />
                       <input placeholder="Sync schedule" />
+                      <div className="mini-result-grid"><span>Files found</span><strong>28</strong><span>Auto refresh</span><strong>{sourceConfig.schedule}</strong></div>
+                    </>
+                  ) : /Excel|CSV/i.test(selectedPipelineBlock.label) ? (
+                    <>
+                      <input placeholder="Local or shared file path" />
+                      <select><option>Header row: first row</option><option>Header row: detect automatically</option></select>
+                      <select><option>Delimiter: comma</option><option>Delimiter: tab</option><option>Delimiter: semicolon</option></select>
+                      <button type="button" onClick={() => setFullPreviewOpen(true)} disabled={!primaryPreviewDataset}>Open full-page upload preview</button>
                     </>
                   ) : /REST API/i.test(selectedPipelineBlock.label) ? (
                     <>
@@ -6897,7 +7018,11 @@ function ModuleWorkspacePage({
                       <input placeholder="Worksheet / table preview" />
                     </>
                   )}
-                  <button type="button" onClick={() => testDataSourceConnection(selectedPipelineBlock.label)}>Test connection</button>
+                  <div className="inline-actions">
+                    <button type="button" onClick={() => testDataSourceConnection(selectedPipelineBlock.label)}>Test connection</button>
+                    <button type="button" onClick={() => discoverDataSourceSchema(selectedPipelineBlock.label)}>Discover schema</button>
+                    <button type="button" onClick={() => openSourceWorkflow(selectedPipelineBlock.label)}>Open source workflow</button>
+                  </div>
                   <span>
                     Recommended transformations: {/Excel|CSV/i.test(selectedPipelineBlock.label)
                       ? 'sheet mapping, transpose, pivot, cleanup'
@@ -6914,28 +7039,46 @@ function ModuleWorkspacePage({
                   <strong>{selectedPipelineBlock.type} experience</strong>
                   {/TRANSFORM/i.test(selectedPipelineBlock.type) && (
                     <>
-                      <select><option>{pipelineSourceCount > 1 ? 'Join / merge sources' : selectedPipelineBlock.label}</option><option>Preview before/after</option><option>Generate SQL logic</option></select>
-                      <input placeholder="Join keys / pivot rows / normalize rules" />
+                      <select><option>{pipelineSourceCount > 1 ? 'Join / merge sources' : selectedPipelineBlock.label}</option><option>Normalize columns</option><option>Pivot</option><option>Transpose</option><option>Generate SQL logic</option></select>
+                      <input placeholder="Join keys / pivot rows / normalize rules" defaultValue={/normalize/i.test(selectedPipelineBlock.label) ? 'trim text, title-case names, cast employeeId to string' : ''} />
+                      <div className="before-after-preview">
+                        <div><span>Before</span><code>employee_id, dept, hours_txt</code></div>
+                        <div><span>After</span><code>employeeId, department, hours</code></div>
+                      </div>
                       <button type="button" onClick={() => setFullPreviewOpen(true)}>Open before/after preview</button>
+                      <button type="button" onClick={() => runPipelineBlock(selectedPipelineBlock.id)}>Execute transformation</button>
                     </>
                   )}
                   {/MeLai/i.test(selectedPipelineBlock.type) && (
                     <>
                       <input placeholder="Recommendation goal" defaultValue="Explain anomalies and suggest mappings" />
                       <button type="button" onClick={() => buildAiPipelinePlan(aiCopilotPrompt)}>Generate recommendations</button>
+                      <div className="melai-recommendation-stack">
+                        <span>Detected duplicate Employee IDs.</span>
+                        <span>Recommend datatype normalization before merge.</span>
+                        <span>SQL query optimization available.</span>
+                      </div>
                     </>
                   )}
                   {/VALIDATE/i.test(selectedPipelineBlock.type) && (
                     <>
                       <select><option>Required fields</option><option>Datatype issues</option><option>Schema drift</option><option>Duplicate rows</option></select>
+                      <div className="validation-workbench">
+                        <span>Invalid rows: {primaryPreviewDataset ? validationWarningCount(primaryPreviewDataset) : 0}</span>
+                        <span>Missing values: {getSmartProfile(primaryPreviewDataset).missingPct}%</span>
+                        <span>Duplicates: {getSmartProfile(primaryPreviewDataset).duplicatePct}%</span>
+                      </div>
                       <button type="button" onClick={() => setFullPreviewOpen(true)}>Fix validation issues</button>
+                      <button type="button" onClick={() => runPipelineBlock(selectedPipelineBlock.id)}>Run validation</button>
                     </>
                   )}
                   {/DESTINATION/i.test(selectedPipelineBlock.type) && (
                     <>
-                      <select><option>Workspace dataset</option><option>SQL Server</option><option>Snowflake</option><option>SharePoint</option><option>CSV / Excel</option></select>
-                      <input placeholder="Output name / path / partition" />
+                      <select><option>Workspace dataset</option><option>SQL Server</option><option>Snowflake</option><option>SharePoint</option><option>REST API push</option><option>CSV / Excel</option></select>
+                      <input placeholder="Output name / path / partition" defaultValue={`${selectedCompanyName.replace(/\s+/g, '_')}_pipeline_output_v${savedPipelineVersion}`} />
                       <select><option>Overwrite</option><option>Append</option><option>Version checkpoint</option></select>
+                      <input placeholder="Schedule / partition / timestamp rule" defaultValue={sourceConfig.schedule} />
+                      <button type="button" onClick={() => runPipelineBlock(selectedPipelineBlock.id)}>Configure destination</button>
                     </>
                   )}
                   <div className="execution-transparency">
@@ -6944,7 +7087,7 @@ function ModuleWorkspacePage({
                   </div>
                 </div>
               )}
-              <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.map((block) => block.id === selectedPipelineBlock.id ? { ...block, status: 'failed' } : block))}>Mark failed</button>
+              <button type="button" onClick={() => selectedPipelineBlock && updatePipelineBlock(selectedPipelineBlock.id, { status: 'failed' })}>Mark failed</button>
               <button type="button" onClick={() => selectedPipelineBlock && setPipelineBlocks((current) => current.filter((block) => block.id !== selectedPipelineBlock.id))}>Remove block</button>
             </aside>
           </div>
