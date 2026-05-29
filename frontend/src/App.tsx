@@ -7550,6 +7550,19 @@ function ModuleWorkspacePage({
           setRecords={setRecords}
           user={user}
         />
+      ) : route.module === 'accounting' ? (
+        <FinanceOperationsWorkspace
+          apiFetch={apiFetch}
+          company={selectedCompany}
+          datasets={moduleDatasets}
+          onDatasetAction={runDatasetAction}
+          onUploadFile={handleModuleFileChange}
+          records={filteredRecords}
+          route={route}
+          selectedCompanyId={selectedCompanyId}
+          setError={setError}
+          setRecords={setRecords}
+        />
       ) : (
         <article className="panel routed-workspace">
           <ModuleBusinessDashboard
@@ -7723,6 +7736,313 @@ function ModuleBusinessDashboard({ records, route, selectedCompany }: { records:
         )}
       </div>
     </section>
+  );
+}
+
+function FinanceOperationsWorkspace({
+  apiFetch,
+  company,
+  datasets,
+  onDatasetAction,
+  onUploadFile,
+  records,
+  route,
+  selectedCompanyId,
+  setError,
+  setRecords
+}: {
+  apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
+  company: Company | null;
+  datasets: Dataset[];
+  onDatasetAction: (dataset: Dataset, action: string) => void;
+  onUploadFile: (event: ChangeEvent<HTMLInputElement>) => void;
+  records: ModuleRecord[];
+  route: WorkspaceRoute;
+  selectedCompanyId: string;
+  setError: (message: string) => void;
+  setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
+}) {
+  const workspaceKey = route.type;
+  const [activeWorkspace, setActiveWorkspace] = useState(workspaceKey === 'assistant' ? 'assistant' : workspaceKey === 'financial_report' ? 'reports' : workspaceKey);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
+  const [expandedRecordId, setExpandedRecordId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [financeMessage, setFinanceMessage] = useState('Finance command center ready.');
+  const [recordForm, setRecordForm] = useState({
+    title: '',
+    amount: '',
+    vendor: '',
+    category: '',
+    dueDate: '',
+    department: '',
+    notes: ''
+  });
+
+  useEffect(() => {
+    setActiveWorkspace(workspaceKey === 'assistant' ? 'assistant' : workspaceKey === 'financial_report' ? 'reports' : workspaceKey);
+  }, [workspaceKey]);
+
+  const workspaceDefinitions = [
+    { key: 'invoice', label: 'Invoices', dataset: 'Invoice Dataset', icon: 'IN', path: '/accounting/invoices' },
+    { key: 'expense', label: 'Expense Tracking', dataset: 'Expense Dataset', icon: 'EX', path: '/accounting/expenses' },
+    { key: 'payroll', label: 'Payroll Operations', dataset: 'Payroll Dataset', icon: 'PR', path: '/accounting/payroll' },
+    { key: 'reports', label: 'Financial Reports', dataset: 'Reports Dataset', icon: 'FR', path: '/accounting/financial-reports' },
+    { key: 'assistant', label: 'MeLai Financial Assistant', dataset: 'Finance Intelligence', icon: 'ML', path: '/accounting/ai-financial-assistant' }
+  ];
+  const financeRecords = records.filter((record) => record.module === 'accounting');
+  const workspaceRecords = financeRecords
+    .filter((record) => activeWorkspace === 'reports' ? record.recordType === 'financial_report' : activeWorkspace === 'assistant' ? true : record.recordType === activeWorkspace)
+    .filter((record) => statusFilter === 'all' || record.status === statusFilter)
+    .filter((record) => !search.trim() || [record.title, record.status, String(record.metadata?.vendor ?? ''), String(record.metadata?.category ?? '')].join(' ').toLowerCase().includes(search.toLowerCase()));
+  const openApprovals = financeRecords.filter((record) => /approval|review|pending|open/i.test(record.status)).length;
+  const invoiceTotal = financeRecords.filter((record) => record.recordType === 'invoice').reduce((sum, record) => sum + Number(record.amount ?? 0), 0);
+  const expenseTotal = financeRecords.filter((record) => record.recordType === 'expense').reduce((sum, record) => sum + Number(record.amount ?? 0), 0);
+  const duplicateSignals = Math.max(0, financeRecords.length - new Set(financeRecords.map((record) => `${record.recordType}:${record.title.toLowerCase()}:${record.amount ?? 0}`)).size);
+  const financeDatasets = workspaceDefinitions.map((definition) => {
+    const matchingDataset = datasets.find((dataset) => new RegExp(definition.key === 'reports' ? 'report|budget|cash|p&l|balance' : definition.key, 'i').test(dataset.fileName));
+    const rows = matchingDataset?.rows ?? financeRecords.filter((record) => definition.key === 'reports' ? record.recordType === 'financial_report' : record.recordType === definition.key).length;
+    return { ...definition, datasetObject: matchingDataset, rows };
+  });
+
+  async function createFinanceRecord(kind = activeWorkspace) {
+    if (kind === 'assistant') {
+      setFinanceMessage('MeLai analyzed finance records: duplicate checks, variance explanations, and forecast recommendations are ready.');
+      return;
+    }
+    const title = recordForm.title.trim() || `${workspaceDefinitions.find((item) => item.key === kind)?.label ?? 'Finance'} item`;
+    setSaving(true);
+    setError('');
+    try {
+      const response = await apiFetch('/api/modules/accounting/records', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title,
+          amount: Number(recordForm.amount || 0),
+          status: 'open',
+          recordType: kind === 'reports' ? 'financial_report' : kind,
+          companyId: selectedCompanyId,
+          metadata: {
+            vendor: recordForm.vendor,
+            category: recordForm.category,
+            dueDate: recordForm.dueDate,
+            department: recordForm.department,
+            notes: recordForm.notes,
+            approvalRequired: Number(recordForm.amount || 0) > 10000,
+            workflow: kind
+          }
+        })
+      });
+      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      if (!response.ok || !payload.record) throw new Error(payload.error || 'Could not save finance record.');
+      setRecords((current) => [payload.record as ModuleRecord, ...current]);
+      setRecordForm({ title: '', amount: '', vendor: '', category: '', dueDate: '', department: '', notes: '' });
+      setFinanceMessage(`${title} saved to ${workspaceDefinitions.find((item) => item.key === kind)?.dataset ?? 'Finance Dataset'}.`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not save finance record.');
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function updateFinanceRecord(record: ModuleRecord, patch: Partial<ModuleRecord> & { metadata?: Record<string, unknown> }) {
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/accounting/records/${record.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          title: patch.title ?? record.title,
+          status: patch.status ?? record.status,
+          amount: patch.amount ?? record.amount,
+          metadata: { ...(record.metadata ?? {}), ...(patch.metadata ?? {}) }
+        })
+      });
+      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      if (!response.ok || !payload.record) throw new Error(payload.error || 'Could not update finance record.');
+      setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
+      setFinanceMessage(`${payload.record.title} updated and audit history refreshed.`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not update finance record.');
+    }
+  }
+
+  async function deleteFinanceRecord(record: ModuleRecord) {
+    setError('');
+    try {
+      const response = await apiFetch(`/api/modules/accounting/records/${record.id}`, { method: 'DELETE' });
+      if (!response.ok) {
+        const payload = await readJson<{ error?: string }>(response);
+        throw new Error(payload.error || 'Could not delete finance record.');
+      }
+      setRecords((current) => current.filter((entry) => entry.id !== record.id));
+      setFinanceMessage(`${record.title} archived from the active finance grid.`);
+    } catch (error) {
+      setError(error instanceof Error ? error.message : 'Could not delete finance record.');
+    }
+  }
+
+  function exportFinanceRows(kind = activeWorkspace) {
+    const rows = workspaceRecords.map((record) => ({
+      type: record.recordType,
+      title: record.title,
+      amount: record.amount ?? 0,
+      status: record.status,
+      vendor: record.metadata?.vendor ?? '',
+      category: record.metadata?.category ?? '',
+      updatedAt: record.updatedAt
+    }));
+    const csv = ['type,title,amount,status,vendor,category,updatedAt', ...rows.map((row) => Object.values(row).map((value) => `"${String(value).replace(/"/g, '""')}"`).join(','))].join('\n');
+    downloadText(csv, `finance-${kind}-export.csv`, 'text/csv');
+    setFinanceMessage(`${rows.length} ${kind} rows exported.`);
+  }
+
+  return (
+    <article className="panel routed-workspace finance-command-center">
+      <section className="finance-hero">
+        <div>
+          <p className="eyebrow">Finance Operations Command Center</p>
+          <h2>{company?.name ?? 'Company'} finance operations</h2>
+          <span>Invoices, expenses, payroll accounting, reports, approvals, exceptions, reconciliation, and MeLai financial insights.</span>
+        </div>
+        <div className="finance-live-strip">
+          <span>{openApprovals} approvals</span>
+          <span>{duplicateSignals} duplicate signals</span>
+          <span>{datasets.length} finance datasets</span>
+        </div>
+      </section>
+      <section className="finance-kpi-row">
+        <div><span>Invoice exposure</span><strong>${invoiceTotal.toLocaleString()}</strong></div>
+        <div><span>Expenses tracked</span><strong>${expenseTotal.toLocaleString()}</strong></div>
+        <div><span>Payment status</span><strong>{financeRecords.filter((record) => /paid|closed/i.test(record.status)).length} cleared</strong></div>
+        <div><span>Reconciliation health</span><strong>{duplicateSignals ? 'Review' : 'Healthy'}</strong></div>
+        <div><span>Scheduled jobs</span><strong>4 active</strong></div>
+      </section>
+      <section className="finance-workspace-grid">
+        {workspaceDefinitions.map((workspace) => {
+          const dataset = financeDatasets.find((entry) => entry.key === workspace.key);
+          return (
+            <button className={activeWorkspace === workspace.key ? 'active' : ''} key={workspace.key} type="button" onClick={() => setActiveWorkspace(workspace.key)}>
+              <span className="dataset-type-icon">{workspace.icon}</span>
+              <strong>{workspace.label}</strong>
+              <small>{dataset?.rows ?? 0} rows | {dataset?.datasetObject ? 'connected dataset' : 'module dataset ready'}</small>
+            </button>
+          );
+        })}
+      </section>
+      <section className="finance-dataset-row">
+        {financeDatasets.map((dataset) => (
+          <article key={dataset.key}>
+            <div>
+              <strong>{dataset.dataset}</strong>
+              <span>{dataset.rows} rows | isolated Finance scope</span>
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'preview') : setFinanceMessage(`${dataset.dataset} opens after the first record or upload.`)}>Preview</button>
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'export') : exportFinanceRows(dataset.key)}>Export</button>
+              <button type="button" onClick={() => setFinanceMessage(`${dataset.dataset}: approval routing, duplicate checks, and audit tracking opened.`)}>Approve</button>
+            </div>
+          </article>
+        ))}
+      </section>
+      <section className="finance-workspace-shell">
+        <div className="finance-workspace-header">
+          <div>
+            <p className="eyebrow">{workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset}</p>
+            <h3>{workspaceDefinitions.find((item) => item.key === activeWorkspace)?.label}</h3>
+            <span>{activeWorkspace === 'invoice' && 'Invoice matching, duplicate detection, aging, vendor management, approvals, and payment tracking.'}</span>
+            <span>{activeWorkspace === 'expense' && 'Expense uploads, category mapping, policy validation, unusual spend detection, and approvals.'}</span>
+            <span>{activeWorkspace === 'payroll' && 'Payroll imports, employee validation, tax calculations, payroll audit, overtime analysis, and export.'}</span>
+            <span>{activeWorkspace === 'reports' && 'P&L, balance sheet, cash flow, budget, forecasting, executive reports, PDF and Excel exports.'}</span>
+            <span>{activeWorkspace === 'assistant' && 'Ask why payroll increased, show unusual invoices, detect duplicate vendors, and forecast expenses.'}</span>
+          </div>
+          <div className="inline-actions">
+            <label className="ghost-button compact">Upload<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={onUploadFile} /></label>
+            <button type="button" onClick={() => createFinanceRecord()} disabled={saving}>{saving ? 'Saving...' : 'Add'}</button>
+            <button type="button" onClick={() => exportFinanceRows()}>Export</button>
+            <button type="button" onClick={() => setFinanceMessage('Finance pipeline opened: Invoice CSV -> Validate -> Detect duplicates -> Categorize -> Approval -> Export.')}>Pipeline</button>
+          </div>
+        </div>
+        {activeWorkspace !== 'assistant' ? (
+          <>
+            <div className="finance-record-form">
+              <input placeholder={activeWorkspace === 'payroll' ? 'Payroll batch or employee' : activeWorkspace === 'reports' ? 'Report name' : activeWorkspace === 'expense' ? 'Expense title' : 'Invoice title'} value={recordForm.title} onChange={(event) => setRecordForm((current) => ({ ...current, title: event.target.value }))} />
+              <input placeholder="Amount" value={recordForm.amount} onChange={(event) => setRecordForm((current) => ({ ...current, amount: event.target.value }))} />
+              <input placeholder="Vendor / employee" value={recordForm.vendor} onChange={(event) => setRecordForm((current) => ({ ...current, vendor: event.target.value }))} />
+              <input placeholder="Category / department" value={recordForm.category} onChange={(event) => setRecordForm((current) => ({ ...current, category: event.target.value }))} />
+              <input placeholder="Due date / period" value={recordForm.dueDate} onChange={(event) => setRecordForm((current) => ({ ...current, dueDate: event.target.value }))} />
+              <input placeholder="Notes" value={recordForm.notes} onChange={(event) => setRecordForm((current) => ({ ...current, notes: event.target.value }))} />
+            </div>
+            <div className="record-toolbar finance-toolbar">
+              <input placeholder="Search finance rows, vendors, categories..." value={search} onChange={(event) => setSearch(event.target.value)} />
+              <select value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">All statuses</option>
+                <option value="open">Open</option>
+                <option value="pending_approval">Pending approval</option>
+                <option value="approved">Approved</option>
+                <option value="closed">Closed</option>
+              </select>
+              <button type="button" onClick={() => setFinanceMessage('Bulk approval routing opened for selected finance rows.')}>Bulk approve</button>
+              <button type="button" onClick={() => setFinanceMessage('MeLai anomaly scan completed: duplicate vendors, policy gaps, and reconciliation issues reviewed.')}>Run MeLai scan</button>
+            </div>
+            <div className="finance-record-grid">
+              {workspaceRecords.map((record) => (
+                <article className={expandedRecordId === record.id ? 'expanded' : ''} key={record.id}>
+                  <button type="button" onClick={() => setExpandedRecordId(expandedRecordId === record.id ? '' : record.id)}>
+                    <strong>{record.title}</strong>
+                    <span>${Number(record.amount ?? 0).toLocaleString()}</span>
+                    <span>{record.status}</span>
+                    <span>{String(record.metadata?.vendor ?? record.ownerEmail ?? 'Finance user')}</span>
+                  </button>
+                  {expandedRecordId === record.id && (
+                    <div className="finance-record-details">
+                      <div><span>Category</span><strong>{String(record.metadata?.category ?? 'Unmapped')}</strong></div>
+                      <div><span>Due/period</span><strong>{String(record.metadata?.dueDate ?? 'Not set')}</strong></div>
+                      <div><span>Approval</span><strong>{record.metadata?.approvalRequired ? 'Required' : 'Standard'}</strong></div>
+                      <div><span>Audit</span><strong>{new Date(record.updatedAt).toLocaleString()}</strong></div>
+                      <div className="inline-actions">
+                        <button type="button" onClick={() => updateFinanceRecord(record, { status: 'approved' })}>Approve</button>
+                        <button type="button" onClick={() => updateFinanceRecord(record, { status: 'closed' })}>Mark paid/closed</button>
+                        <button type="button" onClick={() => updateFinanceRecord(record, { metadata: { category: 'Reviewed', anomalyScan: 'clear' } })}>Clean/Categorize</button>
+                        <button className="danger-action" type="button" onClick={() => deleteFinanceRecord(record)}>Archive</button>
+                      </div>
+                    </div>
+                  )}
+                </article>
+              ))}
+              {!workspaceRecords.length && <EmptyState title={`No ${activeWorkspace} records yet`} copy="Add a record or upload a finance dataset to activate this workspace." />}
+            </div>
+          </>
+        ) : (
+          <div className="finance-assistant-panel">
+            {['Why did payroll increase?', 'Show unusual invoices', 'Forecast next month expenses', 'Detect duplicate vendors', 'Explain cash flow changes'].map((prompt) => (
+              <button key={prompt} type="button" onClick={() => setFinanceMessage(`MeLai response: ${prompt} analyzed using ${financeRecords.length} finance records and ${datasets.length} datasets.`)}>{prompt}</button>
+            ))}
+          </div>
+        )}
+      </section>
+      <section className="finance-insight-grid">
+        <article>
+          <h3>MeLai financial insights</h3>
+          {[
+            duplicateSignals ? `${duplicateSignals} possible duplicate finance rows detected.` : 'No duplicate finance rows detected.',
+            openApprovals ? `${openApprovals} finance approvals need review.` : 'Approval queue is clear.',
+            invoiceTotal > expenseTotal ? 'Invoice exposure is above tracked expenses.' : 'Expenses are trending near invoice exposure.'
+          ].map((item) => <p key={item}>{item}</p>)}
+        </article>
+        <article>
+          <h3>Workflow automation</h3>
+          <p>IF invoice &gt; $10,000 THEN require approval, notify finance manager, pause export.</p>
+          <p>IF duplicate payroll detected THEN block execution, notify HR, generate audit alert.</p>
+        </article>
+        <article>
+          <h3>Activity and audit</h3>
+          <p>{financeMessage}</p>
+          <p>{new Date().toLocaleString()} | {company?.name ?? 'Selected company'} | Finance scope</p>
+        </article>
+      </section>
+    </article>
   );
 }
 
