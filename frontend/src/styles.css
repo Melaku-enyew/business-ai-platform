@@ -2950,6 +2950,96 @@ th {
   padding: 10px;
 }
 
+.finance-import-pipeline,
+.finance-dataset-preview-card {
+  display: grid;
+  gap: 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 26%, var(--line));
+  border-radius: 10px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--accent-wash) 38%, var(--panel)), var(--panel));
+  box-shadow: var(--shadow-soft);
+  padding: 10px;
+}
+
+.finance-workspace-header.compact {
+  align-items: flex-start;
+}
+
+.finance-step-rail {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
+  gap: 6px;
+}
+
+.finance-step-rail button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--panel);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 9px;
+}
+
+.finance-step-rail button span {
+  display: inline-grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 999px;
+  background: var(--panel-strong);
+  color: var(--heading);
+  font-size: 11px;
+}
+
+.finance-step-rail button.active,
+.finance-step-rail button.ready:hover {
+  border-color: color-mix(in srgb, var(--accent) 46%, var(--line));
+  background: var(--accent-wash);
+  color: var(--accent-text);
+}
+
+.compact-preview-table {
+  overflow: auto;
+  max-height: 220px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.compact-preview-row {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(120px, 1fr));
+  min-width: 720px;
+}
+
+.compact-preview-row span {
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 720;
+  padding: 6px 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.compact-preview-row.header {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--panel-strong);
+}
+
+.compact-preview-row.header span {
+  color: var(--heading);
+  font-weight: 950;
+}
+
 .finance-kpi-row strong {
   color: var(--heading);
   font-size: 18px;

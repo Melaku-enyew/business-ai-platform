@@ -5697,7 +5697,7 @@ function ModuleWorkspacePage({
     }
   }
 
-  async function handleModuleUpload(file: File) {
+  async function handleModuleUpload(file: File, workspaceOverride = route.type) {
     if (isDataProcessingWorkspace && dataSourceType !== 'Local CSV/XLSX Upload') {
       setError('Choose Local CSV/XLSX Upload as the source before selecting a file.');
       setIngestionStep('source');
@@ -5713,7 +5713,7 @@ function ModuleWorkspacePage({
     setProcessingAction('');
     try {
       window.setTimeout(() => setUploadProgress(48), 120);
-      const dataset = await uploadDataset(file, undefined, selectedCompanyId, route.module, route.type);
+      const dataset = await uploadDataset(file, undefined, selectedCompanyId, route.module, workspaceOverride);
       if (!dataset) {
         throw new Error(`Upload failed for ${file.name}. Review the upload status above for the exact validation, parser, authorization, CSRF/session, or persistence error.`);
       }
@@ -5751,6 +5751,10 @@ function ModuleWorkspacePage({
     const file = event.target.files?.[0];
     if (file) void handleModuleUpload(file);
     event.target.value = '';
+  }
+
+  function handleWorkspaceFileUpload(file: File, workspace: string) {
+    void handleModuleUpload(file, workspace);
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -7600,8 +7604,10 @@ function ModuleWorkspacePage({
           apiFetch={apiFetch}
           company={selectedCompany}
           datasets={moduleDatasets}
+          deleteDatasetRecord={deleteDatasetRecord}
           onDatasetAction={runDatasetAction}
-          onUploadFile={handleModuleFileChange}
+          onSaveDatasetRows={saveDatasetRows}
+          onUploadWorkspace={handleWorkspaceFileUpload}
           records={filteredRecords}
           route={route}
           selectedCompanyId={selectedCompanyId}
@@ -7932,8 +7938,10 @@ function FinanceOperationsWorkspace({
   apiFetch,
   company,
   datasets,
+  deleteDatasetRecord,
   onDatasetAction,
-  onUploadFile,
+  onSaveDatasetRows,
+  onUploadWorkspace,
   records,
   route,
   selectedCompanyId,
@@ -7943,8 +7951,10 @@ function FinanceOperationsWorkspace({
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
   company: Company | null;
   datasets: Dataset[];
+  deleteDatasetRecord: (dataset: Dataset | null) => void;
   onDatasetAction: (dataset: Dataset, action: string) => void;
-  onUploadFile: (event: ChangeEvent<HTMLInputElement>) => void;
+  onSaveDatasetRows: (dataset: Dataset, records: Record<string, string>[]) => Promise<void>;
+  onUploadWorkspace: (file: File, workspace: string) => void;
   records: ModuleRecord[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
@@ -7979,6 +7989,16 @@ function FinanceOperationsWorkspace({
     { key: 'reports', label: 'Financial Reports', dataset: 'Reports Dataset', icon: 'FR', path: '/accounting/financial-reports' },
     { key: 'assistant', label: 'MeLai Financial Assistant', dataset: 'Finance Intelligence', icon: 'ML', path: '/accounting/ai-financial-assistant' }
   ];
+  const workspaceDatasetType = (key: string) => key === 'reports' ? 'financial_report' : key;
+  const financeWorkspaceForDataset = (dataset: Dataset) => String(dataset.workspace ?? '').toLowerCase();
+  const financeDatasetMatches = (dataset: Dataset, key: string) => {
+    const workspace = financeWorkspaceForDataset(dataset);
+    const type = workspaceDatasetType(key);
+    const fileName = String(dataset.fileName ?? dataset.name ?? '').toLowerCase();
+    if (String(dataset.module ?? '').toLowerCase() === 'accounting' && workspace === type) return true;
+    if (key === 'reports') return /\b(report|budget|cash|p&l|balance|statement)\b/.test(fileName);
+    return new RegExp(`\\b${key}\\b`, 'i').test(fileName);
+  };
   const financeRecords = records.filter((record) => record.module === 'accounting');
   const workspaceRecords = financeRecords
     .filter((record) => activeWorkspace === 'reports' ? record.recordType === 'financial_report' : activeWorkspace === 'assistant' ? true : record.recordType === activeWorkspace)
@@ -7989,10 +8009,31 @@ function FinanceOperationsWorkspace({
   const expenseTotal = financeRecords.filter((record) => record.recordType === 'expense').reduce((sum, record) => sum + Number(record.amount ?? 0), 0);
   const duplicateSignals = Math.max(0, financeRecords.length - new Set(financeRecords.map((record) => `${record.recordType}:${record.title.toLowerCase()}:${record.amount ?? 0}`)).size);
   const financeDatasets = workspaceDefinitions.map((definition) => {
-    const matchingDataset = datasets.find((dataset) => new RegExp(definition.key === 'reports' ? 'report|budget|cash|p&l|balance' : definition.key, 'i').test(dataset.fileName));
+    const matchingDataset = datasets.find((dataset) => financeDatasetMatches(dataset, definition.key));
     const rows = matchingDataset?.rows ?? financeRecords.filter((record) => definition.key === 'reports' ? record.recordType === 'financial_report' : record.recordType === definition.key).length;
     return { ...definition, datasetObject: matchingDataset, rows };
   });
+  const activeDatasetType = workspaceDatasetType(activeWorkspace);
+  const activeWorkspaceDatasets = datasets.filter((dataset) => financeDatasetMatches(dataset, activeWorkspace));
+  const primaryFinanceDataset = activeWorkspaceDatasets[0] ?? null;
+  const primaryFinanceRows = datasetPreview(primaryFinanceDataset).slice(0, 8);
+  const primaryFinanceHeaders = primaryFinanceDataset ? getPreviewHeaders(primaryFinanceDataset, primaryFinanceRows).slice(0, 6) : [];
+
+  function uploadFinanceWorkspaceFile(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (file) {
+      onUploadWorkspace(file, activeDatasetType);
+      setFinanceMessage(`${file.name} is uploading into ${workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset ?? 'Finance Dataset'}.`);
+    }
+    event.target.value = '';
+  }
+
+  async function addBlankDatasetRow(dataset: Dataset) {
+    const headers = getPreviewHeaders(dataset, datasetPreview(dataset));
+    const blank = Object.fromEntries(headers.map((header) => [header, '']));
+    await onSaveDatasetRows(dataset, [...datasetPreview(dataset), blank]);
+    setFinanceMessage(`Blank row added to ${dataset.fileName}. Double click cells in the preview drawer to finish edits.`);
+  }
 
   async function createFinanceRecord(kind = activeWorkspace) {
     if (kind === 'assistant') {
@@ -8098,7 +8139,7 @@ function FinanceOperationsWorkspace({
         <div className="finance-live-strip">
           <span>{openApprovals} approvals</span>
           <span>{duplicateSignals} duplicate signals</span>
-          <span>{datasets.length} finance datasets</span>
+          <span>{datasets.filter((dataset) => String(dataset.module ?? '').toLowerCase() === 'accounting').length} finance datasets</span>
         </div>
       </section>
       <section className="finance-kpi-row">
@@ -8113,24 +8154,88 @@ function FinanceOperationsWorkspace({
           const dataset = financeDatasets.find((entry) => entry.key === workspace.key);
           return (
             <button className={activeWorkspace === workspace.key ? 'active' : ''} key={workspace.key} type="button" onClick={() => setActiveWorkspace(workspace.key)}>
-              <span className="dataset-type-icon">{workspace.icon}</span>
+            <span className="dataset-type-icon">{workspace.icon}</span>
               <strong>{workspace.label}</strong>
-              <small>{dataset?.rows ?? 0} rows | {dataset?.datasetObject ? 'connected dataset' : 'module dataset ready'}</small>
+              <small>{dataset?.rows ?? 0} rows | {dataset?.datasetObject ? 'connected dataset' : 'empty dataset ready'}</small>
             </button>
           );
         })}
+      </section>
+      <section className="finance-import-pipeline">
+        <div className="finance-workspace-header compact">
+          <div>
+            <p className="eyebrow">Finance dataset workflow</p>
+            <h3>{workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset} import center</h3>
+            <span>Upload, preview, validate, modify, approve, export, or remove the active finance dataset without leaving this workspace.</span>
+          </div>
+          <div className="inline-actions">
+            <label className="ghost-button compact">Upload new<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'preview')}>Preview</button>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'validate')}>Validate</button>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'edit')}>Modify</button>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'approve')}>Approve</button>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'export')}>Export</button>
+            <button className="danger-action" type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && deleteDatasetRecord(primaryFinanceDataset)}>Delete</button>
+          </div>
+        </div>
+        <div className="finance-step-rail">
+          {['Uploaded', 'Preview', 'Validate', 'Modify', 'Approve', 'Export'].map((step, index) => (
+            <button
+              className={primaryFinanceDataset && index === 0 ? 'active' : primaryFinanceDataset ? 'ready' : ''}
+              disabled={!primaryFinanceDataset && index > 0}
+              key={step}
+              type="button"
+              onClick={() => {
+                if (!primaryFinanceDataset) return;
+                const action = step === 'Preview' ? 'preview' : step === 'Validate' ? 'validate' : step === 'Modify' ? 'edit' : step === 'Approve' ? 'approve' : step === 'Export' ? 'export' : 'open';
+                onDatasetAction(primaryFinanceDataset, action);
+              }}
+            >
+              <span>{index + 1}</span>{step}
+            </button>
+          ))}
+        </div>
+        {primaryFinanceDataset ? (
+          <div className="finance-dataset-preview-card">
+            <div>
+              <strong>{primaryFinanceDataset.fileName}</strong>
+              <span>{primaryFinanceDataset.rows} rows | {primaryFinanceDataset.columns} columns | {primaryFinanceDataset.status ?? primaryFinanceDataset.cleanupStatus ?? 'uploaded'} | workspace: {primaryFinanceDataset.workspace ?? activeDatasetType}</span>
+            </div>
+            <div className="compact-preview-table">
+              <div className="compact-preview-row header">
+                {primaryFinanceHeaders.map((header) => <span key={header}>{header}</span>)}
+              </div>
+              {primaryFinanceRows.slice(0, 5).map((row, rowIndex) => (
+                <div className="compact-preview-row" key={`${primaryFinanceDataset.id}-${rowIndex}`}>
+                  {primaryFinanceHeaders.map((header) => <span key={header}>{String(row[header] ?? '')}</span>)}
+                </div>
+              ))}
+              {!primaryFinanceRows.length && <p className="persistence-note">Dataset is registered. Open Modify to add or edit rows.</p>}
+            </div>
+            <div className="inline-actions">
+              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'clean')}>Clean duplicates</button>
+              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'history')}>History</button>
+              <button type="button" onClick={() => void addBlankDatasetRow(primaryFinanceDataset)}>Add row</button>
+            </div>
+          </div>
+        ) : (
+          <EmptyState title={`No ${workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset} uploaded yet`} copy="Upload a finance file here. It will remain attached to this workspace after refresh and login." />
+        )}
       </section>
       <section className="finance-dataset-row">
         {financeDatasets.map((dataset) => (
           <article key={dataset.key}>
             <div>
               <strong>{dataset.dataset}</strong>
-              <span>{dataset.rows} rows | isolated Finance scope</span>
+              <span>{dataset.datasetObject ? `${dataset.rows} rows | ${dataset.datasetObject.status ?? dataset.datasetObject.cleanupStatus ?? 'uploaded'}` : 'Ready for upload'} | isolated Finance scope</span>
             </div>
             <div className="inline-actions">
               <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'preview') : setFinanceMessage(`${dataset.dataset} opens after the first record or upload.`)}>Preview</button>
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'edit') : setFinanceMessage(`Upload or add a row to activate ${dataset.dataset}.`)}>Edit</button>
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'validate') : setFinanceMessage(`Validation will run after ${dataset.dataset} has rows.`)}>Validate</button>
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'clean') : setFinanceMessage(`Cleanup will run after ${dataset.dataset} has rows.`)}>Clean</button>
               <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'export') : exportFinanceRows(dataset.key)}>Export</button>
-              <button type="button" onClick={() => setFinanceMessage(`${dataset.dataset}: approval routing, duplicate checks, and audit tracking opened.`)}>Approve</button>
+              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'approve') : setFinanceMessage(`${dataset.dataset}: approval routing activates after upload.`)}>Approve</button>
             </div>
           </article>
         ))}
@@ -8147,7 +8252,7 @@ function FinanceOperationsWorkspace({
             <span>{activeWorkspace === 'assistant' && 'Ask why payroll increased, show unusual invoices, detect duplicate vendors, and forecast expenses.'}</span>
           </div>
           <div className="inline-actions">
-            <label className="ghost-button compact">Upload<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={onUploadFile} /></label>
+            <label className="ghost-button compact">Upload<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
             <button type="button" onClick={() => createFinanceRecord()} disabled={saving}>{saving ? 'Saving...' : 'Add'}</button>
             <button type="button" onClick={() => exportFinanceRows()}>Export</button>
             <button type="button" onClick={() => setFinanceMessage('Finance pipeline opened: Invoice CSV -> Validate -> Detect duplicates -> Categorize -> Approval -> Export.')}>Pipeline</button>
