@@ -6024,6 +6024,17 @@ function ModuleWorkspacePage({
   const pipelineHealth = pipelineExecutionLogs.some((log) => log.status === 'failed') ? 'warning' : pipelineExecutionLogs.some((log) => log.status === 'running') ? 'running' : 'healthy';
   const pipelineEngineeringSteps = ['Load source', 'Preview data', 'Transform', 'Validate', 'Fix issues', 'Destination', 'Execute'];
   const selectedPipelineIndex = Math.max(0, pipelineBlocks.findIndex((block) => block.id === selectedPipelineBlockId));
+  const sourceTransformationOptions = selectedPipelineBlock?.type === 'SOURCE'
+    ? /Excel|CSV/i.test(selectedPipelineBlock.label)
+      ? ['Sheet mapping', 'Header detection', 'Transpose', 'Pivot', 'Unpivot', 'Fill missing values', 'Remove duplicates', 'Datatype mapping']
+      : /(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label)
+        ? ['Select columns', 'SQL query', 'Join', 'Normalize datatypes', 'Aggregate', 'Filter rows', 'Schema validation', 'Business rules']
+        : /SharePoint|OneDrive|S3|Azure/i.test(selectedPipelineBlock.label)
+          ? ['File discovery', 'Sheet mapping', 'Append files', 'Normalize names', 'Deduplicate files', 'Schedule sync', 'Schema validation']
+          : /REST API/i.test(selectedPipelineBlock.label)
+            ? ['Pagination mapping', 'Flatten JSON', 'Split columns', 'Type conversion', 'Required fields', 'API retry rules']
+            : ['Normalize', 'Remove duplicates', 'Column matching', 'Schema validation', 'MeLai recommendations']
+    : [];
 
   function addPipelineBlock(type: string, label: string) {
     const block = {
@@ -6037,6 +6048,34 @@ function ModuleWorkspacePage({
     setPipelineBlocks((current) => [...current, block]);
     setSelectedPipelineBlockId(block.id);
     setPipelineExecutionLogs((current) => [{ id: `log-${Date.now()}`, message: `${label} block added to the pipeline canvas.`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function addSourceTransformation(label: string) {
+    const isValidation = /validation|required|business rules|retry/i.test(label);
+    const isMeLai = /MeLai|Column matching/i.test(label);
+    addPipelineBlock(isMeLai ? 'MELAI' : isValidation ? 'VALIDATION' : 'TRANSFORM', label);
+    setPipelineStepIndex(isValidation ? 3 : 2);
+    setPipelineExecutionLogs((current) => [{
+      id: `source-transform-${Date.now()}`,
+      message: `${label} added from ${selectedPipelineBlock?.label ?? 'source'} recommendations.`,
+      status: 'ready',
+      timestamp: new Date().toISOString()
+    }, ...current]);
+  }
+
+  function runSourceWorkflowAction(action: string) {
+    const source = selectedPipelineBlock?.label ?? dataSourceType ?? 'Selected source';
+    setPipelineInspectorTab(action === 'Preview results' || action === 'Preview upload' ? 'preview' : action === 'View logs' ? 'logs' : 'setup');
+    if (/connection|auth/i.test(action)) testDataSourceConnection(source);
+    if (/schema|tables|files|folder/i.test(action)) discoverDataSourceSchema(source);
+    if (/preview|query/i.test(action)) setPipelineStudioMode('preview');
+    setPipelineExecutionLogs((current) => [{
+      id: `source-action-${Date.now()}`,
+      message: `${source}: ${action} opened.`,
+      status: 'completed',
+      timestamp: new Date().toISOString()
+    }, ...current]);
+    setPipelineSaveState(`${source}: ${action}`);
   }
 
   function movePipelineBlock(blockId: string, x: number, y: number) {
@@ -6984,6 +7023,20 @@ function ModuleWorkspacePage({
               {selectedPipelineBlock?.type === 'SOURCE' && (
                 <div className="source-specific-config">
                   <strong>{selectedPipelineBlock.label} source workflow</strong>
+                  <div className="source-workflow-actions">
+                    {(/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label)
+                      ? ['Configure auth', 'Browse tables', 'Open query editor', 'Preview results', 'View logs']
+                      : /SharePoint|OneDrive|S3|Azure/i.test(selectedPipelineBlock.label)
+                        ? ['Configure auth', 'Browse folders', 'Discover files', 'Schedule sync', 'Preview results']
+                        : /Excel|CSV/i.test(selectedPipelineBlock.label)
+                          ? ['Upload file', 'Detect worksheet', 'Map headers', 'Preview upload', 'View logs']
+                          : /REST API/i.test(selectedPipelineBlock.label)
+                            ? ['Configure auth', 'Test endpoint', 'Map pagination', 'Preview results', 'View logs']
+                            : ['Configure source', 'Discover schema', 'Preview results', 'View logs']
+                    ).map((action) => (
+                      <button key={action} type="button" onClick={() => runSourceWorkflowAction(action)}>{action}</button>
+                    ))}
+                  </div>
                   {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label) ? (
                     <>
                       <input placeholder="Server / warehouse" defaultValue={/SQL Server/i.test(selectedPipelineBlock.label) ? 'sql-prod.company.local' : ''} />
@@ -7001,6 +7054,17 @@ function ModuleWorkspacePage({
                     </>
                   ) : /Excel|CSV/i.test(selectedPipelineBlock.label) ? (
                     <>
+                      <label
+                        className="pipeline-upload-drop"
+                        onClick={() => {
+                          setDataSourceType('Local CSV/XLSX Upload');
+                          setPipelineInspectorTab('preview');
+                        }}
+                      >
+                        <strong>Drag/drop or choose CSV/XLSX</strong>
+                        <span>Upload, detect worksheet, map datatypes, then add Excel transformations.</span>
+                        <input accept=".csv,.xlsx,.xls,.json" type="file" onChange={handleModuleFileChange} />
+                      </label>
                       <input placeholder="Local or shared file path" />
                       <select><option>Header row: first row</option><option>Header row: detect automatically</option></select>
                       <select><option>Delimiter: comma</option><option>Delimiter: tab</option><option>Delimiter: semicolon</option></select>
@@ -7032,6 +7096,14 @@ function ModuleWorkspacePage({
                           ? 'reconciliation, invoice grouping, currency normalization'
                           : 'schema validation, type conversion, MeLai recommendations'}
                   </span>
+                  <div className="source-transform-chooser">
+                    <strong>Choose transformations for this source</strong>
+                    <div>
+                      {sourceTransformationOptions.map((option) => (
+                        <button key={option} type="button" onClick={() => addSourceTransformation(option)}>{option}</button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
               )}
               {selectedPipelineBlock && /TRANSFORM|MeLai|VALIDATE|DESTINATION/i.test(selectedPipelineBlock.type) && (
