@@ -22,6 +22,15 @@ type Workflow = {
 type Dataset = {
   id: string;
   name?: string;
+  module?: string;
+  workspace?: string;
+  datasetStatus?: string;
+  version?: number;
+  versionHistory?: unknown[];
+  lineage?: unknown[];
+  pipelineLinks?: unknown[];
+  dashboardLinks?: unknown[];
+  sharedWithEnterpriseHub?: boolean;
   companyId?: string;
   fileName: string;
   fileType?: string;
@@ -1428,8 +1437,10 @@ export function App() {
     return uploadCompanies[0]?.id ?? selectedCompanyId;
   }, [selectedCompanyId, uploadCompanies]);
 
-  async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string) {
+  async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string) {
     const targetCompanyId = companyIdOverride || effectiveCompanyId;
+    const targetModule = moduleOverride || currentView || 'dataProcessing';
+    const targetWorkspace = workspaceOverride || targetModule;
     if (!targetCompanyId) {
       setUploadState('Select a company before uploading a dataset.');
       return undefined;
@@ -1444,7 +1455,8 @@ export function App() {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('companyId', targetCompanyId);
-    formData.append('module', currentView);
+    formData.append('module', targetModule);
+    formData.append('workspace', targetWorkspace);
     if (worksheetName) {
       formData.append('worksheetName', worksheetName);
     }
@@ -4527,6 +4539,15 @@ function normalizeDatasetForClient(dataset: Dataset): Dataset {
   return {
     ...dataset,
     id: dataset?.id ?? crypto.randomUUID(),
+    module: dataset.module ?? 'dataProcessing',
+    workspace: dataset.workspace ?? dataset.module ?? 'workspace',
+    datasetStatus: dataset.datasetStatus ?? dataset.status ?? dataset.cleanupStatus ?? 'uploaded',
+    version: finiteNumber(dataset.version, 1),
+    versionHistory: asArray(dataset.versionHistory),
+    lineage: asArray(dataset.lineage),
+    pipelineLinks: asArray(dataset.pipelineLinks),
+    dashboardLinks: asArray(dataset.dashboardLinks),
+    sharedWithEnterpriseHub: dataset.sharedWithEnterpriseHub === true,
     name: dataset.name ?? dataset.fileName ?? 'Untitled Dataset',
     fileName: dataset.fileName ?? dataset.name ?? 'Untitled Dataset',
     uploadedAt: dataset.uploadedAt ?? new Date().toISOString(),
@@ -4558,6 +4579,8 @@ function normalizeDatasetForClient(dataset: Dataset): Dataset {
 }
 
 function classifyDatasetModule(dataset: Dataset | null | undefined) {
+  const moduleLabel = moduleLabelForRoute(String(dataset?.module ?? ''));
+  if (moduleLabel !== 'Enterprise Data Hub') return moduleLabel;
   const fileName = String(dataset?.fileName ?? dataset?.name ?? '').toLowerCase();
   const fileType = String(dataset?.fileType ?? '').toLowerCase();
   const headers = datasetHeaders(dataset).join(' ').toLowerCase();
@@ -4582,6 +4605,10 @@ function classifyDatasetModule(dataset: Dataset | null | undefined) {
 
 function isEnterpriseHubDataset(dataset: Dataset | null | undefined) {
   if (!dataset?.id) return false;
+  const moduleName = String(dataset.module ?? '').toLowerCase();
+  if (['hr', 'accounting', 'engineering', 'crm'].includes(moduleName) && dataset.sharedWithEnterpriseHub !== true) {
+    return false;
+  }
   const owner = `${dataset.ownerName ?? ''} ${dataset.ownerEmail ?? ''}`.toLowerCase();
   const fileName = String(dataset.fileName ?? dataset.name ?? '').toLowerCase();
   const generatedHrDataset = dataset.id.startsWith('hr-virtual-') || dataset.fileType === 'operational' || owner.includes('hr & workforce');
@@ -5057,7 +5084,7 @@ function RoutedPages(props: {
   updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
   users: AdminUser[];
   user: User | null;
-  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
+  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string) => Promise<Dataset | undefined>;
   workspaceAction: string;
 }) {
   return (
@@ -5427,7 +5454,7 @@ function ModuleWorkspacePage({
   setReports: Dispatch<SetStateAction<ReportHistoryItem[]>>;
   setSelectedCompanyId: (companyId: string) => void;
   user: User | null;
-  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string) => Promise<Dataset | undefined>;
+  uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string) => Promise<Dataset | undefined>;
 }) {
   const safeCompanies = asArray(companies);
   const safeDatasets = asArray(datasets);
@@ -5513,8 +5540,14 @@ function ModuleWorkspacePage({
     const merged = [...asArray(workspaceDatasets), ...safeDatasets];
     const unique = new Map<string, Dataset>();
     merged.forEach((dataset) => {
-      const belongsToModule = isDataProcessingWorkspace ? isEnterpriseHubDataset(dataset) : classifyDatasetModule(dataset) === moduleLabel;
-      const isStagedHidden = stagedDataset?.id === dataset.id && !['save', 'workspace'].includes(ingestionStep);
+      const datasetModule = String(dataset.module ?? '').toLowerCase();
+      const hasExplicitModuleOwner = ['hr', 'accounting', 'engineering', 'crm'].includes(datasetModule);
+      const belongsToModule = isDataProcessingWorkspace
+        ? isEnterpriseHubDataset(dataset)
+        : hasExplicitModuleOwner
+          ? datasetModule === route.module.toLowerCase()
+          : classifyDatasetModule(dataset) === moduleLabel;
+      const isStagedHidden = isDataProcessingWorkspace && stagedDataset?.id === dataset.id && !['save', 'workspace'].includes(ingestionStep);
       if (dataset?.id && belongsToModule && !isStagedHidden && (!selectedCompanyId || dataset.companyId === selectedCompanyId)) {
         const canonicalKey = isDataProcessingWorkspace
           ? `${dataset.companyId}|${String(dataset.fileName ?? dataset.name ?? '').toLowerCase().replace(/\s+/g, ' ').trim()}|${datasetHeaders(dataset).join('|').toLowerCase()}`
@@ -5680,7 +5713,7 @@ function ModuleWorkspacePage({
     setProcessingAction('');
     try {
       window.setTimeout(() => setUploadProgress(48), 120);
-      const dataset = await uploadDataset(file, undefined, selectedCompanyId);
+      const dataset = await uploadDataset(file, undefined, selectedCompanyId, route.module, route.type);
       if (!dataset) {
         throw new Error(`Upload failed for ${file.name}. Review the upload status above for the exact validation, parser, authorization, CSRF/session, or persistence error.`);
       }

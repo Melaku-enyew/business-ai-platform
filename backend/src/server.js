@@ -2962,7 +2962,8 @@ async function handleDatasetUpload(req, res) {
     return;
   }
 
-  const moduleName = String(req.body?.module || '').trim();
+  const moduleName = String(req.body?.module || 'dataProcessing').trim();
+  const workspaceName = String(req.body?.workspace || moduleName || 'workspace').trim();
   const moduleValidation = validateModuleUpload(parsed, moduleName);
   logUploadStage(req, 'module_workflow_initialized', { companyId, module: moduleName || 'general', workflowStage: moduleValidation.stage, validationResult: moduleValidation.result });
   const summary = summarizeCsv(parsed.columns, parsed.records);
@@ -2980,6 +2981,29 @@ async function handleDatasetUpload(req, res) {
     records: parsed.records,
     userId: req.user.id,
     companyId,
+    module: moduleName,
+    workspace: workspaceName,
+    datasetStatus: 'uploaded',
+    version: 1,
+    versionHistory: [{
+      version: 1,
+      status: 'uploaded',
+      uploadedAt: new Date().toISOString(),
+      fileName: req.file.originalname,
+      rows: parsed.records.length,
+      columns: parsed.columns.length,
+      actorUserId: req.user.id
+    }],
+    lineage: [{
+      event: 'upload',
+      module: moduleName,
+      workspace: workspaceName,
+      source: req.file.originalname,
+      timestamp: new Date().toISOString()
+    }],
+    pipelineLinks: [],
+    dashboardLinks: [{ module: moduleName, workspace: workspaceName, type: 'module-dashboard' }],
+    sharedWithEnterpriseHub: moduleName === 'dataProcessing',
     originalDatasetId: null,
     cleanedDatasetId: null,
     cleanupStatus: 'pending',
