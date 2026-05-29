@@ -7340,7 +7340,7 @@ function ModuleWorkspacePage({
           </div>
         </article>
       )}
-      {route.module !== 'hr' && (!isDataProcessingWorkspace || dataHubTab === 'datasets') && <article className="panel data-hub-dataset-explorer">
+      {route.module !== 'hr' && route.module !== 'accounting' && (!isDataProcessingWorkspace || dataHubTab === 'datasets') && <article className="panel data-hub-dataset-explorer">
         <div className="panel-header">
           <div>
             <p className="eyebrow">Enterprise dataset explorer</p>
