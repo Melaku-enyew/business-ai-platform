@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname } from 'node:path';
@@ -1577,20 +1577,30 @@ export async function updateUserPassword(userId, passwordHash) {
   await pgQuery('UPDATE users SET password_hash = $2 WHERE id = $1;', [userId, passwordHash]);
 }
 
-export async function recordLoginSuccess(userId) {
+export async function recordLoginSuccess(userId, metadata = {}) {
+  const createdAt = new Date().toISOString();
   if (!usingPostgres) {
     const store = await loadDevStore();
-    store.users = store.users.map((user) => user.id === userId ? { ...user, failedLoginCount: 0, lockedUntil: null, lastLoginAt: new Date().toISOString() } : user);
+    const user = store.users.find((entry) => entry.id === userId);
+    store.users = store.users.map((entry) => entry.id === userId ? { ...entry, failedLoginCount: 0, lockedUntil: null, lastLoginAt: createdAt } : entry);
+    store.loginHistory = [{ id: randomUUID(), userId, email: user?.email ?? '', status: 'success', metadata, createdAt }, ...(store.loginHistory ?? [])].slice(0, 500);
     await saveDevStore(store);
     return;
   }
-  await pgQuery(
-    'UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1;',
-    [userId]
-  );
+  await withTransaction(async (client) => {
+    const result = await client.query(
+      'UPDATE users SET failed_login_count = 0, locked_until = NULL, last_login_at = NOW() WHERE id = $1 RETURNING email;',
+      [userId]
+    );
+    await client.query(
+      `INSERT INTO login_history (id, user_id, email, status, ip_address, user_agent, metadata)
+       VALUES ($1,$2,$3,'success',$4,$5,$6);`,
+      [randomUUID(), userId, result.rows[0]?.email ?? '', metadata.ipAddress ?? null, metadata.userAgent ?? null, JSON.stringify(metadata)]
+    );
+  });
 }
 
-export async function recordLoginFailure(email) {
+export async function recordLoginFailure(email, metadata = {}) {
   const normalizedEmail = String(email || '').toLowerCase();
   if (!usingPostgres) {
     const store = await loadDevStore();
@@ -1603,16 +1613,34 @@ export async function recordLoginFailure(email) {
         lockedUntil: count >= 5 ? new Date(Date.now() + 15 * 60 * 1000).toISOString() : user.lockedUntil
       };
     });
+    store.loginHistory = [{ id: randomUUID(), email: normalizedEmail, status: 'failed', metadata, createdAt: new Date().toISOString() }, ...(store.loginHistory ?? [])].slice(0, 500);
     await saveDevStore(store);
     return;
   }
-  await pgQuery(
-    `UPDATE users
-     SET failed_login_count = failed_login_count + 1,
-         locked_until = CASE WHEN failed_login_count + 1 >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
-     WHERE email = $1;`,
-    [normalizedEmail]
-  );
+  await withTransaction(async (client) => {
+    const result = await client.query(
+      `UPDATE users
+       SET failed_login_count = failed_login_count + 1,
+           locked_until = CASE WHEN failed_login_count + 1 >= 5 THEN NOW() + INTERVAL '15 minutes' ELSE locked_until END
+       WHERE email = $1
+       RETURNING id;`,
+      [normalizedEmail]
+    );
+    await client.query(
+      `INSERT INTO login_history (id, user_id, email, status, ip_address, user_agent, metadata)
+       VALUES ($1,$2,$3,'failed',$4,$5,$6);`,
+      [randomUUID(), result.rows[0]?.id ?? null, normalizedEmail, metadata.ipAddress ?? null, metadata.userAgent ?? null, JSON.stringify(metadata)]
+    );
+  });
+}
+
+export async function listLoginHistory() {
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    return (store.loginHistory ?? []).slice(0, 200).map(rowToLoginHistory);
+  }
+  const result = await pgQuery('SELECT * FROM login_history ORDER BY created_at DESC LIMIT 200;');
+  return result.rows.map(rowToLoginHistory);
 }
 
 export async function createAccountToken(token) {
@@ -3586,6 +3614,19 @@ function rowToSession(row) {
   };
 }
 
+function rowToLoginHistory(row) {
+  return {
+    id: row.id,
+    userId: row.user_id ?? row.userId ?? null,
+    email: row.email,
+    status: row.status,
+    ipAddress: row.ip_address ?? row.ipAddress ?? null,
+    userAgent: row.user_agent ?? row.userAgent ?? null,
+    metadata: parseJson(row.metadata, {}),
+    createdAt: toIso(row.created_at ?? row.createdAt)
+  };
+}
+
 function getCompanyId(user) {
   return typeof user === 'object' ? user.companyId ?? defaultCompanyId : defaultCompanyId;
 }
@@ -3771,6 +3812,7 @@ async function loadDevStore() {
       pipelineRules: [],
       workflowIntelligence: [],
       accessRequests: [],
+      loginHistory: [],
       userCompanyAssignments: []
     };
   }
@@ -3799,6 +3841,7 @@ async function loadDevStore() {
     pipelineRules: store.pipelineRules ?? [],
     workflowIntelligence: store.workflowIntelligence ?? [],
     accessRequests: store.accessRequests ?? [],
+    loginHistory: store.loginHistory ?? [],
     userCompanyAssignments: store.userCompanyAssignments ?? []
   };
 }

@@ -49,6 +49,7 @@ import {
   listDatasets,
   listEmailLogs,
   listInvitations,
+  listLoginHistory,
   listEnterpriseOperations,
   listModuleRecords,
   listNotifications,
@@ -1783,7 +1784,7 @@ app.post('/api/auth/login', authRateLimit, requireDatabaseReady, async (req, res
     }
 
     if (!user || !(await verifyPassword(password, user.passwordHash))) {
-      await recordLoginFailure(email);
+      await recordLoginFailure(email, { ipAddress: req.ip, userAgent: req.get('user-agent') });
       await saveAuditLog({
         id: randomUUID(),
         actorEmail: email,
@@ -1810,7 +1811,7 @@ app.post('/api/auth/login', authRateLimit, requireDatabaseReady, async (req, res
       return;
     }
 
-    await recordLoginSuccess(user.id);
+    await recordLoginSuccess(user.id, { ipAddress: req.ip, userAgent: req.get('user-agent') });
     const { token, session } = await createLoginSession(user);
     await saveAuditLog({
       id: randomUUID(),
@@ -2592,6 +2593,14 @@ app.post('/api/profile/change-password', requireDurableStorage, async (req, res,
 app.get('/api/admin/audit-logs', requireRole('admin'), async (_req, res, next) => {
   try {
     res.json({ auditLogs: await listAuditLogs() });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/admin/login-history', requireRole('admin'), async (_req, res, next) => {
+  try {
+    res.json({ loginHistory: await listLoginHistory() });
   } catch (error) {
     next(error);
   }

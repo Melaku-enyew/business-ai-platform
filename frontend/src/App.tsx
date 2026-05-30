@@ -232,6 +232,15 @@ type AuditLog = {
   createdAt: string;
 };
 
+type LoginHistoryItem = {
+  id: string;
+  email: string;
+  status: string;
+  ipAddress?: string | null;
+  userAgent?: string | null;
+  createdAt: string;
+};
+
 type SystemStatus = {
   status: string;
   storage: string;
@@ -801,6 +810,7 @@ export function App() {
   const [accessRole, setAccessRole] = useState<UserRole>('employee');
   const [accessSaving, setAccessSaving] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [loginHistory, setLoginHistory] = useState<LoginHistoryItem[]>([]);
   const [systemStatus, setSystemStatus] = useState<SystemStatus | null>(null);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [emailLogs, setEmailLogs] = useState<EmailLog[]>([]);
@@ -1879,22 +1889,26 @@ export function App() {
       }
       setAdminUsers(payload.users ?? []);
       if (platformAdmin) {
-        const [auditResponse, systemResponse, invitationsResponse, emailLogsResponse] = await Promise.all([
+        const [auditResponse, loginHistoryResponse, systemResponse, invitationsResponse, emailLogsResponse] = await Promise.all([
           apiFetch('/api/admin/audit-logs'),
+          apiFetch('/api/admin/login-history'),
           apiFetch('/api/admin/system'),
           apiFetch('/api/admin/invitations'),
           apiFetch('/api/admin/email-logs')
         ]);
         const auditPayload = await readJson<{ auditLogs: AuditLog[] }>(auditResponse);
+        const loginHistoryPayload = await readJson<{ loginHistory: LoginHistoryItem[] }>(loginHistoryResponse);
         const systemPayload = await readJson<SystemStatus>(systemResponse);
         const invitationPayload = await readJson<{ invitations: Invitation[] }>(invitationsResponse);
         const emailLogPayload = await readJson<{ emailLogs: EmailLog[] }>(emailLogsResponse);
         setAuditLogs(auditPayload.auditLogs ?? []);
+        setLoginHistory(loginHistoryPayload.loginHistory ?? []);
         setSystemStatus(systemPayload);
         setInvitations(invitationPayload.invitations ?? []);
         setEmailLogs(emailLogPayload.emailLogs ?? []);
       } else {
         setAuditLogs([]);
+        setLoginHistory([]);
         setSystemStatus(null);
         setInvitations([]);
         setEmailLogs([]);
@@ -2793,6 +2807,7 @@ export function App() {
             setReports={setReports}
             setSelectedCompanyId={setSelectedCompanyId}
             loadCompanies={loadCompanies}
+            loginHistory={loginHistory}
             systemStatus={systemStatus}
             updateCompanyName={updateCompanyName}
             updateAdminUser={updateAdminUser}
@@ -5068,6 +5083,7 @@ function RoutedPages(props: {
   openCompanyAccess: (user: AdminUser) => void;
   reports: ReportHistoryItem[];
   loadCompanies: () => void;
+  loginHistory: LoginHistoryItem[];
   resetCompanyForm: () => void;
   runCompanyAction: (company: Company, action: string) => void;
   saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
@@ -5223,6 +5239,7 @@ function RoutedPages(props: {
       <Route path="/reports/history" element={<ReportsHistoryWorkspace downloadHistoricalReport={props.downloadHistoricalReport} reports={props.reports} />} />
       <Route path="/admin/users" element={props.canManage ? <AdminUsersWorkspace deleteAdminUser={props.deleteAdminUser} openCompanyAccess={props.openCompanyAccess} updateAdminUser={props.updateAdminUser} users={props.users} /> : <Navigate to="/" replace />} />
       <Route path="/admin/audit-logs" element={props.canManage ? <AuditLogsWorkspace auditLogs={props.auditLogs} /> : <Navigate to="/" replace />} />
+      <Route path="/admin/login-history" element={props.canManage ? <LoginHistoryWorkspace loginHistory={props.loginHistory} /> : <Navigate to="/" replace />} />
       <Route path="/admin/system-monitoring" element={props.canManage ? <SystemMonitoringWorkspace status={props.systemStatus} /> : <Navigate to="/" replace />} />
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>
@@ -11424,6 +11441,34 @@ function AuditLogsWorkspace({ auditLogs }: { auditLogs: AuditLog[] }) {
   );
 }
 
+function LoginHistoryWorkspace({ loginHistory }: { loginHistory: LoginHistoryItem[] }) {
+  return (
+    <PageLayout>
+      <PageHeader title="Login History" eyebrow="Enterprise Owner" copy="Review successful and failed authentication activity across the platform." />
+      <AdminSubnav />
+      <article className="panel">
+        <div className="table-wrap routed-table">
+          <table>
+            <thead><tr><th>Account</th><th>Status</th><th>Timestamp</th><th>Network</th><th>Client</th></tr></thead>
+            <tbody>
+              {loginHistory.map((entry) => (
+                <tr key={entry.id}>
+                  <td>{entry.email || 'Unknown account'}</td>
+                  <td><span className={`status-pill ${entry.status === 'success' ? 'active' : 'disabled'}`}>{entry.status}</span></td>
+                  <td>{new Date(entry.createdAt).toLocaleString()}</td>
+                  <td>{entry.ipAddress ?? 'Unavailable'}</td>
+                  <td>{entry.userAgent ?? 'Unavailable'}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        {!loginHistory.length && <EmptyState title="No login activity recorded yet" copy="New login attempts will appear here after the database-backed deployment is active." />}
+      </article>
+    </PageLayout>
+  );
+}
+
 function SystemMonitoringWorkspace({ status }: { status: SystemStatus | null }) {
   return (
     <PageLayout>
@@ -11449,6 +11494,7 @@ function AdminSubnav() {
   const links = [
     { label: 'Users', path: '/admin/users' },
     { label: 'Audit logs', path: '/admin/audit-logs' },
+    { label: 'Login history', path: '/admin/login-history' },
     { label: 'System monitoring', path: '/admin/system-monitoring' }
   ];
   return (
