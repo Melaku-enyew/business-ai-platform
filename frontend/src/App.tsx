@@ -3858,7 +3858,7 @@ function EnterpriseCockpit({
   const [search, setSearch] = useState('');
   const [datasetRegistryQuery, setDatasetRegistryQuery] = useState('');
   const [datasetRegistryModule, setDatasetRegistryModule] = useState('all');
-  const [activityOpen, setActivityOpen] = useState(true);
+  const [activityOpen, setActivityOpen] = useState(false);
   const [activityWorkspaceFilter, setActivityWorkspaceFilter] = useState('all');
   const [activitySearch, setActivitySearch] = useState('');
   const [activityCleared, setActivityCleared] = useState(false);
@@ -3884,6 +3884,16 @@ function EnterpriseCockpit({
   };
   const selectDashboardTab = (tab: string) => {
     setActiveTab(tab);
+    setCollapsed((current) => {
+      if (!current[tab]) return current;
+      const next = { ...current, [tab]: false };
+      try {
+        localStorage.setItem('metenovaCockpitCollapsed', JSON.stringify(next));
+      } catch {
+        // Local storage can be unavailable in private or restricted browser contexts.
+      }
+      return next;
+    });
     try {
       localStorage.setItem('metenovaCockpitTab', tab);
     } catch {
@@ -3928,7 +3938,7 @@ function EnterpriseCockpit({
     {
       key: 'finance',
       label: 'Finance & Accounting',
-      path: '/accounting',
+      path: '/accounting/invoices',
       count: moduleGroups.find(([label]) => label === 'Finance')?.[1].length ?? 0,
       detail: 'Invoices, budgets, payments, tax, and accounting exports',
       alert: `${moduleGroups.find(([label]) => label === 'Finance')?.[1].length ?? 0} finance datasets`
@@ -3936,7 +3946,7 @@ function EnterpriseCockpit({
     {
       key: 'engineering',
       label: 'Engineering & Projects',
-      path: '/engineering',
+      path: '/engineering/projects',
       count: moduleGroups.find(([label]) => label === 'Engineering')?.[1].length ?? 0,
       detail: 'Projects, tasks, deployment, resource, and schedule operations',
       alert: `${moduleGroups.find(([label]) => label === 'Engineering')?.[1].length ?? 0} project datasets`
@@ -3944,7 +3954,7 @@ function EnterpriseCockpit({
     {
       key: 'crm',
       label: 'CRM & Sales',
-      path: '/crm',
+      path: '/crm/clients',
       count: moduleGroups.find(([label]) => label === 'CRM')?.[1].length ?? 0,
       detail: 'Customers, leads, opportunities, sales pipeline, and contracts',
       alert: `${moduleGroups.find(([label]) => label === 'CRM')?.[1].length ?? 0} CRM datasets`
@@ -4029,14 +4039,14 @@ function EnterpriseCockpit({
 
       <div className="cockpit-tabs" role="tablist" aria-label="Dashboard views">
         {tabs.map((tab) => (
-          <button className={activeTab === tab ? 'active' : ''} key={tab} type="button" onClick={() => selectDashboardTab(tab)}>{tab}</button>
+          <button aria-selected={activeTab === tab} className={activeTab === tab ? 'active' : ''} key={tab} role="tab" type="button" onClick={() => selectDashboardTab(tab)}>{tab}</button>
         ))}
       </div>
 
       <section className="workspace-command-grid" aria-label="Workspace cards">
         {workspaceCards.map((card) => (
           <article className="workspace-command-card" key={card.key}>
-            <button className="workspace-command-main" type="button" onClick={() => navigate(card.path)}>
+            <button aria-label={`Open ${card.label} workspace`} className="workspace-command-main" type="button" onClick={() => navigate(card.path)}>
               <span className="workspace-command-icon">{card.label.slice(0, 2).toUpperCase()}</span>
               <span>
                 <strong>{card.label}</strong>
@@ -4134,6 +4144,27 @@ function EnterpriseCockpit({
             </CockpitSection>
           )}
 
+          {showSection('Approvals') && (
+            <CockpitSection title="Approval queue" count={`${pendingApprovals + enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length} pending`} collapsed={collapsed.Approvals} onToggle={() => toggleSection('Approvals')}>
+              <div className="timeline-list">
+                {cleanupJobs.filter((job) => job.status === 'pending' || job.status === 'processing').slice(0, 5).map((job) => (
+                  <button key={job.id} type="button" onClick={() => setDrillPanel({ title: `Dataset approval: ${job.status}`, kind: 'approval' })}>
+                    <strong>Dataset cleanup approval</strong>
+                    <span>{job.status} | updated {new Date(job.updatedAt).toLocaleString()}</span>
+                  </button>
+                ))}
+                {enterpriseOps.accessRequests.filter((request) => request.status === 'pending').slice(0, 5).map((request) => (
+                  <button key={request.id} type="button" onClick={() => setDrillPanel({ title: 'Workspace access approval', kind: 'approval' })}>
+                    <strong>Workspace access request</strong>
+                    <span>{request.department} | {request.requestedRole} | pending review</span>
+                  </button>
+                ))}
+                {!pendingApprovals && !enterpriseOps.accessRequests.some((request) => request.status === 'pending') && <span>Approval queue is clear.</span>}
+                <button type="button" onClick={() => setDrillPanel({ title: 'Approval Queue', kind: 'approval' })}>Open approval queue</button>
+              </div>
+            </CockpitSection>
+          )}
+
           {showSection('Analytics') && (
             <CockpitSection title="Compact data studio" count={`${companyDatasets.length} datasets`} collapsed={collapsed.Analytics} onToggle={() => toggleSection('Analytics')}>
               <div className="data-studio-compact">
@@ -4188,13 +4219,13 @@ function EnterpriseCockpit({
         </div>
 
         <aside className="live-rail" aria-label="Live activity rail">
-          <div>
+          <div className="live-rail-header">
             <p className="eyebrow">Live activity</p>
             <strong>Operational timeline</strong>
+            <button aria-expanded={activityOpen} type="button" onClick={() => setActivityOpen((open) => !open)}>{activityOpen ? 'Collapse' : 'Expand'}</button>
           </div>
-          <div className="compact-activity-timeline">
+          {activityOpen && <div className="compact-activity-timeline">
             <div className="activity-controls">
-              <button type="button" onClick={() => setActivityOpen((open) => !open)}>{activityOpen ? 'Collapse' : 'Expand'}</button>
               <select value={activityWorkspaceFilter} onChange={(event) => setActivityWorkspaceFilter(event.target.value)}>
                 <option value="all">All workspaces</option>
                 <option value="hr">HR</option>
@@ -4216,8 +4247,8 @@ function EnterpriseCockpit({
               </button>
             ))}
             {activityOpen && activityCleared && <button type="button" onClick={() => setActivityCleared(false)}><strong>Activity cleared</strong><span>Restore live activity</span></button>}
-          </div>
-          {notifications.slice(0, 3).map((notification) => (
+          </div>}
+          {activityOpen && notifications.slice(0, 3).map((notification) => (
             <button className="notification-mini" key={notification.id} type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>
               <strong>{notification.title}</strong>
             </button>

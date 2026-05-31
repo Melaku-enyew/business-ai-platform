@@ -6207,6 +6207,26 @@ th {
   padding: 9px;
 }
 
+.live-rail-header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  align-items: center;
+}
+
+.live-rail-header .eyebrow {
+  grid-column: 1;
+}
+
+.live-rail-header strong {
+  grid-column: 1;
+}
+
+.live-rail-header button {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
 .live-rail button {
   display: grid;
   gap: 4px;
