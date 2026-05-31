@@ -60,6 +60,8 @@ type Dataset = {
   futureAiReady?: boolean;
   ownerName?: string;
   ownerEmail?: string;
+  uploadedByName?: string;
+  uploadedByEmail?: string;
   records?: Record<string, string>[];
   previewRows?: Record<string, string>[];
   validationResults?: unknown[];
@@ -5906,7 +5908,7 @@ function ModuleWorkspacePage({
     setPreviewState({ dataset, mode: 'normalization' });
   }
 
-  async function saveDatasetRows(dataset: Dataset, records: Record<string, string>[]) {
+  async function saveDatasetRows(dataset: Dataset, records: Record<string, string>[], fileName?: string) {
     const headers = getPreviewHeaders(dataset, records);
     const response = await apiFetch(`/api/datasets/${dataset.id}/records`, {
       method: 'PUT',
@@ -5914,6 +5916,7 @@ function ModuleWorkspacePage({
       body: JSON.stringify({
         headers,
         records,
+        fileName: fileName?.trim() || dataset.fileName,
         status: dataset.cleanupStatus ?? dataset.status ?? 'uploaded',
         pipelineStatus: dataset.cleanupStatus ?? dataset.pipelineStatus ?? 'uploaded'
       })
@@ -7629,6 +7632,7 @@ function ModuleWorkspacePage({
           route={route}
           selectedCompanyId={selectedCompanyId}
           setError={setError}
+          setDatasets={setDatasets}
           setRecords={setRecords}
         />
       ) : (
@@ -7963,6 +7967,7 @@ function FinanceOperationsWorkspace({
   route,
   selectedCompanyId,
   setError,
+  setDatasets,
   setRecords
 }: {
   apiFetch: (path: string, options?: RequestInit) => Promise<Response>;
@@ -7970,12 +7975,13 @@ function FinanceOperationsWorkspace({
   datasets: Dataset[];
   deleteDatasetRecord: (dataset: Dataset | null) => void;
   onDatasetAction: (dataset: Dataset, action: string) => void;
-  onSaveDatasetRows: (dataset: Dataset, records: Record<string, string>[]) => Promise<void>;
+  onSaveDatasetRows: (dataset: Dataset, records: Record<string, string>[], fileName?: string) => Promise<void>;
   onUploadWorkspace: (file: File, workspace: string) => void;
   records: ModuleRecord[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
   setError: (message: string) => void;
+  setDatasets: Dispatch<SetStateAction<Dataset[]>>;
   setRecords: Dispatch<SetStateAction<ModuleRecord[]>>;
 }) {
   const workspaceKey = route.type;
@@ -7985,6 +7991,8 @@ function FinanceOperationsWorkspace({
   const [expandedRecordId, setExpandedRecordId] = useState('');
   const [saving, setSaving] = useState(false);
   const [financeMessage, setFinanceMessage] = useState('Finance command center ready.');
+  const [selectedFinanceDatasetId, setSelectedFinanceDatasetId] = useState('');
+  const [datasetNameDraft, setDatasetNameDraft] = useState('');
   const [recordForm, setRecordForm] = useState({
     title: '',
     amount: '',
@@ -8032,9 +8040,17 @@ function FinanceOperationsWorkspace({
   });
   const activeDatasetType = workspaceDatasetType(activeWorkspace);
   const activeWorkspaceDatasets = datasets.filter((dataset) => financeDatasetMatches(dataset, activeWorkspace));
-  const primaryFinanceDataset = activeWorkspaceDatasets[0] ?? null;
+  const primaryFinanceDataset = activeWorkspaceDatasets.find((dataset) => dataset.id === selectedFinanceDatasetId) ?? activeWorkspaceDatasets[0] ?? null;
   const primaryFinanceRows = datasetPreview(primaryFinanceDataset).slice(0, 8);
   const primaryFinanceHeaders = primaryFinanceDataset ? getPreviewHeaders(primaryFinanceDataset, primaryFinanceRows).slice(0, 6) : [];
+
+  useEffect(() => {
+    setSelectedFinanceDatasetId((current) => activeWorkspaceDatasets.some((dataset) => dataset.id === current) ? current : activeWorkspaceDatasets[0]?.id ?? '');
+  }, [activeWorkspace, datasets]);
+
+  useEffect(() => {
+    setDatasetNameDraft(primaryFinanceDataset?.fileName ?? '');
+  }, [primaryFinanceDataset?.id, primaryFinanceDataset?.fileName]);
 
   function uploadFinanceWorkspaceFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
@@ -8050,6 +8066,13 @@ function FinanceOperationsWorkspace({
     const blank = Object.fromEntries(headers.map((header) => [header, '']));
     await onSaveDatasetRows(dataset, [...datasetPreview(dataset), blank]);
     setFinanceMessage(`Blank row added to ${dataset.fileName}. Double click cells in the preview drawer to finish edits.`);
+  }
+
+  async function renameFinanceDataset(dataset: Dataset) {
+    const nextName = datasetNameDraft.trim();
+    if (!nextName || nextName === dataset.fileName) return;
+    await onSaveDatasetRows(dataset, datasetPreview(dataset), nextName);
+    setFinanceMessage(`${dataset.fileName} renamed to ${nextName}.`);
   }
 
   async function createFinanceRecord(kind = activeWorkspace) {
@@ -8081,9 +8104,13 @@ function FinanceOperationsWorkspace({
           }
         })
       });
-      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      const payload = await readJson<{ record?: ModuleRecord; dataset?: Dataset; error?: string }>(response);
       if (!response.ok || !payload.record) throw new Error(payload.error || 'Could not save finance record.');
       setRecords((current) => [payload.record as ModuleRecord, ...current]);
+      if (payload.dataset) {
+        const normalized = normalizeDatasetForClient(payload.dataset);
+        setDatasets((current) => [normalized, ...current.filter((dataset) => dataset.id !== normalized.id)]);
+      }
       setRecordForm({ title: '', amount: '', vendor: '', category: '', dueDate: '', department: '', notes: '' });
       setFinanceMessage(`${title} saved to ${workspaceDefinitions.find((item) => item.key === kind)?.dataset ?? 'Finance Dataset'}.`);
     } catch (error) {
@@ -8106,9 +8133,13 @@ function FinanceOperationsWorkspace({
           metadata: { ...(record.metadata ?? {}), ...(patch.metadata ?? {}) }
         })
       });
-      const payload = await readJson<{ record?: ModuleRecord; error?: string }>(response);
+      const payload = await readJson<{ record?: ModuleRecord; dataset?: Dataset; error?: string }>(response);
       if (!response.ok || !payload.record) throw new Error(payload.error || 'Could not update finance record.');
       setRecords((current) => current.map((entry) => entry.id === record.id ? payload.record as ModuleRecord : entry));
+      if (payload.dataset) {
+        const normalized = normalizeDatasetForClient(payload.dataset);
+        setDatasets((current) => [normalized, ...current.filter((dataset) => dataset.id !== normalized.id)]);
+      }
       setFinanceMessage(`${payload.record.title} updated and audit history refreshed.`);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not update finance record.');
@@ -8119,11 +8150,15 @@ function FinanceOperationsWorkspace({
     setError('');
     try {
       const response = await apiFetch(`/api/modules/accounting/records/${record.id}`, { method: 'DELETE' });
+      const payload = await readJson<{ dataset?: Dataset; error?: string }>(response);
       if (!response.ok) {
-        const payload = await readJson<{ error?: string }>(response);
         throw new Error(payload.error || 'Could not delete finance record.');
       }
       setRecords((current) => current.filter((entry) => entry.id !== record.id));
+      if (payload.dataset) {
+        const normalized = normalizeDatasetForClient(payload.dataset);
+        setDatasets((current) => [normalized, ...current.filter((dataset) => dataset.id !== normalized.id)]);
+      }
       setFinanceMessage(`${record.title} archived from the active finance grid.`);
     } catch (error) {
       setError(error instanceof Error ? error.message : 'Could not delete finance record.');
@@ -8217,7 +8252,13 @@ function FinanceOperationsWorkspace({
             <div>
               <strong>{primaryFinanceDataset.fileName}</strong>
               <span>{primaryFinanceDataset.rows} rows | {primaryFinanceDataset.columns} columns | {primaryFinanceDataset.status ?? primaryFinanceDataset.cleanupStatus ?? 'uploaded'} | workspace: {primaryFinanceDataset.workspace ?? activeDatasetType}</span>
+              <span>Uploaded {new Date(primaryFinanceDataset.uploadedAt).toLocaleString()} by {primaryFinanceDataset.uploadedByName ?? primaryFinanceDataset.uploadedByEmail ?? 'workspace user'} | validation issues: {primaryFinanceDataset.validationResults?.length ?? 0}</span>
             </div>
+            {activeWorkspaceDatasets.length > 1 && (
+              <select value={primaryFinanceDataset.id} onChange={(event) => setSelectedFinanceDatasetId(event.target.value)}>
+                {activeWorkspaceDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+              </select>
+            )}
             <div className="compact-preview-table">
               <div className="compact-preview-row header">
                 {primaryFinanceHeaders.map((header) => <span key={header}>{header}</span>)}
@@ -8233,6 +8274,20 @@ function FinanceOperationsWorkspace({
               <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'clean')}>Clean duplicates</button>
               <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'history')}>History</button>
               <button type="button" onClick={() => void addBlankDatasetRow(primaryFinanceDataset)}>Add row</button>
+              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'edit')}>Add data</button>
+            </div>
+            <div className="inline-actions">
+              <input aria-label="Dataset name" value={datasetNameDraft} onChange={(event) => setDatasetNameDraft(event.target.value)} />
+              <button type="button" disabled={!datasetNameDraft.trim() || datasetNameDraft.trim() === primaryFinanceDataset.fileName} onClick={() => void renameFinanceDataset(primaryFinanceDataset)}>Save dataset name</button>
+            </div>
+            <div className="finance-upload-history">
+              <strong>Workspace upload history</strong>
+              {activeWorkspaceDatasets.slice(0, 5).map((dataset) => (
+                <button key={dataset.id} type="button" onClick={() => setSelectedFinanceDatasetId(dataset.id)}>
+                  <span>{dataset.fileName}</span>
+                  <small>{new Date(dataset.uploadedAt).toLocaleString()} | {dataset.status ?? dataset.cleanupStatus ?? 'uploaded'}</small>
+                </button>
+              ))}
             </div>
           </div>
         ) : (
@@ -8272,7 +8327,7 @@ function FinanceOperationsWorkspace({
             <label className="ghost-button compact">Upload<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
             <button type="button" onClick={() => createFinanceRecord()} disabled={saving}>{saving ? 'Saving...' : 'Add'}</button>
             <button type="button" onClick={() => exportFinanceRows()}>Export</button>
-            <button type="button" onClick={() => setFinanceMessage('Finance pipeline opened: Invoice CSV -> Validate -> Detect duplicates -> Categorize -> Approval -> Export.')}>Pipeline</button>
+            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'pipeline')}>Pipeline</button>
           </div>
         </div>
         {activeWorkspace !== 'assistant' ? (

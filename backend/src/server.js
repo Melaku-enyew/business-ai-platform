@@ -34,6 +34,7 @@ import {
   getDatabaseRuntimeStatus,
   getAccessibleCompanyIds,
   hasRole,
+  isOwner,
   canAccessCompany,
   clearDatabaseRuntimeFailure,
   findSessionById,
@@ -925,11 +926,11 @@ function requireRole(role) {
 }
 
 function canManageCompany(user, companyId) {
-  return hasRole(user, 'admin') || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(companyId));
+  return isOwner(user) || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(companyId));
 }
 
 function canManageDataset(user, dataset) {
-  return hasRole(user, 'admin')
+  return isOwner(user)
     || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(dataset.companyId))
     || (dataset.userId && dataset.userId === user?.id);
 }
@@ -1182,7 +1183,7 @@ async function waitForStartupWarmup(reason, timeoutMs) {
 
 async function canManageTargetUser(actor, target) {
   if (!target) return false;
-  if (actor.email === ownerEmail || actor.role === 'owner' || actor.role === 'admin') return true;
+  if (actor.email === ownerEmail || actor.role === 'owner') return true;
   if (!hasRole(actor, 'manager') || !Array.isArray(actor.accessibleCompanyIds)) return false;
   const assignments = await listUserCompanyAssignments(target.id);
   const targetCompanyIds = new Set([target.companyId, ...assignments.map((assignment) => assignment.companyId)].filter(Boolean));
@@ -2660,10 +2661,10 @@ function sanitizeModuleRecordsForUser(user, moduleName, records) {
 }
 
 async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRecord) {
-  if (moduleName !== 'hr' || !companyId) return null;
-  const datasetConfig = hrDatasetConfigForRecord(changedRecord);
+  if (!['hr', 'accounting'].includes(moduleName) || !companyId) return null;
+  const datasetConfig = moduleName === 'hr' ? hrDatasetConfigForRecord(changedRecord) : financeDatasetConfigForRecord(changedRecord);
   if (!datasetConfig) return null;
-  const moduleRecords = await listModuleRecords(user, 'hr');
+  const moduleRecords = await listModuleRecords(user, moduleName);
   const datasetRecords = moduleRecords.filter((record) => {
     if (record.companyId !== companyId) return false;
     if (datasetConfig.leaveType) return record.recordType === 'leave_request' && record.metadata?.leaveType === datasetConfig.leaveType;
@@ -2673,7 +2674,7 @@ async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRe
   const headers = datasetConfig.headers;
   const summary = summarizeCsv(headers, rows);
   const dataset = {
-    id: `module-hr-${companyId}-${datasetConfig.key}`,
+    id: `module-${moduleName}-${companyId}-${datasetConfig.key}`,
     fileName: datasetConfig.name,
     fileType: 'module-dataset',
     uploadedAt: new Date().toISOString(),
@@ -2684,6 +2685,11 @@ async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRe
     records: rows,
     userId: user.id,
     companyId,
+    module: moduleName,
+    workspace: datasetConfig.workspace ?? datasetConfig.key,
+    datasetStatus: 'completed',
+    sharedWithEnterpriseHub: false,
+    dashboardLinks: [{ module: moduleName, workspace: datasetConfig.workspace ?? datasetConfig.key, type: 'module-dashboard' }],
     cleanupStatus: 'completed',
     pipelineStatus: 'completed',
     status: 'completed',
@@ -2691,13 +2697,21 @@ async function syncModuleDatasetForRecord(moduleName, companyId, user, changedRe
     validationResults: [],
     duplicateResults: [],
     cleanupResults: [],
-    cleanupLogs: [`${datasetConfig.name} synced from HR operational workflows.`],
+    cleanupLogs: [`${datasetConfig.name} synced from ${moduleName === 'hr' ? 'HR' : 'Finance'} operational workflows.`],
     cleanupMetrics: { totalCleanedRows: rows.length },
     futureAiReady: true,
     ...summary
   };
   await saveDataset(dataset);
   return dataset;
+}
+
+function financeDatasetConfigForRecord(record) {
+  if (record.recordType === 'invoice') return { key: 'invoice', workspace: 'invoice', name: 'Invoice Dataset', recordTypes: ['invoice'], headers: ['recordId', 'invoiceNumber', 'title', 'vendor', 'amount', 'status', 'dueDate', 'category', 'department', 'notes', 'updatedAt'], qualityScore: (rows) => rows.length ? 95 : 0 };
+  if (record.recordType === 'expense') return { key: 'expense', workspace: 'expense', name: 'Expense Dataset', recordTypes: ['expense'], headers: ['recordId', 'title', 'vendor', 'amount', 'status', 'category', 'department', 'dueDate', 'notes', 'updatedAt'], qualityScore: (rows) => rows.length ? 94 : 0 };
+  if (record.recordType === 'payroll') return { key: 'payroll', workspace: 'payroll', name: 'Payroll Dataset', recordTypes: ['payroll'], headers: ['recordId', 'title', 'employee', 'amount', 'status', 'department', 'payPeriod', 'notes', 'updatedAt'], qualityScore: (rows) => rows.length ? 96 : 0 };
+  if (record.recordType === 'financial_report') return { key: 'financial_report', workspace: 'financial_report', name: 'Financial Reports Dataset', recordTypes: ['financial_report'], headers: ['recordId', 'title', 'amount', 'status', 'category', 'department', 'notes', 'updatedAt'], qualityScore: (rows) => rows.length ? 96 : 0 };
+  return null;
 }
 
 function hrDatasetConfigForRecord(record) {
@@ -2720,11 +2734,19 @@ function hrDatasetConfigForRecord(record) {
 function moduleRecordToDatasetRow(record, config) {
   const metadata = record.metadata ?? {};
   const row = {
+    recordId: record.id,
+    invoiceNumber: metadata.invoiceNumber ?? metadata.invoiceId ?? '',
     employeeId: metadata.employeeId ?? '',
     employeeName: metadata.employeeName ?? record.title,
     name: record.title,
+    title: metadata.title ?? record.title,
+    vendor: metadata.vendor ?? '',
+    amount: record.amount ?? '',
+    category: metadata.category ?? '',
+    dueDate: metadata.dueDate ?? '',
+    employee: metadata.employee ?? metadata.vendor ?? '',
+    payPeriod: metadata.payPeriod ?? metadata.dueDate ?? '',
     department: metadata.department ?? '',
-    title: metadata.title ?? '',
     status: record.status,
     manager: metadata.manager ?? '',
     employmentType: metadata.employmentType ?? '',
@@ -2825,13 +2847,15 @@ app.put('/api/modules/:module/records/:id', requireDurableStorage, updateModuleR
 
 app.delete('/api/modules/:module/records/:id', requireDurableStorage, async (req, res, next) => {
   try {
+    const existing = (await listModuleRecords(req.user, req.params.module)).find((record) => record.id === req.params.id);
     const deleted = await deleteModuleRecord(req.user, req.params.id);
     if (!deleted) {
       res.status(404).json({ error: 'Workspace record not found.' });
       return;
     }
     await audit(req, 'module.record_deleted', req.params.module, req.params.id);
-    res.status(204).end();
+    const dataset = existing ? await syncModuleDatasetForRecord(req.params.module, existing.companyId, req.user, existing) : null;
+    res.json({ deleted: true, dataset: dataset ? publicDataset(dataset) : undefined });
   } catch (error) {
     next(error);
   }
@@ -2990,6 +3014,8 @@ async function handleDatasetUpload(req, res) {
     records: parsed.records,
     userId: req.user.id,
     companyId,
+    uploadedByEmail: req.user.email,
+    uploadedByName: req.user.name,
     module: moduleName,
     workspace: workspaceName,
     datasetStatus: 'uploaded',
@@ -3158,6 +3184,7 @@ app.put('/api/datasets/:id/records', requireDurableStorage, async (req, res, nex
     const summary = summarizeCsv(headers, records);
     const saved = await saveDataset({
       ...dataset,
+      fileName: String(req.body?.fileName || dataset.fileName).trim() || dataset.fileName,
       headers,
       records,
       preview: records.slice(0, 25),

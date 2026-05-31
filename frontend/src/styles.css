@@ -3040,6 +3040,28 @@ th {
   font-weight: 950;
 }
 
+.finance-upload-history {
+  display: grid;
+  gap: 5px;
+}
+
+.finance-upload-history button {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 7px 9px;
+  text-align: left;
+}
+
+.finance-upload-history button:hover {
+  border-color: color-mix(in srgb, var(--accent) 42%, var(--line));
+  background: var(--accent-wash);
+}
+
 .finance-kpi-row strong {
   color: var(--heading);
   font-size: 18px;

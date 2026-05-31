@@ -11,7 +11,7 @@ config({ path: fileURLToPath(new URL('../.env', import.meta.url)) });
 const { Pool } = pg;
 const devStoreFile = fileURLToPath(new URL('../data/dev-store.json', import.meta.url));
 const defaultCompanyId = 'metenova-default-company';
-const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova AI Workspace';
+const defaultCompanyName = process.env.DEFAULT_COMPANY_NAME || 'Metenova Default Company';
 const postgresConnectRetries = Number(process.env.POSTGRES_CONNECT_RETRIES || 3);
 const postgresRetryDelayMs = Number(process.env.POSTGRES_RETRY_DELAY_MS || 1500);
 const postgresRetryMaxDelayMs = Number(process.env.POSTGRES_RETRY_MAX_DELAY_MS || 12000);
@@ -991,7 +991,6 @@ export async function listCompanies(user) {
     const store = await loadDevStore();
     const assignedCompanyIds = await getAccessibleCompanyIds(user);
     return (store.companies ?? [])
-      .filter((company) => company.id !== defaultCompanyId)
       .filter((company) => assignedCompanyIds === null || assignedCompanyIds.includes(company.id))
       .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
       .map(rowToCompany);
@@ -1002,18 +1001,16 @@ export async function listCompanies(user) {
     if (!assignedCompanyIds.length) return [];
     const result = await pgQuery(
       `SELECT * FROM companies
-       WHERE id = ANY($1::text[]) AND id <> $2
+       WHERE id = ANY($1::text[])
        ORDER BY updated_at DESC, created_at DESC;`,
-      [assignedCompanyIds, defaultCompanyId]
+      [assignedCompanyIds]
     );
     return result.rows.map(rowToCompany);
   }
 
   const result = await pgQuery(
     `SELECT * FROM companies
-     WHERE id <> $1
-     ORDER BY updated_at DESC, created_at DESC;`,
-    [defaultCompanyId]
+     ORDER BY updated_at DESC, created_at DESC;`
   );
   return result.rows.map(rowToCompany);
 }
@@ -1735,6 +1732,8 @@ export async function saveDataset(dataset) {
     pipelineLinks: dataset.pipelineLinks ?? [],
     dashboardLinks: dataset.dashboardLinks ?? [],
     sharedWithEnterpriseHub: dataset.sharedWithEnterpriseHub === true,
+    uploadedByEmail: dataset.uploadedByEmail ?? '',
+    uploadedByName: dataset.uploadedByName ?? '',
     chartColumn: dataset.chartColumn,
     labelColumn: dataset.labelColumn,
     chart: dataset.chart,
@@ -3297,6 +3296,8 @@ function rowToDataset(row) {
     pipelineLinks: analysis.pipelineLinks ?? [],
     dashboardLinks: analysis.dashboardLinks ?? [],
     sharedWithEnterpriseHub: analysis.sharedWithEnterpriseHub === true,
+    uploadedByEmail: analysis.uploadedByEmail ?? '',
+    uploadedByName: analysis.uploadedByName ?? '',
     originalDatasetId: row.original_dataset_id ?? row.originalDatasetId ?? null,
     cleanedDatasetId: row.cleaned_dataset_id ?? row.cleanedDatasetId ?? null,
     cleanupStatus: row.cleanup_status ?? row.cleanupStatus ?? analysis.cleanupStatus ?? 'original',
@@ -3634,7 +3635,7 @@ function getCompanyId(user) {
 function canAccessCompanyRecord(user, record) {
   if (hasGlobalCompanyAccess(user)) return true;
   if (Array.isArray(user?.accessibleCompanyIds)) return user.accessibleCompanyIds.includes(record.companyId ?? defaultCompanyId);
-  return (record.companyId ?? defaultCompanyId) === getCompanyId(user) && getCompanyId(user) !== defaultCompanyId;
+  return (record.companyId ?? defaultCompanyId) === getCompanyId(user);
 }
 
 export function hasRole(user, requiredRole) {
@@ -3648,7 +3649,7 @@ export function isOwner(user) {
 
 export function hasGlobalCompanyAccess(user) {
   const role = user && typeof user === 'object' ? roleForUser(user.email, user.role) : '';
-  return role === 'owner' || role === 'admin';
+  return role === 'owner';
 }
 
 function protectOwnerUpdates(existingUser, updates) {
