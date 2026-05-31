@@ -66,6 +66,7 @@ type Dataset = {
   previewRows?: Record<string, string>[];
   validationResults?: unknown[];
   duplicates?: unknown[];
+  duplicateResults?: unknown[];
   pipeline?: unknown[];
   exports?: unknown[];
   approvals?: unknown[];
@@ -232,6 +233,12 @@ type AuditLog = {
   targetType?: string;
   targetId?: string;
   createdAt: string;
+};
+
+type DatasetUploadOptions = {
+  action?: 'create_new' | 'merge_existing';
+  targetDatasetId?: string;
+  duplicateMode?: 'replace' | 'skip' | 'append_version' | 'merge_update';
 };
 
 type LoginHistoryItem = {
@@ -1449,7 +1456,7 @@ export function App() {
     return uploadCompanies[0]?.id ?? selectedCompanyId;
   }, [selectedCompanyId, uploadCompanies]);
 
-  async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string) {
+  async function uploadDataset(file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string, uploadOptions?: DatasetUploadOptions) {
     const targetCompanyId = companyIdOverride || effectiveCompanyId;
     const targetModule = moduleOverride || currentView || 'dataProcessing';
     const targetWorkspace = workspaceOverride || targetModule;
@@ -1469,6 +1476,9 @@ export function App() {
     formData.append('companyId', targetCompanyId);
     formData.append('module', targetModule);
     formData.append('workspace', targetWorkspace);
+    if (uploadOptions?.action) formData.append('datasetAction', uploadOptions.action);
+    if (uploadOptions?.targetDatasetId) formData.append('targetDatasetId', uploadOptions.targetDatasetId);
+    if (uploadOptions?.duplicateMode) formData.append('duplicateMode', uploadOptions.duplicateMode);
     if (worksheetName) {
       formData.append('worksheetName', worksheetName);
     }
@@ -5716,7 +5726,7 @@ function ModuleWorkspacePage({
     }
   }
 
-  async function handleModuleUpload(file: File, workspaceOverride = route.type) {
+  async function handleModuleUpload(file: File, workspaceOverride = route.type, uploadOptions?: DatasetUploadOptions) {
     if (isDataProcessingWorkspace && dataSourceType !== 'Local CSV/XLSX Upload') {
       setError('Choose Local CSV/XLSX Upload as the source before selecting a file.');
       setIngestionStep('source');
@@ -5732,7 +5742,7 @@ function ModuleWorkspacePage({
     setProcessingAction('');
     try {
       window.setTimeout(() => setUploadProgress(48), 120);
-      const dataset = await uploadDataset(file, undefined, selectedCompanyId, route.module, workspaceOverride);
+      const dataset = await uploadDataset(file, undefined, selectedCompanyId, route.module, workspaceOverride, uploadOptions);
       if (!dataset) {
         throw new Error(`Upload failed for ${file.name}. Review the upload status above for the exact validation, parser, authorization, CSRF/session, or persistence error.`);
       }
@@ -5772,8 +5782,8 @@ function ModuleWorkspacePage({
     event.target.value = '';
   }
 
-  function handleWorkspaceFileUpload(file: File, workspace: string) {
-    void handleModuleUpload(file, workspace);
+  function handleWorkspaceFileUpload(file: File, workspace: string, uploadOptions?: DatasetUploadOptions) {
+    void handleModuleUpload(file, workspace, uploadOptions);
   }
 
   function handleDrop(event: DragEvent<HTMLDivElement>) {
@@ -7976,7 +7986,7 @@ function FinanceOperationsWorkspace({
   deleteDatasetRecord: (dataset: Dataset | null) => void;
   onDatasetAction: (dataset: Dataset, action: string) => void;
   onSaveDatasetRows: (dataset: Dataset, records: Record<string, string>[], fileName?: string) => Promise<void>;
-  onUploadWorkspace: (file: File, workspace: string) => void;
+  onUploadWorkspace: (file: File, workspace: string, uploadOptions?: DatasetUploadOptions) => void;
   records: ModuleRecord[];
   route: WorkspaceRoute;
   selectedCompanyId: string;
@@ -7993,6 +8003,14 @@ function FinanceOperationsWorkspace({
   const [financeMessage, setFinanceMessage] = useState('Finance command center ready.');
   const [selectedFinanceDatasetId, setSelectedFinanceDatasetId] = useState('');
   const [datasetNameDraft, setDatasetNameDraft] = useState('');
+  const [financeStage, setFinanceStage] = useState(0);
+  const [unlockedFinanceStage, setUnlockedFinanceStage] = useState(0);
+  const [uploadMode, setUploadMode] = useState<'create_new' | 'merge_existing'>('create_new');
+  const [duplicateMode, setDuplicateMode] = useState<NonNullable<DatasetUploadOptions['duplicateMode']>>('merge_update');
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [catalogOpen, setCatalogOpen] = useState(false);
+  const [expandedCatalogId, setExpandedCatalogId] = useState('');
+  const [previewSearch, setPreviewSearch] = useState('');
   const [recordForm, setRecordForm] = useState({
     title: '',
     amount: '',
@@ -8041,7 +8059,7 @@ function FinanceOperationsWorkspace({
   const activeDatasetType = workspaceDatasetType(activeWorkspace);
   const activeWorkspaceDatasets = datasets.filter((dataset) => financeDatasetMatches(dataset, activeWorkspace));
   const primaryFinanceDataset = activeWorkspaceDatasets.find((dataset) => dataset.id === selectedFinanceDatasetId) ?? activeWorkspaceDatasets[0] ?? null;
-  const primaryFinanceRows = datasetPreview(primaryFinanceDataset).slice(0, 8);
+  const primaryFinanceRows = datasetPreview(primaryFinanceDataset).filter((row) => !previewSearch.trim() || Object.values(row).join(' ').toLowerCase().includes(previewSearch.toLowerCase())).slice(0, 8);
   const primaryFinanceHeaders = primaryFinanceDataset ? getPreviewHeaders(primaryFinanceDataset, primaryFinanceRows).slice(0, 6) : [];
 
   useEffect(() => {
@@ -8052,13 +8070,34 @@ function FinanceOperationsWorkspace({
     setDatasetNameDraft(primaryFinanceDataset?.fileName ?? '');
   }, [primaryFinanceDataset?.id, primaryFinanceDataset?.fileName]);
 
+  useEffect(() => {
+    const status = String(primaryFinanceDataset?.status ?? primaryFinanceDataset?.cleanupStatus ?? '').toLowerCase();
+    const unlocked = /export/.test(status) ? 5 : /completed|approved/.test(status) ? 5 : /clean|mapping|normaliz/.test(status) ? 4 : /validat/.test(status) ? 3 : primaryFinanceDataset ? 1 : 0;
+    setUnlockedFinanceStage(unlocked);
+    setFinanceStage((current) => Math.min(current, unlocked));
+  }, [primaryFinanceDataset?.id, primaryFinanceDataset?.status, primaryFinanceDataset?.cleanupStatus]);
+
   function uploadFinanceWorkspaceFile(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
     if (file) {
-      onUploadWorkspace(file, activeDatasetType);
+      if (uploadMode === 'merge_existing' && !mergeTargetId) {
+        setFinanceMessage('Choose an existing dataset before uploading a merge file.');
+        event.target.value = '';
+        return;
+      }
+      onUploadWorkspace(file, activeDatasetType, { action: uploadMode, targetDatasetId: uploadMode === 'merge_existing' ? mergeTargetId : undefined, duplicateMode });
+      setUnlockedFinanceStage(1);
+      setFinanceStage(1);
       setFinanceMessage(`${file.name} is uploading into ${workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset ?? 'Finance Dataset'}.`);
     }
     event.target.value = '';
+  }
+
+  function advanceFinanceStage(nextStage: number, action?: string) {
+    if (!primaryFinanceDataset || nextStage > unlockedFinanceStage + 1) return;
+    if (action) onDatasetAction(primaryFinanceDataset, action);
+    setUnlockedFinanceStage((current) => Math.max(current, nextStage));
+    setFinanceStage(nextStage);
   }
 
   async function addBlankDatasetRow(dataset: Dataset) {
@@ -8205,7 +8244,7 @@ function FinanceOperationsWorkspace({
         {workspaceDefinitions.map((workspace) => {
           const dataset = financeDatasets.find((entry) => entry.key === workspace.key);
           return (
-            <button className={activeWorkspace === workspace.key ? 'active' : ''} key={workspace.key} type="button" onClick={() => setActiveWorkspace(workspace.key)}>
+            <button className={activeWorkspace === workspace.key ? 'active' : ''} key={workspace.key} type="button" onClick={() => { setActiveWorkspace(workspace.key); setFinanceStage(0); }}>
             <span className="dataset-type-icon">{workspace.icon}</span>
               <strong>{workspace.label}</strong>
               <small>{dataset?.rows ?? 0} rows | {dataset?.datasetObject ? 'connected dataset' : 'empty dataset ready'}</small>
@@ -8216,49 +8255,53 @@ function FinanceOperationsWorkspace({
       <section className="finance-import-pipeline">
         <div className="finance-workspace-header compact">
           <div>
-            <p className="eyebrow">Finance dataset workflow</p>
-            <h3>{workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset} import center</h3>
-            <span>Upload, preview, validate, modify, approve, export, or remove the active finance dataset without leaving this workspace.</span>
+            <p className="eyebrow">Guided finance dataset pipeline</p>
+            <h3>{workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset}</h3>
+            <span>Complete one stage at a time. The next stage unlocks only after the current review is complete.</span>
           </div>
-          <div className="inline-actions">
-            <label className="ghost-button compact">Upload new<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
-            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'preview')}>Preview</button>
-            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'validate')}>Validate</button>
-            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'edit')}>Modify</button>
-            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'approve')}>Approve</button>
-            <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'export')}>Export</button>
-            <button className="danger-action" type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && deleteDatasetRecord(primaryFinanceDataset)}>Delete</button>
-          </div>
+          {primaryFinanceDataset && <select value={primaryFinanceDataset.id} onChange={(event) => setSelectedFinanceDatasetId(event.target.value)}>{activeWorkspaceDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}</select>}
         </div>
         <div className="finance-step-rail">
-          {['Uploaded', 'Preview', 'Validate', 'Modify', 'Approve', 'Export'].map((step, index) => (
+          {['Upload', 'Preview', 'Validate', 'Clean / Modify', 'Approve', 'Export / Publish'].map((step, index) => (
             <button
-              className={primaryFinanceDataset && index === 0 ? 'active' : primaryFinanceDataset ? 'ready' : ''}
-              disabled={!primaryFinanceDataset && index > 0}
+              className={financeStage === index ? 'active' : index < financeStage ? 'ready' : ''}
+              disabled={index > unlockedFinanceStage}
               key={step}
               type="button"
-              onClick={() => {
-                if (!primaryFinanceDataset) return;
-                const action = step === 'Preview' ? 'preview' : step === 'Validate' ? 'validate' : step === 'Modify' ? 'edit' : step === 'Approve' ? 'approve' : step === 'Export' ? 'export' : 'open';
-                onDatasetAction(primaryFinanceDataset, action);
-              }}
+              onClick={() => setFinanceStage(index)}
             >
               <span>{index + 1}</span>{step}
             </button>
           ))}
         </div>
-        {primaryFinanceDataset ? (
-          <div className="finance-dataset-preview-card">
-            <div>
-              <strong>{primaryFinanceDataset.fileName}</strong>
-              <span>{primaryFinanceDataset.rows} rows | {primaryFinanceDataset.columns} columns | {primaryFinanceDataset.status ?? primaryFinanceDataset.cleanupStatus ?? 'uploaded'} | workspace: {primaryFinanceDataset.workspace ?? activeDatasetType}</span>
-              <span>Uploaded {new Date(primaryFinanceDataset.uploadedAt).toLocaleString()} by {primaryFinanceDataset.uploadedByName ?? primaryFinanceDataset.uploadedByEmail ?? 'workspace user'} | validation issues: {primaryFinanceDataset.validationResults?.length ?? 0}</span>
+        {financeStage === 0 && (
+          <div className="finance-stage-panel">
+            <h4>Upload options</h4>
+            <div className="finance-choice-grid">
+              <button className={uploadMode === 'create_new' ? 'active' : ''} type="button" onClick={() => setUploadMode('create_new')}><strong>Create new dataset</strong><span>Register a new isolated finance dataset.</span></button>
+              <button className={uploadMode === 'merge_existing' ? 'active' : ''} type="button" onClick={() => setUploadMode('merge_existing')}><strong>Merge into existing dataset</strong><span>Update one durable dataset and preserve version history.</span></button>
             </div>
-            {activeWorkspaceDatasets.length > 1 && (
-              <select value={primaryFinanceDataset.id} onChange={(event) => setSelectedFinanceDatasetId(event.target.value)}>
-                {activeWorkspaceDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
-              </select>
+            {uploadMode === 'merge_existing' && (
+              <div className="finance-stage-controls">
+                <select value={mergeTargetId} onChange={(event) => setMergeTargetId(event.target.value)}>
+                  <option value="">Select merge target</option>
+                  {activeWorkspaceDatasets.map((dataset) => <option key={dataset.id} value={dataset.id}>{dataset.fileName}</option>)}
+                </select>
+                <select value={duplicateMode} onChange={(event) => setDuplicateMode(event.target.value as NonNullable<DatasetUploadOptions['duplicateMode']>)}>
+                  <option value="merge_update">Merge and update rows</option>
+                  <option value="replace">Replace duplicates</option>
+                  <option value="skip">Skip duplicates</option>
+                  <option value="append_version">Append as new version</option>
+                </select>
+              </div>
             )}
+            <label className="ghost-button compact">Choose finance file<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
+          </div>
+        )}
+        {financeStage === 1 && primaryFinanceDataset && (
+          <div className="finance-stage-panel">
+            <h4>Preview selected dataset</h4>
+            <input placeholder="Filter preview rows..." value={previewSearch} onChange={(event) => setPreviewSearch(event.target.value)} />
             <div className="compact-preview-table">
               <div className="compact-preview-row header">
                 {primaryFinanceHeaders.map((header) => <span key={header}>{header}</span>)}
@@ -8268,49 +8311,43 @@ function FinanceOperationsWorkspace({
                   {primaryFinanceHeaders.map((header) => <span key={header}>{String(row[header] ?? '')}</span>)}
                 </div>
               ))}
-              {!primaryFinanceRows.length && <p className="persistence-note">Dataset is registered. Open Modify to add or edit rows.</p>}
+              {!primaryFinanceRows.length && <p className="persistence-note">No preview rows match this filter.</p>}
             </div>
+            <button type="button" onClick={() => advanceFinanceStage(2, 'preview')}>Preview complete</button>
+          </div>
+        )}
+        {financeStage === 2 && primaryFinanceDataset && (
+          <div className="finance-stage-panel">
+            <h4>Validation results</h4>
+            <div className="finance-validation-grid"><span>{primaryFinanceDataset.validationResults?.length ?? 0} schema warnings</span><span>{primaryFinanceDataset.duplicateResults?.length ?? primaryFinanceDataset.duplicates?.length ?? 0} duplicate checks</span><span>{primaryFinanceDataset.rows} rows checked</span><span>{primaryFinanceDataset.columns} columns checked</span></div>
             <div className="inline-actions">
-              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'clean')}>Clean duplicates</button>
-              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'history')}>History</button>
-              <button type="button" onClick={() => void addBlankDatasetRow(primaryFinanceDataset)}>Add row</button>
-              <button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'edit')}>Add data</button>
-            </div>
-            <div className="inline-actions">
-              <input aria-label="Dataset name" value={datasetNameDraft} onChange={(event) => setDatasetNameDraft(event.target.value)} />
-              <button type="button" disabled={!datasetNameDraft.trim() || datasetNameDraft.trim() === primaryFinanceDataset.fileName} onClick={() => void renameFinanceDataset(primaryFinanceDataset)}>Save dataset name</button>
-            </div>
-            <div className="finance-upload-history">
-              <strong>Workspace upload history</strong>
-              {activeWorkspaceDatasets.slice(0, 5).map((dataset) => (
-                <button key={dataset.id} type="button" onClick={() => setSelectedFinanceDatasetId(dataset.id)}>
-                  <span>{dataset.fileName}</span>
-                  <small>{new Date(dataset.uploadedAt).toLocaleString()} | {dataset.status ?? dataset.cleanupStatus ?? 'uploaded'}</small>
-                </button>
-              ))}
+              <button type="button" onClick={() => advanceFinanceStage(3, 'validate')}>Fix automatically</button>
+              <button type="button" onClick={() => advanceFinanceStage(3, 'validate')}>Send to clean stage</button>
             </div>
           </div>
-        ) : (
-          <EmptyState title={`No ${workspaceDefinitions.find((item) => item.key === activeWorkspace)?.dataset} uploaded yet`} copy="Upload a finance file here. It will remain attached to this workspace after refresh and login." />
         )}
-      </section>
-      <section className="finance-dataset-row">
-        {financeDatasets.map((dataset) => (
-          <article key={dataset.key}>
-            <div>
-              <strong>{dataset.dataset}</strong>
-              <span>{dataset.datasetObject ? `${dataset.rows} rows | ${dataset.datasetObject.status ?? dataset.datasetObject.cleanupStatus ?? 'uploaded'}` : 'Ready for upload'} | isolated Finance scope</span>
-            </div>
-            <div className="inline-actions">
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'preview') : setFinanceMessage(`${dataset.dataset} opens after the first record or upload.`)}>Preview</button>
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'edit') : setFinanceMessage(`Upload or add a row to activate ${dataset.dataset}.`)}>Edit</button>
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'validate') : setFinanceMessage(`Validation will run after ${dataset.dataset} has rows.`)}>Validate</button>
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'clean') : setFinanceMessage(`Cleanup will run after ${dataset.dataset} has rows.`)}>Clean</button>
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'export') : exportFinanceRows(dataset.key)}>Export</button>
-              <button type="button" onClick={() => dataset.datasetObject ? onDatasetAction(dataset.datasetObject, 'approve') : setFinanceMessage(`${dataset.dataset}: approval routing activates after upload.`)}>Approve</button>
-            </div>
-          </article>
-        ))}
+        {financeStage === 3 && primaryFinanceDataset && (
+          <div className="finance-stage-panel">
+            <h4>Clean and modify</h4>
+            <span>Transformations live only here: inline editing, rename, normalization, duplicate cleanup, and row changes.</span>
+            <div className="inline-actions"><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'edit')}>Edit values</button><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'normalize')}>Normalize values</button><button type="button" onClick={() => void addBlankDatasetRow(primaryFinanceDataset)}>Add row</button></div>
+            <div className="inline-actions"><input aria-label="Dataset name" value={datasetNameDraft} onChange={(event) => setDatasetNameDraft(event.target.value)} /><button type="button" disabled={!datasetNameDraft.trim() || datasetNameDraft.trim() === primaryFinanceDataset.fileName} onClick={() => void renameFinanceDataset(primaryFinanceDataset)}>Rename dataset</button></div>
+            <button type="button" onClick={() => advanceFinanceStage(4, 'normalize')}>Cleaning complete</button>
+          </div>
+        )}
+        {financeStage === 4 && primaryFinanceDataset && (
+          <div className="finance-stage-panel">
+            <h4>Approval review</h4><span>{primaryFinanceDataset.fileName} has {primaryFinanceDataset.rows} rows and {primaryFinanceDataset.validationResults?.length ?? 0} validation warnings.</span>
+            <div className="inline-actions"><button type="button" onClick={() => advanceFinanceStage(5, 'approve')}>Approve dataset</button><button type="button" onClick={() => setFinanceStage(3)}>Send back to clean stage</button><button type="button" onClick={() => setFinanceMessage(`${primaryFinanceDataset.fileName} rejected and held for review.`)}>Reject dataset</button></div>
+          </div>
+        )}
+        {financeStage === 5 && primaryFinanceDataset && (
+          <div className="finance-stage-panel">
+            <h4>Export and publish</h4>
+            <div className="inline-actions"><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'export')}>Export CSV</button><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'exportExcel')}>Export Excel</button><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'exportPdf')}>Export PDF</button><button type="button" onClick={() => onDatasetAction(primaryFinanceDataset, 'pipeline')}>Send to pipeline</button></div>
+          </div>
+        )}
+        {financeStage > 0 && !primaryFinanceDataset && <EmptyState title="No selected Finance dataset" copy="Return to Upload and register a dataset before continuing." />}
       </section>
       <section className="finance-workspace-shell">
         <div className="finance-workspace-header">
@@ -8324,9 +8361,7 @@ function FinanceOperationsWorkspace({
             <span>{activeWorkspace === 'assistant' && 'Ask why payroll increased, show unusual invoices, detect duplicate vendors, and forecast expenses.'}</span>
           </div>
           <div className="inline-actions">
-            <label className="ghost-button compact">Upload<input accept=".csv,.xlsx,.xls,.json" hidden type="file" onChange={uploadFinanceWorkspaceFile} /></label>
             <button type="button" onClick={() => createFinanceRecord()} disabled={saving}>{saving ? 'Saving...' : 'Add'}</button>
-            <button type="button" onClick={() => exportFinanceRows()}>Export</button>
             <button type="button" disabled={!primaryFinanceDataset} onClick={() => primaryFinanceDataset && onDatasetAction(primaryFinanceDataset, 'pipeline')}>Pipeline</button>
           </div>
         </div>
@@ -8387,6 +8422,34 @@ function FinanceOperationsWorkspace({
             ))}
           </div>
         )}
+      </section>
+      <section className="finance-dataset-catalog">
+        <button className="finance-catalog-toggle" type="button" onClick={() => setCatalogOpen((current) => !current)}>
+          <strong>{catalogOpen ? 'Collapse' : 'Expand'} Finance datasets</strong>
+          <span>{datasets.filter((dataset) => String(dataset.module ?? '').toLowerCase() === 'accounting').length} durable datasets</span>
+        </button>
+        {catalogOpen && workspaceDefinitions.filter((definition) => definition.key !== 'assistant').map((definition) => {
+          const catalogDatasets = datasets.filter((dataset) => financeDatasetMatches(dataset, definition.key));
+          return (
+            <div className="finance-catalog-group" key={definition.key}>
+              <strong>{definition.label} datasets ({catalogDatasets.length})</strong>
+              {catalogDatasets.map((dataset) => (
+                <article key={dataset.id}>
+                  <button type="button" onClick={() => setExpandedCatalogId(expandedCatalogId === dataset.id ? '' : dataset.id)}>
+                    <span>{expandedCatalogId === dataset.id ? '-' : '+'}</span><strong>{dataset.fileName}</strong><small>{dataset.status ?? dataset.cleanupStatus ?? 'uploaded'} | v{dataset.version ?? 1}</small>
+                  </button>
+                  {expandedCatalogId === dataset.id && (
+                    <div className="finance-catalog-details">
+                      <span>{dataset.rows} rows | {dataset.columns} columns | uploaded {new Date(dataset.uploadedAt).toLocaleString()}</span>
+                      <div className="inline-actions"><button type="button" onClick={() => { setActiveWorkspace(definition.key); setSelectedFinanceDatasetId(dataset.id); setUnlockedFinanceStage(1); setFinanceStage(1); }}>Open</button><button type="button" onClick={() => onDatasetAction(dataset, 'history')}>History</button><button className="danger-action" type="button" onClick={() => deleteDatasetRecord(dataset)}>Delete</button></div>
+                    </div>
+                  )}
+                </article>
+              ))}
+              {!catalogDatasets.length && <span>No datasets yet. Upload from the guided workflow above.</span>}
+            </div>
+          );
+        })}
       </section>
       <section className="finance-insight-grid">
         <article>

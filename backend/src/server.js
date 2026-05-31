@@ -2953,6 +2953,27 @@ app.get('/api/workflows', async (_req, res, next) => {
   }
 });
 
+function uploadedRowKey(row) {
+  const preferredKey = ['invoiceId', 'invoiceID', 'invoiceNumber', 'employeeId', 'recordId', 'id'].find((key) => String(row?.[key] ?? '').trim());
+  if (preferredKey) return `${preferredKey}:${String(row[preferredKey]).trim().toLowerCase()}`;
+  return JSON.stringify(Object.fromEntries(Object.entries(row ?? {}).sort(([left], [right]) => left.localeCompare(right))));
+}
+
+function mergeUploadedRecords(existingRecords, incomingRecords, duplicateMode) {
+  if (duplicateMode === 'append_version') return [...existingRecords, ...incomingRecords];
+  const recordsByKey = new Map(existingRecords.map((row) => [uploadedRowKey(row), row]));
+  for (const incomingRow of incomingRecords) {
+    const key = uploadedRowKey(incomingRow);
+    if (!recordsByKey.has(key)) {
+      recordsByKey.set(key, incomingRow);
+      continue;
+    }
+    if (duplicateMode === 'skip') continue;
+    recordsByKey.set(key, duplicateMode === 'replace' ? incomingRow : { ...recordsByKey.get(key), ...incomingRow });
+  }
+  return [...recordsByKey.values()];
+}
+
 async function handleDatasetUpload(req, res) {
   const startedAt = Date.now();
   logUploadStage(req, 'request_received', { workflowStage: 'Upload' });
@@ -2997,21 +3018,36 @@ async function handleDatasetUpload(req, res) {
 
   const moduleName = String(req.body?.module || 'dataProcessing').trim();
   const workspaceName = String(req.body?.workspace || moduleName || 'workspace').trim();
+  const datasetAction = String(req.body?.datasetAction || 'create_new').trim();
+  const targetDatasetId = String(req.body?.targetDatasetId || '').trim();
+  const duplicateMode = String(req.body?.duplicateMode || 'merge_update').trim();
+  const targetDataset = datasetAction === 'merge_existing' && targetDatasetId ? await getDataset(targetDatasetId, req.user) : null;
+  if (datasetAction === 'merge_existing' && (!targetDataset || targetDataset.companyId !== companyId || targetDataset.module !== moduleName || targetDataset.workspace !== workspaceName)) {
+    const error = uploadError('Merge target is not available inside this workspace.', 'UPLOAD_MERGE_TARGET_INVALID', 'merge_target');
+    res.status(400).json(uploadFailurePayload(req, error, 'merge_target'));
+    return;
+  }
   const moduleValidation = validateModuleUpload(parsed, moduleName);
   logUploadStage(req, 'module_workflow_initialized', { companyId, module: moduleName || 'general', workflowStage: moduleValidation.stage, validationResult: moduleValidation.result });
-  const summary = summarizeCsv(parsed.columns, parsed.records);
+  const existingKeys = new Set((targetDataset?.records ?? []).map(uploadedRowKey));
+  const duplicatesDetected = targetDataset ? parsed.records.filter((row) => existingKeys.has(uploadedRowKey(row))).length : 0;
+  const mergedRecords = targetDataset ? mergeUploadedRecords(targetDataset.records ?? [], parsed.records, duplicateMode) : parsed.records;
+  const mergedColumns = Array.from(new Set([...(targetDataset?.headers ?? []), ...parsed.columns]));
+  const mergedSummary = summarizeCsv(mergedColumns, mergedRecords);
+  const nextVersion = targetDataset ? Number(targetDataset.version ?? 1) + 1 : 1;
   const dataset = {
-    id: randomUUID(),
+    ...(targetDataset ?? {}),
+    id: targetDataset?.id ?? randomUUID(),
     fileName: req.file.originalname,
     fileType: parsed.fileType,
     worksheetName: parsed.worksheetName,
     worksheets: parsed.worksheets,
     uploadedAt: new Date().toISOString(),
-    rows: parsed.records.length,
-    columns: parsed.columns.length,
-    headers: parsed.columns,
-    preview: parsed.records.slice(0, 25),
-    records: parsed.records,
+    rows: mergedRecords.length,
+    columns: mergedColumns.length,
+    headers: mergedColumns,
+    preview: mergedRecords.slice(0, 25),
+    records: mergedRecords,
     userId: req.user.id,
     companyId,
     uploadedByEmail: req.user.email,
@@ -3019,21 +3055,25 @@ async function handleDatasetUpload(req, res) {
     module: moduleName,
     workspace: workspaceName,
     datasetStatus: 'uploaded',
-    version: 1,
-    versionHistory: [{
-      version: 1,
+    version: nextVersion,
+    versionHistory: [...(targetDataset?.versionHistory ?? []), {
+      version: nextVersion,
       status: 'uploaded',
       uploadedAt: new Date().toISOString(),
       fileName: req.file.originalname,
-      rows: parsed.records.length,
-      columns: parsed.columns.length,
+      rows: mergedRecords.length,
+      columns: mergedColumns.length,
+      action: datasetAction,
+      duplicateMode,
       actorUserId: req.user.id
     }],
-    lineage: [{
+    lineage: [...(targetDataset?.lineage ?? []), {
       event: 'upload',
       module: moduleName,
       workspace: workspaceName,
       source: req.file.originalname,
+      action: datasetAction,
+      duplicateMode,
       timestamp: new Date().toISOString()
     }],
     pipelineLinks: [],
@@ -3042,19 +3082,19 @@ async function handleDatasetUpload(req, res) {
     originalDatasetId: null,
     cleanedDatasetId: null,
     cleanupStatus: 'pending',
-    cleanupLogs: [],
+    cleanupLogs: [...(targetDataset?.cleanupLogs ?? []), targetDataset ? `Merged ${parsed.records.length} uploaded rows using ${duplicateMode}; ${duplicatesDetected} duplicate keys detected.` : 'Dataset uploaded into staging.'],
     cleanupMetrics: {},
     cleanupPreview: null,
     cleanupOperations: [],
     validationResults: moduleValidation.missing?.length ? [{ stage: moduleValidation.stage, result: moduleValidation.result, missing: moduleValidation.missing }] : [],
-    duplicateResults: [],
+    duplicateResults: [...(targetDataset?.duplicateResults ?? []), ...(targetDataset ? [{ stage: 'upload_merge', duplicatesDetected, duplicateMode, timestamp: new Date().toISOString() }] : [])],
     cleanupResults: [],
     qualityScore: moduleValidation.result === 'passed' ? 100 : 82,
     pipelineStatus: 'uploaded',
     status: 'uploaded',
     futureAiReady: false,
     warnings: parsed.truncated ? [`Only the first ${maxSpreadsheetRows.toLocaleString()} rows were imported for safe processing.`] : [],
-    ...summary
+    ...mergedSummary
   };
   try {
     await saveDataset(dataset);
