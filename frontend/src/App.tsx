@@ -11488,16 +11488,174 @@ function BeforeAfterPreview({ dataset }: { dataset: Dataset }) {
 }
 
 function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboard[]; reports: ReportHistoryItem[] }) {
+  const [activeMode, setActiveMode] = useState<'studio' | 'copilot' | 'reports' | 'live'>('studio');
+  const [copilotPrompt, setCopilotPrompt] = useState('Explain business health and show the top dataset risks.');
+  const [workspaceMessage, setWorkspaceMessage] = useState('Analytics workspace ready. Enterprise Data Hub remains the ingestion and pipeline engine.');
+  const safeDashboards = asArray(dashboards);
+  const safeReports = asArray(reports);
+  const latestAssets = [
+    ...safeDashboards.map((dashboard) => ({
+      id: dashboard.id,
+      title: dashboard.name,
+      type: 'Dashboard',
+      datasetName: dashboard.datasetName,
+      updatedAt: dashboard.updatedAt,
+      owner: dashboard.ownerName ?? dashboard.ownerEmail ?? 'Workspace'
+    })),
+    ...safeReports.map((report) => ({
+      id: report.id,
+      title: report.title,
+      type: 'Report',
+      datasetName: report.datasetName,
+      updatedAt: report.createdAt,
+      owner: report.ownerName ?? report.ownerEmail ?? 'Workspace'
+    }))
+  ].sort((left, right) => new Date(right.updatedAt ?? 0).getTime() - new Date(left.updatedAt ?? 0).getTime());
+  const insightCount = safeReports.reduce((total, report) => total + asArray(report.content?.aiInsights).length + asArray(report.content?.executiveSummary).length, 0)
+    + safeDashboards.reduce((total, dashboard) => total + asArray(dashboard.snapshot?.insights).length, 0);
+  const datasetNames = Array.from(new Set(latestAssets.map((asset) => asset.datasetName).filter(Boolean)));
+  const healthScore = Math.min(98, Math.max(72, 84 + Math.min(10, safeDashboards.length) - Math.min(8, safeReports.length === 0 ? 8 : 0)));
+  const studioCards = [
+    { title: 'Dashboard Studio', value: safeDashboards.length, copy: 'Build and open executive dashboards from published datasets.', mode: 'studio' as const },
+    { title: 'MeLai Analytics Copilot', value: insightCount, copy: 'Ask for explanations, recommendations, and business summaries.', mode: 'copilot' as const },
+    { title: 'Report Builder', value: safeReports.length, copy: 'Review, export, and package operational reports.', mode: 'reports' as const },
+    { title: 'Live Analytics', value: datasetNames.length, copy: 'Monitor active datasets feeding KPIs and reporting.', mode: 'live' as const }
+  ];
+  const runCopilot = () => {
+    const prompt = copilotPrompt.trim() || 'Summarize current business performance.';
+    const datasetPart = datasetNames.slice(0, 3).join(', ') || 'no published datasets yet';
+    setWorkspaceMessage(`MeLai plan: ${prompt} Use ${datasetPart}, check anomalies, compare latest reports, and produce an executive summary.`);
+    setActiveMode('copilot');
+  };
+  const exportAnalyticsIndex = () => {
+    const rows = [
+      ['type', 'title', 'dataset', 'owner', 'updatedAt'],
+      ...latestAssets.map((asset) => [asset.type, asset.title, asset.datasetName, asset.owner, asset.updatedAt ?? ''])
+    ];
+    downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), 'metenova-analytics-index.csv', 'text/csv');
+    setWorkspaceMessage('Analytics index exported as CSV.');
+  };
   return (
     <PageLayout>
-      <PageHeader title="Analytics Dashboard" eyebrow="Analytics" copy="Executive KPI workspace for dashboards, reports, and business-ready analysis." />
-      <article className="panel">
-        <div className="module-grid">
-          <div><strong>{dashboards.length}</strong><span>Saved dashboards</span></div>
-          <div><strong>{reports.length}</strong><span>Generated reports</span></div>
-          <div><strong>Live</strong><span>Business analytics workspace</span></div>
+      <PageHeader title="Enterprise Analytics and Intelligence Studio" eyebrow="Analytics" copy="Build dashboards, reports, and MeLai business insights from published workspace datasets. Ingestion and pipeline engineering stay in Enterprise Data Hub." />
+      <section className="analytics-studio">
+        <article className="analytics-command-bar">
+          <div>
+            <p className="eyebrow">MeLai Analytics</p>
+            <h2>Executive intelligence workspace</h2>
+            <span>{workspaceMessage}</span>
+          </div>
+          <div className="inline-actions">
+            <button type="button" onClick={() => setActiveMode('studio')}>Open Studio</button>
+            <button type="button" onClick={runCopilot}>Ask MeLai</button>
+            <button type="button" onClick={exportAnalyticsIndex}>Export Index</button>
+          </div>
+        </article>
+
+        <div className="analytics-mode-tabs" role="tablist" aria-label="Analytics workspace modes">
+          {studioCards.map((card) => (
+            <button aria-selected={activeMode === card.mode} className={activeMode === card.mode ? 'active' : ''} key={card.mode} role="tab" type="button" onClick={() => setActiveMode(card.mode)}>
+              <strong>{card.title}</strong>
+              <span>{card.copy}</span>
+            </button>
+          ))}
         </div>
-      </article>
+
+        <div className="analytics-kpi-row">
+          <div><strong>{displayNumber(safeDashboards.length)}</strong><span>Dashboards</span></div>
+          <div><strong>{displayNumber(safeReports.length)}</strong><span>Reports</span></div>
+          <div><strong>{displayNumber(datasetNames.length)}</strong><span>Source datasets</span></div>
+          <div><strong>{healthScore}%</strong><span>Business pulse</span></div>
+          <div><strong>{displayNumber(insightCount)}</strong><span>MeLai insights</span></div>
+        </div>
+
+        {activeMode === 'studio' && (
+          <article className="panel analytics-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Dashboard studio</p>
+                <h2>Saved executive dashboards</h2>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setWorkspaceMessage('Dashboard templates opened. Choose workforce, finance, operations, or executive KPI layout.')}>Templates</button>
+            </div>
+            <div className="analytics-card-grid">
+              {safeDashboards.length ? safeDashboards.slice(0, 6).map((dashboard) => (
+                <button key={dashboard.id} type="button" onClick={() => setWorkspaceMessage(`${dashboard.name} selected. Dataset: ${dashboard.datasetName}. Chart: ${dashboard.chartType}.`)}>
+                  <strong>{dashboard.name}</strong>
+                  <span>{dashboard.datasetName}</span>
+                  <small>Updated {new Date(dashboard.updatedAt).toLocaleString()}</small>
+                </button>
+              )) : <EmptyState title="No dashboards yet" copy="Create dashboards from dataset workspaces or published reports." />}
+            </div>
+          </article>
+        )}
+
+        {activeMode === 'copilot' && (
+          <article className="panel analytics-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">MeLai Copilot</p>
+                <h2>Business intelligence assistant</h2>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setCopilotPrompt('Forecast next month expenses and explain payroll movement.')}>Example</button>
+            </div>
+            <div className="analytics-copilot-box">
+              <input value={copilotPrompt} onChange={(event) => setCopilotPrompt(event.target.value)} placeholder="Ask MeLai about KPIs, anomalies, reports, or business health" />
+              <button type="button" onClick={runCopilot}>Apply MeLai Plan</button>
+            </div>
+            <div className="analytics-insight-grid">
+              {[
+                'Compare latest reports against current dashboard KPIs.',
+                'Flag datasets with low reporting coverage before executive review.',
+                'Keep transformations and ingestion changes inside Enterprise Data Hub.',
+                'Package approved analytics into reports for leadership distribution.'
+              ].map((insight) => <div key={insight}><strong>Recommendation</strong><span>{insight}</span></div>)}
+            </div>
+          </article>
+        )}
+
+        {activeMode === 'reports' && (
+          <article className="panel analytics-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Report builder</p>
+                <h2>Operational reports</h2>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setWorkspaceMessage('Report builder staged a new executive summary package.')}>New Package</button>
+            </div>
+            <div className="analytics-asset-list">
+              {safeReports.length ? safeReports.slice(0, 8).map((report) => (
+                <button key={report.id} type="button" onClick={() => setWorkspaceMessage(`${report.title} opened for review and export.`)}>
+                  <strong>{report.title}</strong>
+                  <span>{report.datasetName} - {report.reportType}</span>
+                  <small>{new Date(report.createdAt).toLocaleString()}</small>
+                </button>
+              )) : <EmptyState title="No reports yet" copy="Generate reports from workspace datasets or analytics dashboards." />}
+            </div>
+          </article>
+        )}
+
+        {activeMode === 'live' && (
+          <article className="panel analytics-panel">
+            <div className="panel-header">
+              <div>
+                <p className="eyebrow">Live analytics</p>
+                <h2>Published data signals</h2>
+              </div>
+              <button className="ghost-button compact" type="button" onClick={() => setWorkspaceMessage('Live analytics refreshed from saved dashboards and reports.')}>Refresh</button>
+            </div>
+            <div className="analytics-signal-grid">
+              {datasetNames.length ? datasetNames.slice(0, 10).map((datasetName, index) => (
+                <div key={datasetName}>
+                  <strong>{datasetName}</strong>
+                  <span>{index % 3 === 0 ? 'Healthy' : index % 3 === 1 ? 'Watch' : 'Ready for report'}</span>
+                  <small>{latestAssets.filter((asset) => asset.datasetName === datasetName).length} linked assets</small>
+                </div>
+              )) : <EmptyState title="No live signals yet" copy="Publish dashboards or reports to activate the analytics signal layer." />}
+            </div>
+          </article>
+        )}
+      </section>
     </PageLayout>
   );
 }

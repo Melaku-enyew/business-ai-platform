@@ -8,6 +8,7 @@
   --panel: #ffffff;
   --panel-strong: #f8fafc;
   --text: #111827;
+  --heading: #0f172a;
   --muted: #475569;
   --line: #d7e0ec;
   --line-strong: #b8c6d8;
@@ -18,6 +19,9 @@
   --accent-soft: #b9f0dc;
   --accent-wash: #e8f7f2;
   --accent-text: #0d3036;
+  --success: #15803d;
+  --warning: #b45309;
+  --danger: #b91c1c;
   --shadow: 0 20px 55px rgba(18, 32, 51, 0.08);
   --shadow-strong: 0 28px 70px rgba(18, 32, 51, 0.14);
   --radius: 10px;
@@ -31,6 +35,7 @@
   --panel: #151f2e;
   --panel-strong: #1b2a3d;
   --text: #f8fbff;
+  --heading: #ffffff;
   --muted: #c5d3e3;
   --line: #3a4b60;
   --line-strong: #58708c;
@@ -41,12 +46,22 @@
   --accent-soft: #8fe7c2;
   --accent-wash: #142e34;
   --accent-text: #0e2730;
+  --success: #4ade80;
+  --warning: #fbbf24;
+  --danger: #f87171;
   --shadow: 0 18px 42px rgba(0, 0, 0, 0.2);
   --shadow-strong: 0 30px 80px rgba(0, 0, 0, 0.32);
 }
 
 * {
   box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  max-width: 100%;
+  overflow-x: hidden;
 }
 
 body {
@@ -67,6 +82,13 @@ select {
 
 button {
   border: 0;
+}
+
+input,
+select,
+textarea,
+button {
+  max-width: 100%;
 }
 
 .auth-shell {
@@ -6755,9 +6777,229 @@ th {
   color: #fecaca;
 }
 
+.analytics-studio {
+  display: grid;
+  gap: 12px;
+}
+
+.analytics-command-bar,
+.analytics-mode-tabs,
+.analytics-kpi-row,
+.analytics-card-grid,
+.analytics-insight-grid,
+.analytics-signal-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.analytics-command-bar {
+  grid-template-columns: minmax(0, 1fr) max-content;
+  align-items: center;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--panel);
+  box-shadow: var(--shadow);
+  padding: 14px;
+}
+
+.analytics-command-bar h2,
+.analytics-panel h2 {
+  margin: 0;
+  color: var(--heading);
+  font-size: clamp(20px, 2vw, 28px);
+  font-weight: 950;
+  letter-spacing: 0;
+}
+
+.analytics-command-bar span,
+.analytics-mode-tabs span,
+.analytics-kpi-row span,
+.analytics-card-grid span,
+.analytics-asset-list span,
+.analytics-signal-grid span,
+.analytics-insight-grid span {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.analytics-mode-tabs {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.analytics-mode-tabs button,
+.analytics-card-grid button,
+.analytics-asset-list button {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  color: var(--text);
+  text-align: left;
+  padding: 11px;
+}
+
+.analytics-mode-tabs button.active,
+.analytics-mode-tabs button:hover,
+.analytics-card-grid button:hover,
+.analytics-asset-list button:hover {
+  border-color: color-mix(in srgb, var(--accent) 44%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent-wash) 72%, var(--panel));
+}
+
+.analytics-mode-tabs strong,
+.analytics-card-grid strong,
+.analytics-asset-list strong,
+.analytics-signal-grid strong,
+.analytics-insight-grid strong {
+  color: var(--heading);
+  font-weight: 900;
+}
+
+.analytics-kpi-row {
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+.analytics-kpi-row div,
+.analytics-insight-grid div,
+.analytics-signal-grid div {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel);
+  padding: 10px;
+}
+
+.analytics-kpi-row strong {
+  color: var(--heading);
+  font-size: 23px;
+  font-weight: 950;
+}
+
+.analytics-panel {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.analytics-card-grid {
+  grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+}
+
+.analytics-copilot-box {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  gap: 8px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.analytics-copilot-box input {
+  min-height: 40px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 9px 11px;
+}
+
+.analytics-copilot-box button {
+  border: 1px solid color-mix(in srgb, var(--accent) 46%, var(--line));
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  font-weight: 900;
+  padding: 9px 12px;
+}
+
+.analytics-insight-grid,
+.analytics-signal-grid {
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+}
+
+.analytics-asset-list {
+  display: grid;
+  gap: 8px;
+}
+
+.analytics-asset-list button {
+  grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr) max-content;
+  align-items: center;
+}
+
+:root[data-theme='dark'] .panel,
+:root[data-theme='dark'] .metric-card,
+:root[data-theme='dark'] .csv-section,
+:root[data-theme='dark'] .workspace-command-card,
+:root[data-theme='dark'] .analytics-command-bar,
+:root[data-theme='dark'] .analytics-mode-tabs button,
+:root[data-theme='dark'] .analytics-kpi-row div,
+:root[data-theme='dark'] .analytics-card-grid button,
+:root[data-theme='dark'] .analytics-asset-list button,
+:root[data-theme='dark'] .analytics-insight-grid div,
+:root[data-theme='dark'] .analytics-signal-grid div,
+:root[data-theme='dark'] .selected-dataset-card,
+:root[data-theme='dark'] .hr-focused-card,
+:root[data-theme='dark'] .finance-module-card,
+:root[data-theme='dark'] .data-hub-step-panel {
+  background: var(--panel);
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+:root[data-theme='dark'] input,
+:root[data-theme='dark'] select,
+:root[data-theme='dark'] textarea {
+  background: var(--panel-strong);
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
+:root[data-theme='dark'] input::placeholder,
+:root[data-theme='dark'] textarea::placeholder {
+  color: #aebfd2;
+}
+
+:root[data-theme='dark'] button:disabled {
+  color: #93a4b8;
+  background: #243247;
+  border-color: #40546b;
+  opacity: 0.82;
+}
+
+:root[data-theme='dark'] th,
+:root[data-theme='dark'] td,
+:root[data-theme='dark'] .compact-table > div,
+:root[data-theme='dark'] .dataset-row-summary,
+:root[data-theme='dark'] .finance-dataset-row article {
+  color: var(--text);
+  border-color: var(--line-strong);
+}
+
 @media (max-width: 900px) {
   .preview-query-builder,
   .dashboard-dataset-browser .compact-table > div {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-command-bar,
+  .analytics-copilot-box,
+  .analytics-asset-list button {
+    grid-template-columns: 1fr;
+  }
+
+  .analytics-mode-tabs,
+  .analytics-kpi-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .analytics-mode-tabs,
+  .analytics-kpi-row {
     grid-template-columns: 1fr;
   }
 }
