@@ -5,9 +5,15 @@
     "Inter", "SF Pro Display", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
     sans-serif;
   --bg: #f5f7fb;
+  --bg-primary: #f5f7fb;
+  --bg-secondary: #eef3f9;
   --panel: #ffffff;
   --panel-strong: #f8fafc;
+  --card-background: #ffffff;
+  --card-border: #d7e0ec;
   --text: #111827;
+  --text-primary: #111827;
+  --text-secondary: #475569;
   --heading: #0f172a;
   --muted: #475569;
   --line: #d7e0ec;
@@ -15,10 +21,13 @@
   --nav: #0c1422;
   --nav-active: #202e45;
   --accent: #1f7a8c;
+  --accent-color: #1f7a8c;
   --accent-2: #8b6f47;
   --accent-soft: #b9f0dc;
   --accent-wash: #e8f7f2;
   --accent-text: #0d3036;
+  --button-background: #f8fafc;
+  --button-text: #111827;
   --success: #15803d;
   --warning: #b45309;
   --danger: #b91c1c;
@@ -32,9 +41,15 @@
   color: #f8fbff;
   background: #0e1624;
   --bg: #0e1624;
+  --bg-primary: #0e1624;
+  --bg-secondary: #111c2c;
   --panel: #151f2e;
   --panel-strong: #1b2a3d;
+  --card-background: #151f2e;
+  --card-border: #58708c;
   --text: #f8fbff;
+  --text-primary: #f8fbff;
+  --text-secondary: #c5d3e3;
   --heading: #ffffff;
   --muted: #c5d3e3;
   --line: #3a4b60;
@@ -42,10 +57,13 @@
   --nav: #080d15;
   --nav-active: #203149;
   --accent: #4db3d3;
+  --accent-color: #4db3d3;
   --accent-2: #d4b272;
   --accent-soft: #8fe7c2;
   --accent-wash: #142e34;
   --accent-text: #0e2730;
+  --button-background: #1b2a3d;
+  --button-text: #f8fbff;
   --success: #4ade80;
   --warning: #fbbf24;
   --danger: #f87171;
@@ -6787,7 +6805,10 @@ th {
 .analytics-kpi-row,
 .analytics-card-grid,
 .analytics-insight-grid,
-.analytics-signal-grid {
+.analytics-signal-grid,
+.analytics-builder-strip,
+.analytics-workflow-lane,
+.analytics-action-list {
   display: grid;
   gap: 10px;
 }
@@ -6915,6 +6936,68 @@ th {
   padding: 9px 12px;
 }
 
+.analytics-builder-strip {
+  grid-template-columns: repeat(3, minmax(150px, 1fr)) minmax(260px, 1.5fr);
+  align-items: end;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel);
+  padding: 12px;
+}
+
+.analytics-builder-strip label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.analytics-builder-strip select {
+  min-height: 36px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  padding: 7px 9px;
+}
+
+.analytics-quick-actions,
+.analytics-action-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.analytics-quick-actions button,
+.analytics-workflow-lane button,
+.analytics-action-list button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--button-text);
+  font-weight: 850;
+  padding: 8px 10px;
+}
+
+.analytics-workflow-lane {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.analytics-workflow-lane button {
+  display: grid;
+  gap: 4px;
+  text-align: left;
+}
+
+.analytics-workflow-lane button:hover,
+.analytics-quick-actions button:hover,
+.analytics-action-list button:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent-wash) 74%, var(--panel));
+}
+
 .analytics-insight-grid,
 .analytics-signal-grid {
   grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
@@ -6936,15 +7019,25 @@ th {
 :root[data-theme='dark'] .workspace-command-card,
 :root[data-theme='dark'] .analytics-command-bar,
 :root[data-theme='dark'] .analytics-mode-tabs button,
+:root[data-theme='dark'] .analytics-builder-strip,
 :root[data-theme='dark'] .analytics-kpi-row div,
 :root[data-theme='dark'] .analytics-card-grid button,
 :root[data-theme='dark'] .analytics-asset-list button,
 :root[data-theme='dark'] .analytics-insight-grid div,
 :root[data-theme='dark'] .analytics-signal-grid div,
+:root[data-theme='dark'] .analytics-workflow-lane button,
 :root[data-theme='dark'] .selected-dataset-card,
 :root[data-theme='dark'] .hr-focused-card,
 :root[data-theme='dark'] .finance-module-card,
-:root[data-theme='dark'] .data-hub-step-panel {
+:root[data-theme='dark'] .finance-stage-panel,
+:root[data-theme='dark'] .data-hub-step-panel,
+:root[data-theme='dark'] .access-modal,
+:root[data-theme='dark'] .preview-modal,
+:root[data-theme='dark'] .preview-summary-grid div,
+:root[data-theme='dark'] .preview-panels article,
+:root[data-theme='dark'] .dropzone,
+:root[data-theme='dark'] .assignment-chip,
+:root[data-theme='dark'] .muted-chip {
   background: var(--panel);
   color: var(--text);
   border-color: var(--line-strong);
@@ -6974,9 +7067,23 @@ th {
 :root[data-theme='dark'] td,
 :root[data-theme='dark'] .compact-table > div,
 :root[data-theme='dark'] .dataset-row-summary,
-:root[data-theme='dark'] .finance-dataset-row article {
+:root[data-theme='dark'] .finance-dataset-row article,
+:root[data-theme='dark'] .company-access-row,
+:root[data-theme='dark'] .pipeline-state {
   color: var(--text);
   border-color: var(--line-strong);
+}
+
+:root[data-theme='dark'] .access-role-picker,
+:root[data-theme='dark'] .company-access-row small,
+:root[data-theme='dark'] .preview-summary-grid span,
+:root[data-theme='dark'] .column-type-list span,
+:root[data-theme='dark'] .preview-warnings,
+:root[data-theme='dark'] .duplicate-list span,
+:root[data-theme='dark'] .dropzone,
+:root[data-theme='dark'] .assignment-chip,
+:root[data-theme='dark'] .muted-chip {
+  color: var(--muted);
 }
 
 @media (max-width: 900px) {
@@ -6987,7 +7094,8 @@ th {
 
   .analytics-command-bar,
   .analytics-copilot-box,
-  .analytics-asset-list button {
+  .analytics-asset-list button,
+  .analytics-builder-strip {
     grid-template-columns: 1fr;
   }
 

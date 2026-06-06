@@ -11491,6 +11491,9 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
   const [activeMode, setActiveMode] = useState<'studio' | 'copilot' | 'reports' | 'live'>('studio');
   const [copilotPrompt, setCopilotPrompt] = useState('Explain business health and show the top dataset risks.');
   const [workspaceMessage, setWorkspaceMessage] = useState('Analytics workspace ready. Enterprise Data Hub remains the ingestion and pipeline engine.');
+  const [selectedSource, setSelectedSource] = useState('Workspace Datasets');
+  const [selectedChart, setSelectedChart] = useState('KPI Cards');
+  const [selectedTemplate, setSelectedTemplate] = useState('Executive Summary');
   const safeDashboards = asArray(dashboards);
   const safeReports = asArray(reports);
   const latestAssets = [
@@ -11521,6 +11524,12 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
     { title: 'Report Builder', value: safeReports.length, copy: 'Review, export, and package operational reports.', mode: 'reports' as const },
     { title: 'Live Analytics', value: datasetNames.length, copy: 'Monitor active datasets feeding KPIs and reporting.', mode: 'live' as const }
   ];
+  const analyticsActions = ['Create Dashboard', 'Create Report', 'Import Dashboard', 'Use Template', 'Duplicate Dashboard'];
+  const sourceOptions = ['Workspace Datasets', 'Enterprise Data Hub Datasets', 'Uploaded Files', 'SQL Server', 'PostgreSQL', 'MySQL', 'REST APIs', 'CSV', 'Excel', 'Google Sheets', 'SharePoint', 'OneDrive'];
+  const chartTypes = ['KPI Cards', 'Line Charts', 'Bar Charts', 'Pie Charts', 'Donut Charts', 'Area Charts', 'Combo Charts', 'Tables', 'Heatmaps', 'Geographic Maps', 'Gauges', 'Scatter Charts', 'Forecast Charts', 'Treemaps'];
+  const dashboardTemplates = ['Executive Summary', 'Finance Dashboard', 'HR Dashboard', 'CRM Dashboard', 'Project Dashboard', 'Healthcare Dashboard', 'Operational Dashboard'];
+  const dataPrepActions = ['Rename columns', 'Remove columns', 'Replace values', 'Remove duplicates', 'Merge columns', 'Split columns', 'Calculated columns', 'Business formulas', 'Normalize values'];
+  const reportTypes = ['Operational Report', 'Executive Report', 'Board Report', 'Audit Report'];
   const runCopilot = () => {
     const prompt = copilotPrompt.trim() || 'Summarize current business performance.';
     const datasetPart = datasetNames.slice(0, 3).join(', ') || 'no published datasets yet';
@@ -11535,6 +11544,24 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
     downloadText(rows.map((row) => row.map(csvEscape).join(',')).join('\n'), 'metenova-analytics-index.csv', 'text/csv');
     setWorkspaceMessage('Analytics index exported as CSV.');
   };
+  const runAnalyticsAction = (action: string) => {
+    if (action === 'Create Dashboard') {
+      setActiveMode('studio');
+      setWorkspaceMessage(`New dashboard staged from ${selectedSource} using ${selectedChart}. Add widgets, resize them, and save the layout.`);
+    } else if (action === 'Create Report') {
+      setActiveMode('reports');
+      setWorkspaceMessage(`New report package staged. Choose operational, executive, board, or audit format, then export PDF, Excel, PowerPoint, or image.`);
+    } else if (action === 'Import Dashboard') {
+      setActiveMode('studio');
+      setWorkspaceMessage('Dashboard import opened. Select JSON/template files or connect to a published workspace dashboard.');
+    } else if (action === 'Use Template') {
+      setActiveMode('studio');
+      setWorkspaceMessage(`${selectedTemplate} template applied with starter KPIs, filters, and MeLai insight blocks.`);
+    } else if (action === 'Duplicate Dashboard') {
+      setActiveMode('studio');
+      setWorkspaceMessage(latestAssets[0] ? `${latestAssets[0].title} duplicated as an editable analytics draft.` : 'No dashboard exists yet; create one from a template first.');
+    }
+  };
   return (
     <PageLayout>
       <PageHeader title="Enterprise Analytics and Intelligence Studio" eyebrow="Analytics" copy="Build dashboards, reports, and MeLai business insights from published workspace datasets. Ingestion and pipeline engineering stay in Enterprise Data Hub." />
@@ -11546,7 +11573,8 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
             <span>{workspaceMessage}</span>
           </div>
           <div className="inline-actions">
-            <button type="button" onClick={() => setActiveMode('studio')}>Open Studio</button>
+            <button type="button" onClick={() => runAnalyticsAction('Create Dashboard')}>Create Dashboard</button>
+            <button type="button" onClick={() => runAnalyticsAction('Create Report')}>Create Report</button>
             <button type="button" onClick={runCopilot}>Ask MeLai</button>
             <button type="button" onClick={exportAnalyticsIndex}>Export Index</button>
           </div>
@@ -11569,6 +11597,30 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
           <div><strong>{displayNumber(insightCount)}</strong><span>MeLai insights</span></div>
         </div>
 
+        <article className="analytics-builder-strip">
+          <label>
+            Source
+            <select value={selectedSource} onChange={(event) => setSelectedSource(event.target.value)}>
+              {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
+            </select>
+          </label>
+          <label>
+            Chart
+            <select value={selectedChart} onChange={(event) => setSelectedChart(event.target.value)}>
+              {chartTypes.map((chart) => <option key={chart} value={chart}>{chart}</option>)}
+            </select>
+          </label>
+          <label>
+            Template
+            <select value={selectedTemplate} onChange={(event) => setSelectedTemplate(event.target.value)}>
+              {dashboardTemplates.map((template) => <option key={template} value={template}>{template}</option>)}
+            </select>
+          </label>
+          <div className="analytics-quick-actions">
+            {analyticsActions.map((action) => <button key={action} type="button" onClick={() => runAnalyticsAction(action)}>{action}</button>)}
+          </div>
+        </article>
+
         {activeMode === 'studio' && (
           <article className="panel analytics-panel">
             <div className="panel-header">
@@ -11586,6 +11638,14 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
                   <small>Updated {new Date(dashboard.updatedAt).toLocaleString()}</small>
                 </button>
               )) : <EmptyState title="No dashboards yet" copy="Create dashboards from dataset workspaces or published reports." />}
+            </div>
+            <div className="analytics-workflow-lane">
+              {['Choose Source', 'Preview Data', 'Clean Data', 'Build Dashboard', 'Publish Dashboard'].map((step, index) => (
+                <button key={step} type="button" onClick={() => setWorkspaceMessage(`${step} opened. Step ${index + 1} is ready for analytics workspace review.`)}>
+                  <strong>{step}</strong>
+                  <span>{index === 0 ? selectedSource : index === 3 ? selectedChart : 'Ready'}</span>
+                </button>
+              ))}
             </div>
           </article>
         )}
@@ -11611,6 +11671,13 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
                 'Package approved analytics into reports for leadership distribution.'
               ].map((insight) => <div key={insight}><strong>Recommendation</strong><span>{insight}</span></div>)}
             </div>
+            <div className="analytics-action-list">
+              {['Build payroll dashboard', 'Create executive finance report', 'Show overtime trends', 'Forecast monthly expenses', 'Identify financial anomalies'].map((prompt) => (
+                <button key={prompt} type="button" onClick={() => { setCopilotPrompt(prompt); setWorkspaceMessage(`MeLai generated a plan for: ${prompt}. Charts, KPIs, filters, and insight summaries are staged.`); }}>
+                  {prompt}
+                </button>
+              ))}
+            </div>
           </article>
         )}
 
@@ -11632,6 +11699,14 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
                 </button>
               )) : <EmptyState title="No reports yet" copy="Generate reports from workspace datasets or analytics dashboards." />}
             </div>
+            <div className="analytics-workflow-lane">
+              {reportTypes.map((reportType) => (
+                <button key={reportType} type="button" onClick={() => setWorkspaceMessage(`${reportType} selected. Export options: PDF, Excel, PowerPoint, image, daily, weekly, or monthly schedule.`)}>
+                  <strong>{reportType}</strong>
+                  <span>PDF | Excel | PowerPoint | schedule</span>
+                </button>
+              ))}
+            </div>
           </article>
         )}
 
@@ -11652,6 +11727,14 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
                   <small>{latestAssets.filter((asset) => asset.datasetName === datasetName).length} linked assets</small>
                 </div>
               )) : <EmptyState title="No live signals yet" copy="Publish dashboards or reports to activate the analytics signal layer." />}
+            </div>
+            <div className="analytics-workflow-lane">
+              {dataPrepActions.map((action) => (
+                <button key={action} type="button" onClick={() => setWorkspaceMessage(`${action} staged in Analytics Data Preparation. Save output as an Analytics Dataset when ready.`)}>
+                  <strong>{action}</strong>
+                  <span>Save as Analytics Dataset</span>
+                </button>
+              ))}
             </div>
           </article>
         )}
