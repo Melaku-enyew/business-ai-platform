@@ -5573,6 +5573,9 @@ function ModuleWorkspacePage({
   ]);
   const [savedPipelineVersion, setSavedPipelineVersion] = useState(1);
   const [selectedConnector, setSelectedConnector] = useState('SQL Server');
+  const [connectorWorkflowState, setConnectorWorkflowState] = useState<Record<string, { configured?: boolean; tested?: boolean; previewed?: boolean; cleaned?: boolean; reportReady?: boolean }>>({});
+  const [selectedReportType, setSelectedReportType] = useState('Executive Report');
+  const [selectedReportCharts, setSelectedReportCharts] = useState<string[]>(['KPI Cards', 'Tables']);
   const [pipelineStudioMode, setPipelineStudioMode] = useState<'develop' | 'preview' | 'execute' | 'monitor'>('develop');
   const [pipelineZoom, setPipelineZoom] = useState(88);
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
@@ -5826,6 +5829,14 @@ function ModuleWorkspacePage({
 
   function configureDataSource(source: string) {
     setDataSourceType(source);
+    if (/SQL Server/i.test(source)) {
+      setSourceConfig((current) => ({
+        ...current,
+        host: current.host || 'DESKTOP-1EOGPVO',
+        database: current.database || 'AdventureWorks2017',
+        username: current.username || 'Windows authentication'
+      }));
+    }
     setWorkflowMessage(source ? `${source} selected. Configure and test the source before continuing.` : 'Choose a data source to begin ingestion.');
     setIngestionStep('source');
   }
@@ -5837,8 +5848,12 @@ function ModuleWorkspacePage({
       return;
     }
     setDataSourceType(source);
-    setConnectorMessage(`${source} connection test completed for ${selectedCompanyName}.`);
-    setWorkflowMessage(`${source} connection is healthy. Continue to upload, discover, or import.`);
+    if (selectedPipelineBlock?.label === source) updateSelectedNodeWorkflow({ configured: true, tested: true });
+    const localSqlNotice = /SQL Server/i.test(source)
+      ? ` ${sourceConfig.host || 'DESKTOP-1EOGPVO'} / ${sourceConfig.database || 'AdventureWorks2017'} uses Windows authentication; production live pulls require a secure local connector agent or public/VPN endpoint.`
+      : '';
+    setConnectorMessage(`${source} connection test completed for ${selectedCompanyName}.${localSqlNotice}`);
+    setWorkflowMessage(`${source} connection is ready for preview.${localSqlNotice}`);
   }
 
   function discoverDataSourceSchema(sourceOverride = '') {
@@ -5848,6 +5863,7 @@ function ModuleWorkspacePage({
       return;
     }
     setDataSourceType(source);
+    if (selectedPipelineBlock?.label === source) updateSelectedNodeWorkflow({ configured: true });
     setConnectorMessage(`${source} schema discovery completed. Tables, sheets, folders, or endpoints are ready for preview.`);
     setWorkflowMessage(`${source} schema discovered. You can import a preview into the governed pipeline.`);
   }
@@ -5869,6 +5885,10 @@ function ModuleWorkspacePage({
     const source = sourceOverride || dataSourceType;
     if (!source) {
       setWorkflowMessage('Choose and configure a source before importing.');
+      return;
+    }
+    if (selectedPipelineBlock?.label === source && !selectedNodeWorkflow.tested) {
+      setWorkflowMessage(`Test ${source} before importing or previewing data.`);
       return;
     }
     setDataSourceType(source);
@@ -5899,6 +5919,7 @@ function ModuleWorkspacePage({
       numericSummary: []
     } as Dataset);
     setStagedDataset(imported);
+    if (selectedPipelineBlock?.label === source) updateSelectedNodeWorkflow({ previewed: true });
     setActiveDataset(imported);
     setUploadAnalysis(analyzeUploadedDataset(imported, route.module));
     setWorkflowStage(workflowStages[0] ?? 'Upload');
@@ -6126,6 +6147,9 @@ function ModuleWorkspacePage({
   };
   const pipelineTemplates = ['Payroll import pipeline', 'CRM sync pipeline', 'Finance reconciliation pipeline', 'SharePoint sync pipeline', 'Excel cleanup pipeline', 'Data warehouse sync pipeline'];
   const selectedPipelineBlock = pipelineBlocks.find((block) => block.id === selectedPipelineBlockId) ?? pipelineBlocks[0] ?? null;
+  const selectedNodeWorkflow = connectorWorkflowState[selectedPipelineBlockId] ?? {};
+  const reportTypeOptions = ['Operational Report', 'Executive Report', 'Board Report', 'Audit Report', 'Dashboard', 'Power BI-style Dashboard'];
+  const reportChartOptions = ['KPI Cards', 'Line Charts', 'Bar Charts', 'Pie Charts', 'Donut Charts', 'Area Charts', 'Combo Charts', 'Tables', 'Heatmaps', 'Gauges', 'Scatter Charts', 'Forecast Charts'];
   const allConnectorSources = connectorCategories.flatMap((category) => category.sources);
   const selectedConnectorCategory = connectorCategories.find((category) => category.sources.includes(selectedConnector))?.name ?? 'Databases';
   const pipelineSourceCount = pipelineBlocks.filter((block) => block.type === 'SOURCE').length;
@@ -6158,6 +6182,79 @@ function ModuleWorkspacePage({
     setPipelineBlocks((current) => [...current, block]);
     setSelectedPipelineBlockId(block.id);
     setPipelineExecutionLogs((current) => [{ id: `log-${Date.now()}`, message: `${label} block added to the pipeline canvas.`, status: 'ready', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function updateSelectedNodeWorkflow(patch: { configured?: boolean; tested?: boolean; previewed?: boolean; cleaned?: boolean; reportReady?: boolean }) {
+    if (!selectedPipelineBlock) return;
+    setConnectorWorkflowState((current) => ({
+      ...current,
+      [selectedPipelineBlock.id]: { ...(current[selectedPipelineBlock.id] ?? {}), ...patch }
+    }));
+  }
+
+  function toggleReportChart(chart: string) {
+    setSelectedReportCharts((current) => current.includes(chart) ? current.filter((entry) => entry !== chart) : [...current, chart]);
+  }
+
+  function configureSelectedPipelineEndpoint() {
+    if (!selectedPipelineBlock) return;
+    if (/SQL Server/i.test(selectedPipelineBlock.label)) {
+      setSourceConfig((current) => ({
+        ...current,
+        host: current.host || 'DESKTOP-1EOGPVO',
+        database: current.database || 'AdventureWorks2017',
+        username: current.username || 'Windows authentication',
+        schedule: current.schedule || 'Manual sync'
+      }));
+      setConnectorMessage('SQL Server profile configured for DESKTOP-1EOGPVO / AdventureWorks2017 with Windows authentication. Production preview requires a secure local connector agent or public/VPN endpoint.');
+    } else if (/Excel|CSV/i.test(selectedPipelineBlock.label)) {
+      setConnectorMessage('CSV/Excel source configured. Drag/drop a file, preview rows, choose spreadsheet transformations, clean, then build reports.');
+    } else {
+      setConnectorMessage(`${selectedPipelineBlock.label} configured. Test credentials before previewing data.`);
+    }
+    updateSelectedNodeWorkflow({ configured: true });
+    updatePipelineBlock(selectedPipelineBlock.id, { status: 'ready' });
+    setPipelineExecutionLogs((current) => [{ id: `configure-${Date.now()}`, message: `${selectedPipelineBlock.label} configured before data load.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function previewSelectedPipelineEndpoint() {
+    if (!selectedPipelineBlock) return;
+    if (!selectedNodeWorkflow.configured || !selectedNodeWorkflow.tested) {
+      setConnectorMessage(`Configure and test ${selectedPipelineBlock.label} before previewing data.`);
+      return;
+    }
+    updateSelectedNodeWorkflow({ previewed: true });
+    setPipelineInspectorTab('preview');
+    setPipelineStudioMode('preview');
+    if (primaryPreviewDataset) setFullPreviewOpen(true);
+    setPipelineExecutionLogs((current) => [{ id: `preview-endpoint-${Date.now()}`, message: `${selectedPipelineBlock.label} preview opened with schema, rows, and profile checks.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function cleanSelectedPipelineEndpoint() {
+    if (!selectedPipelineBlock) return;
+    if (!selectedNodeWorkflow.previewed) {
+      setConnectorMessage(`Preview ${selectedPipelineBlock.label} data before cleaning or modifying it.`);
+      return;
+    }
+    updateSelectedNodeWorkflow({ cleaned: true });
+    addSourceTransformation(/Excel|CSV/i.test(selectedPipelineBlock.label) ? 'Spreadsheet cleanup' : 'Normalize columns');
+    setPipelineExecutionLogs((current) => [{ id: `clean-endpoint-${Date.now()}`, message: `${selectedPipelineBlock.label} clean/modify step opened: rename, datatype, duplicate cleanup, and normalization are ready.`, status: 'completed', timestamp: new Date().toISOString() }, ...current]);
+  }
+
+  function buildReportFromSelectedEndpoint() {
+    if (!selectedPipelineBlock) return;
+    if (!selectedNodeWorkflow.cleaned) {
+      setConnectorMessage(`Clean or approve ${selectedPipelineBlock.label} before building a report or dashboard.`);
+      return;
+    }
+    updateSelectedNodeWorkflow({ reportReady: true });
+    setPipelineExecutionLogs((current) => [{
+      id: `report-build-${Date.now()}`,
+      message: `${selectedReportType} created from ${selectedPipelineBlock.label} with charts: ${selectedReportCharts.join(', ') || 'none selected'}.`,
+      status: 'completed',
+      timestamp: new Date().toISOString()
+    }, ...current]);
+    setConnectorMessage(`${selectedReportType} ready. Selected charts: ${selectedReportCharts.join(', ') || 'choose at least one chart'}. Publish to Analytics, Reports, or Executive Dashboards.`);
   }
 
   function addSourceTransformation(label: string) {
@@ -7130,6 +7227,53 @@ function ModuleWorkspacePage({
                   </div>
                 </div>
               )}
+              {selectedPipelineBlock && (
+                <div className="connector-workflow-gate">
+                  <strong>Configure before load</strong>
+                  <div className="connector-gate-steps">
+                    {[
+                      ['Configure', selectedNodeWorkflow.configured],
+                      ['Test', selectedNodeWorkflow.tested],
+                      ['Preview', selectedNodeWorkflow.previewed],
+                      ['Clean', selectedNodeWorkflow.cleaned],
+                      ['Report', selectedNodeWorkflow.reportReady]
+                    ].map(([label, done]) => (
+                      <span className={done ? 'done' : ''} key={String(label)}>{done ? '✓' : '•'} {label}</span>
+                    ))}
+                  </div>
+                  {/SQL Server/i.test(selectedPipelineBlock.label) && (
+                    <div className="sql-smoke-profile">
+                      <span>Smoke test profile</span>
+                      <strong>DESKTOP-1EOGPVO / AdventureWorks2017</strong>
+                      <small>Windows authentication requires a secure local connector agent for real production pulls from a private desktop SQL Server.</small>
+                    </div>
+                  )}
+                  <div className="connector-gate-actions">
+                    <button type="button" onClick={configureSelectedPipelineEndpoint}>Configure</button>
+                    <button type="button" onClick={() => { configureSelectedPipelineEndpoint(); testDataSourceConnection(selectedPipelineBlock.label); updateSelectedNodeWorkflow({ tested: true }); }}>Test</button>
+                    <button type="button" disabled={!selectedNodeWorkflow.configured || !selectedNodeWorkflow.tested} onClick={previewSelectedPipelineEndpoint}>Preview data</button>
+                    <button type="button" disabled={!selectedNodeWorkflow.previewed} onClick={cleanSelectedPipelineEndpoint}>Clean / Modify</button>
+                  </div>
+                  <div className="report-builder-gate">
+                    <label>
+                      Report type
+                      <select value={selectedReportType} onChange={(event) => setSelectedReportType(event.target.value)}>
+                        {reportTypeOptions.map((type) => <option key={type}>{type}</option>)}
+                      </select>
+                    </label>
+                    <div className="chart-multi-select">
+                      {reportChartOptions.map((chart) => (
+                        <button className={selectedReportCharts.includes(chart) ? 'selected' : ''} key={chart} type="button" onClick={() => toggleReportChart(chart)}>
+                          {chart}
+                        </button>
+                      ))}
+                    </div>
+                    <button type="button" disabled={!selectedNodeWorkflow.cleaned || !selectedReportCharts.length} onClick={buildReportFromSelectedEndpoint}>
+                      Build report/dashboard
+                    </button>
+                  </div>
+                </div>
+              )}
               {selectedPipelineBlock?.type === 'SOURCE' && (
                 <div className="source-specific-config">
                   <strong>{selectedPipelineBlock.label} source workflow</strong>
@@ -7149,10 +7293,12 @@ function ModuleWorkspacePage({
                   </div>
                   {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedPipelineBlock.label) ? (
                     <>
-                      <input placeholder="Server / warehouse" defaultValue={/SQL Server/i.test(selectedPipelineBlock.label) ? 'sql-prod.company.local' : ''} />
-                      <input placeholder="Database / schema" defaultValue={/SQL Server/i.test(selectedPipelineBlock.label) ? 'OperationsDW' : ''} />
-                      <select><option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option></select>
-                      <textarea placeholder="SQL query editor">SELECT TOP 100 * FROM employee_payroll_source</textarea>
+                      <input placeholder="Server / warehouse" value={sourceConfig.host || (/SQL Server/i.test(selectedPipelineBlock.label) ? 'DESKTOP-1EOGPVO' : '')} onChange={(event) => setSourceConfig((current) => ({ ...current, host: event.target.value }))} />
+                      <input placeholder="Database / schema" value={sourceConfig.database || (/SQL Server/i.test(selectedPipelineBlock.label) ? 'AdventureWorks2017' : '')} onChange={(event) => setSourceConfig((current) => ({ ...current, database: event.target.value }))} />
+                      <select value={sourceConfig.username || (/SQL Server/i.test(selectedPipelineBlock.label) ? 'Windows authentication' : 'SQL authentication')} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))}>
+                        <option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option>
+                      </select>
+                      <textarea placeholder="SQL query editor" defaultValue="SELECT TOP 100 * FROM Person.Person" />
                       <div className="mini-result-grid"><span>Tables discovered</span><strong>12</strong><span>Preview rows</span><strong>100</strong></div>
                     </>
                   ) : /SharePoint|OneDrive|S3|Azure/i.test(selectedPipelineBlock.label) ? (
