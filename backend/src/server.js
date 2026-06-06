@@ -1441,7 +1441,7 @@ app.use((req, _res, next) => {
 
 app.get('/api/health', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && !dbStatus.connected) {
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
     runStartupInBackground('health');
   }
   res.json({
@@ -1458,7 +1458,7 @@ app.get('/api/health', (_req, res) => {
 
 app.get('/api/readiness', async (_req, res) => {
   let dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && !dbStatus.connected) {
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
     await waitForStartupWarmup('readiness', readinessDbWaitMs);
     dbStatus = getDatabaseRuntimeStatus();
   }
@@ -1530,7 +1530,7 @@ app.get('/health', (_req, res) => {
 
 app.get('/api/config', (_req, res) => {
   const dbStatus = getDatabaseRuntimeStatus();
-  if (dbStatus.usingPostgres && !dbStatus.connected) {
+  if (dbStatus.usingPostgres && (!dbStatus.connected || !dbStatus.tablesInitialized)) {
     runStartupInBackground('config');
   }
   res.cookie?.('metenova_csrf', csrfToken, {
@@ -3714,7 +3714,7 @@ app.use((error, _req, res, _next) => {
 function runStartupInBackground(reason = 'startup') {
   if (startupInFlight && startupPromise) return startupPromise;
   const status = getDatabaseRuntimeStatus();
-  if (status.usingPostgres && status.connected && !startupError) {
+  if (status.usingPostgres && status.connected && status.tablesInitialized && !startupError) {
     return Promise.resolve();
   }
   if (startupRetryTimer) {
