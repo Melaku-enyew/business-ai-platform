@@ -4641,6 +4641,17 @@ th {
   padding: 8px 10px;
 }
 
+.dataset-preview-strip button {
+  min-height: 32px;
+  border: 1px solid color-mix(in srgb, var(--accent) 34%, var(--line));
+  border-radius: 999px;
+  background: var(--accent-wash);
+  color: var(--accent-text);
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+}
+
 .dataset-row-footer {
   display: flex;
   align-items: center;
@@ -5006,6 +5017,23 @@ th {
   border-radius: 999px;
   background: var(--panel-strong);
   padding: 4px 7px;
+}
+
+.workspace-task-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  min-height: 22px;
+}
+
+.workspace-task-strip span {
+  border: 1px solid color-mix(in srgb, var(--line) 82%, transparent);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--panel-strong) 84%, transparent);
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 850;
+  padding: 3px 6px;
 }
 
 .workspace-command-actions {

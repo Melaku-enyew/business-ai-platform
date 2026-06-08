@@ -437,6 +437,18 @@ type ModulePipelineConfig = {
   emptyState: string;
   module: string;
 };
+type WorkspaceKey = 'accounting' | 'finance' | 'hr' | 'engineering' | 'crm' | 'dataProcessing' | 'analytics';
+type WorkspaceDefinition = {
+  key: WorkspaceKey;
+  label: string;
+  module: string;
+  path: string;
+  icon: string;
+  plan: 'Starter' | 'Professional' | 'Enterprise';
+  datasets: string[];
+  dashboard: string[];
+  tasks: string[];
+};
 
 type AuthResponse = {
   token: string;
@@ -676,6 +688,116 @@ const moduleLabels: Record<string, string> = {
   crm: 'CRM & Sales',
   dataProcessing: 'Enterprise Data Hub'
 };
+
+const workspaceDefinitions: WorkspaceDefinition[] = [
+  {
+    key: 'accounting',
+    label: 'Accounting Workspace',
+    module: 'accounting',
+    path: '/accounting/invoices',
+    icon: 'AC',
+    plan: 'Starter',
+    datasets: ['Invoices Dataset', 'Expenses Dataset', 'Vendor Dataset', 'Payments Dataset'],
+    dashboard: ['Invoices Pending', 'Expenses', 'Approval Queue', 'Recent Activity', 'Scheduled Jobs'],
+    tasks: ['Invoices', 'Expense Tracking', 'Financial Reports', 'Settings']
+  },
+  {
+    key: 'finance',
+    label: 'Finance Workspace',
+    module: 'accounting',
+    path: '/accounting/financial-reports',
+    icon: 'FI',
+    plan: 'Professional',
+    datasets: ['Budget Dataset', 'Forecast Dataset', 'GL Dataset', 'Cash Flow Dataset'],
+    dashboard: ['Cash Flow', 'Forecasting', 'Budgets', 'Financial Reports', 'Assistant Insights'],
+    tasks: ['Budgets', 'Forecasting', 'Reports', 'Analytics', 'Assistant']
+  },
+  {
+    key: 'hr',
+    label: 'HR Workspace',
+    module: 'hr',
+    path: '/hr',
+    icon: 'HR',
+    plan: 'Professional',
+    datasets: ['Employees Dataset', 'Attendance Dataset', 'Payroll Dataset', 'Benefits Dataset', 'Recruitment Dataset', 'Performance Reviews Dataset'],
+    dashboard: ['Employees', 'Payroll', 'Recruitment', 'Performance Reviews', 'Approval Queue'],
+    tasks: ['Employees', 'Payroll', 'Time Off', 'Recruitment', 'Performance Reviews']
+  },
+  {
+    key: 'engineering',
+    label: 'Engineering Workspace',
+    module: 'engineering',
+    path: '/engineering/projects',
+    icon: 'EN',
+    plan: 'Enterprise',
+    datasets: ['Projects Dataset', 'Tasks Dataset', 'Tickets Dataset', 'Deployments Dataset', 'Resource Planning Dataset'],
+    dashboard: ['Projects', 'Tasks', 'Deployments', 'Risks', 'Resource Planning'],
+    tasks: ['Projects', 'Tasks', 'Blueprints', 'Progress Reports']
+  },
+  {
+    key: 'crm',
+    label: 'CRM Workspace',
+    module: 'crm',
+    path: '/crm/clients',
+    icon: 'CR',
+    plan: 'Enterprise',
+    datasets: ['Leads Dataset', 'Customers Dataset', 'Opportunities Dataset', 'Contracts Dataset', 'Sales Pipeline Dataset'],
+    dashboard: ['Leads', 'Pipeline', 'Opportunities', 'Customer Activity', 'Revenue Signals'],
+    tasks: ['Clients', 'Leads', 'Sales Pipeline', 'Customer Notes']
+  },
+  {
+    key: 'dataProcessing',
+    label: 'Enterprise Data Hub',
+    module: 'dataProcessing',
+    path: '/data-processing/workspace',
+    icon: 'DH',
+    plan: 'Enterprise',
+    datasets: ['Enterprise Ingestion Dataset', 'Connector Imports Dataset', 'Pipeline Runs Dataset', 'Shared Master Dataset'],
+    dashboard: ['Ingestion', 'Connectors', 'Pipelines', 'Transformations', 'Monitoring'],
+    tasks: ['Datasets', 'Connectors', 'Pipelines', 'Transformations', 'Monitoring']
+  },
+  {
+    key: 'analytics',
+    label: 'Analytics Workspace',
+    module: 'analytics',
+    path: '/analytics/dashboard',
+    icon: 'AN',
+    plan: 'Enterprise',
+    datasets: ['Dashboard Dataset', 'Report Dataset', 'Executive KPI Dataset'],
+    dashboard: ['Dashboards', 'Reports', 'Forecasting', 'Business Pulse', 'Insights'],
+    tasks: ['Dashboards', 'Reports', 'Forecasts', 'Executive Insights']
+  }
+];
+
+function workspaceAccessForUser(user?: User | null): WorkspaceKey[] {
+  if (!user) return [];
+  if (user.role === 'owner' || user.role === 'admin' || user.role === 'manager') {
+    return workspaceDefinitions.map((workspace) => workspace.key);
+  }
+  const profile = `${user.name ?? ''} ${user.email ?? ''}`.toLowerCase();
+  if (/\b(hr|people|talent|recruit)/.test(profile)) return ['hr'];
+  if (/\b(cfo|finance|budget|forecast|controller)/.test(profile)) return ['finance'];
+  if (/\b(account|invoice|expense|ap|ar|bookkeep)/.test(profile)) return ['accounting'];
+  if (/\b(engineer|project|developer|devops|deployment)/.test(profile)) return ['engineering'];
+  if (/\b(crm|sales|lead|customer|revenue)/.test(profile)) return ['crm'];
+  return ['accounting'];
+}
+
+function canAccessWorkspace(user: User | null | undefined, workspaceKey: WorkspaceKey) {
+  return workspaceAccessForUser(user).includes(workspaceKey);
+}
+
+function navItemAllowedForWorkspaces(view: AppView, access: WorkspaceKey[], canManage: boolean) {
+  if (['dashboard', 'assistant', 'settings', 'contact'].includes(view)) return true;
+  if (view === 'companies' || view === 'adminUsers') return canManage;
+  if (view === 'accounting') return access.includes('accounting') || access.includes('finance');
+  if (view === 'hr') return access.includes('hr');
+  if (view === 'engineering') return access.includes('engineering');
+  if (view === 'crm') return access.includes('crm');
+  if (view === 'dataProcessing') return access.includes('dataProcessing');
+  if (view === 'analytics' || view === 'enterpriseOS') return access.includes('analytics') || access.includes('dataProcessing');
+  return false;
+}
 
 const workspaceRoutes: WorkspaceRoute[] = Object.entries(moduleCards).flatMap(([module, cards]) =>
   cards.map((card) => ({ ...card, module, moduleLabel: moduleLabels[module] ?? module }))
@@ -1363,6 +1485,41 @@ export function App() {
     () => companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? sampleCompanies[0],
     [companies, selectedCompanyId]
   );
+  const workspaceAccess = useMemo(() => workspaceAccessForUser(user), [user?.id, user?.role, user?.email, user?.name]);
+  const enabledWorkspaces = useMemo(
+    () => workspaceDefinitions.filter((workspace) => workspaceAccess.includes(workspace.key)),
+    [workspaceAccess]
+  );
+  const defaultWorkspaceDatasets = useMemo(() => {
+    const now = new Date().toISOString();
+    return enabledWorkspaces.flatMap((workspace) => workspace.datasets.map((name) => normalizeDatasetForClient({
+      id: `default-${selectedCompanyId || 'company'}-${workspace.key}-${name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}`,
+      name,
+      companyId: selectedCompanyId,
+      module: workspace.module,
+      workspace: workspace.key,
+      fileName: name,
+      fileType: 'workspace-default',
+      uploadedAt: now,
+      rows: 0,
+      columns: 0,
+      headers: [],
+      preview: [],
+      records: [],
+      previewRows: [],
+      chartColumn: '',
+      labelColumn: '',
+      chart: [],
+      numericSummary: [],
+      cleanupStatus: 'empty',
+      status: 'empty',
+      datasetStatus: 'empty',
+      qualityScore: 100,
+      ownerName: workspace.label,
+      ownerEmail: `${workspace.key}@workspace.local`,
+      insights: [`${name} is auto-provisioned for ${selectedCompany?.name ?? 'this company'} ${workspace.label}. Upload, connect, or add records to activate it.`]
+    } as Dataset)));
+  }, [enabledWorkspaces, selectedCompany?.name, selectedCompanyId]);
   const operationalModuleDatasets = useMemo(() => {
     const scopedRecords = selectedCompanyId
   ? moduleRecords.filter((record) => record.companyId === selectedCompanyId)
@@ -1406,9 +1563,11 @@ export function App() {
     () => {
       const persisted = selectedCompanyId ? datasets.filter((dataset) => dataset.companyId === selectedCompanyId) : datasets;
       const persistedNames = new Set(persisted.map((dataset) => dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase()));
-      return [...operationalModuleDatasets.filter((dataset) => !persistedNames.has(dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase())), ...persisted];
+      const generatedDefaults = [...defaultWorkspaceDatasets, ...operationalModuleDatasets]
+        .filter((dataset) => !persistedNames.has(dataset.fileName.replace(/\.(csv|xlsx|xls|json)$/i, '').toLowerCase()));
+      return [...generatedDefaults, ...persisted];
     },
-    [datasets, operationalModuleDatasets, selectedCompanyId]
+    [datasets, defaultWorkspaceDatasets, operationalModuleDatasets, selectedCompanyId]
   );
   const activeCleanedDataset = useMemo(() => {
     if (!activeDataset) return null;
@@ -2704,7 +2863,10 @@ export function App() {
         </div>
         <nav aria-label="Primary">
           {['Core Workspace', 'Operations', 'Data & Intelligence', 'Administration'].map((group) => {
-            const items = moduleNav.filter((item) => item.group === group && (!item.adminOnly || canManageUsers(user)));
+            const canManageNavigation = canManageUsers(user);
+            const items = moduleNav.filter((item) => item.group === group
+              && (!item.adminOnly || canManageNavigation)
+              && navItemAllowedForWorkspaces(item.view, workspaceAccess, canManageNavigation));
             if (!items.length) return null;
             return (
               <div className="nav-group" key={group}>
@@ -2926,6 +3088,7 @@ export function App() {
                       <th>Email</th>
                       <th>Role</th>
                       <th>Assigned Companies</th>
+                      <th>Workspace Access</th>
                       <th>Status</th>
                       <th>Created</th>
                       <th>Actions</th>
@@ -2951,6 +3114,9 @@ export function App() {
                         </td>
                         <td>
                           <AssignedCompaniesList assignments={adminUser.assignedCompanies ?? []} />
+                        </td>
+                        <td>
+                          <WorkspaceAccessPills user={adminUser} />
                         </td>
                         <td>
                           <span className={`status-pill ${adminUser.active ? 'active' : 'disabled'}`}>
@@ -2983,7 +3149,7 @@ export function App() {
                     ))}
                     {!adminUsers.length && (
                       <tr>
-                        <td colSpan={7}>No users found.</td>
+                        <td colSpan={8}>No users found.</td>
                       </tr>
                     )}
                   </tbody>
@@ -3218,6 +3384,7 @@ export function App() {
               enterpriseOps={enterpriseOps}
               enterpriseOpsMessage={enterpriseOpsMessage}
               failedRecordCount={failedRecordCount}
+              enabledWorkspaces={enabledWorkspaces}
               insights={insights}
               linePoints={linePoints}
               navigate={navigate}
@@ -3776,6 +3943,7 @@ function EnterpriseCockpit({
   datasetHealthScore,
   downloadDatasetExport,
   downloadPdfReport,
+  enabledWorkspaces,
   enterpriseOps,
   enterpriseOpsMessage,
   failedRecordCount,
@@ -3818,6 +3986,7 @@ function EnterpriseCockpit({
   datasetHealthScore: number;
   downloadDatasetExport: (dataset: Dataset | null) => void;
   downloadPdfReport: () => void;
+  enabledWorkspaces: WorkspaceDefinition[];
   enterpriseOps: EnterpriseOperations;
   enterpriseOpsMessage: string;
   failedRecordCount: number;
@@ -3926,56 +4095,6 @@ function EnterpriseCockpit({
       dataset.cleanupStatus,
       ...asArray(dataset.headers)
     ].join(' ').toLowerCase().includes(datasetRegistryQuery.toLowerCase()));
-  const workspaceCards = [
-    {
-      key: 'hr',
-      label: 'HR & Workforce',
-      path: '/hr',
-      count: moduleGroups.find(([label]) => label === 'HR')?.[1].length ?? 0,
-      detail: `${moduleGroups.find(([label]) => label === 'HR')?.[1].reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0) ?? 0} employee, payroll, PTO, and timesheet records`,
-      alert: `${moduleGroups.find(([label]) => label === 'HR')?.[1].filter((dataset) => datasetHealth(dataset) !== 'Healthy' && datasetHealth(dataset) !== 'Empty').length ?? 0} HR alerts`
-    },
-    {
-      key: 'finance',
-      label: 'Finance & Accounting',
-      path: '/accounting/invoices',
-      count: moduleGroups.find(([label]) => label === 'Finance')?.[1].length ?? 0,
-      detail: 'Invoices, budgets, payments, tax, and accounting exports',
-      alert: `${moduleGroups.find(([label]) => label === 'Finance')?.[1].length ?? 0} finance datasets`
-    },
-    {
-      key: 'engineering',
-      label: 'Engineering & Projects',
-      path: '/engineering/projects',
-      count: moduleGroups.find(([label]) => label === 'Engineering')?.[1].length ?? 0,
-      detail: 'Projects, tasks, deployment, resource, and schedule operations',
-      alert: `${moduleGroups.find(([label]) => label === 'Engineering')?.[1].length ?? 0} project datasets`
-    },
-    {
-      key: 'crm',
-      label: 'CRM & Sales',
-      path: '/crm/clients',
-      count: moduleGroups.find(([label]) => label === 'CRM')?.[1].length ?? 0,
-      detail: 'Customers, leads, opportunities, sales pipeline, and contracts',
-      alert: `${moduleGroups.find(([label]) => label === 'CRM')?.[1].length ?? 0} CRM datasets`
-    },
-    {
-      key: 'data',
-      label: 'Enterprise Data Hub',
-      path: '/data-processing/workspace',
-      count: companyDatasets.length,
-      detail: 'Upload, preview, clean, approve, export, and route datasets',
-      alert: `${datasetHealthScore}% trust score`
-    },
-    {
-      key: 'analytics',
-      label: 'Analytics',
-      path: '/analytics/dashboard',
-      count: companyReports.length + companyDashboards.length,
-      detail: 'Company dashboards, reports, AI insights, and executive summaries',
-      alert: `${enterpriseOps.intelligence.length} AI insights`
-    }
-  ];
   function datasetHealth(dataset: Dataset) {
     const rows = datasetPreview(dataset);
     const duplicates = findDuplicateRows(rows).length;
@@ -3986,6 +4105,34 @@ function EnterpriseCockpit({
     if ((dataset.cleanupMetrics?.failedRows ?? 0) > 0) return 'Warning';
     return rows.length ? 'Healthy' : 'Empty';
   }
+  function workspaceDatasetsForKey(key: WorkspaceKey) {
+    return companyDatasets.filter((dataset) => {
+      const workspace = String(dataset.workspace ?? '').toLowerCase();
+      const fileName = String(dataset.fileName ?? '').toLowerCase();
+      if (workspace === key.toLowerCase()) return true;
+      if (key === 'accounting') return /\b(invoice|expense|vendor|payment)\b/.test(fileName);
+      if (key === 'finance') return /\b(budget|forecast|gl|cash flow|financial report)\b/.test(fileName);
+      if (key === 'hr') return classifyDatasetModule(dataset) === 'HR';
+      if (key === 'engineering') return classifyDatasetModule(dataset) === 'Engineering';
+      if (key === 'crm') return classifyDatasetModule(dataset) === 'CRM';
+      if (key === 'dataProcessing') return classifyDatasetModule(dataset) === 'Enterprise Data Hub';
+      if (key === 'analytics') return /\b(dashboard|report|kpi|analytics)\b/.test(fileName);
+      return false;
+    });
+  }
+  const workspaceCards = enabledWorkspaces.map((workspace) => {
+    const scopedDatasets = workspaceDatasetsForKey(workspace.key);
+    const activeRows = scopedDatasets.reduce((sum, dataset) => sum + Number(dataset.rows ?? 0), 0);
+    const alerts = scopedDatasets.filter((dataset) => !['Healthy', 'Empty'].includes(datasetHealth(dataset))).length;
+    return {
+      ...workspace,
+      count: scopedDatasets.length,
+      rows: activeRows,
+      detail: workspace.dashboard.join(' | '),
+      alert: alerts ? `${alerts} items need attention` : `${workspace.plan} workspace`,
+      datasets: scopedDatasets
+    };
+  });
   function exportDashboardDataset(dataset: Dataset) {
     if (dataset.id.startsWith('generated-')) {
       const headers = datasetHeaders(dataset);
@@ -4026,6 +4173,13 @@ function EnterpriseCockpit({
             {companies.map((company) => <option key={company.id} value={company.id}>{company.name}</option>)}
           </select>
         </label>
+        <label>
+          Workspace
+          <select value="" onChange={(event) => event.target.value && navigate(event.target.value)}>
+            <option value="">Open workspace</option>
+            {enabledWorkspaces.map((workspace) => <option key={workspace.key} value={workspace.path}>{workspace.label}</option>)}
+          </select>
+        </label>
         <input aria-label="Global search" placeholder="Search workflows, connectors, datasets..." value={search} onChange={(event) => setSearch(event.target.value)} />
         <button type="button" onClick={() => setDrillPanel({ title: 'Notifications', kind: 'notifications' })}>Alerts {unreadNotifications}</button>
         <button type="button" onClick={() => setDrillPanel({ title: 'Approval Queue', kind: 'approval' })}>Approvals {pendingApprovals}</button>
@@ -4047,29 +4201,33 @@ function EnterpriseCockpit({
         {workspaceCards.map((card) => (
           <article className="workspace-command-card" key={card.key}>
             <button aria-label={`Open ${card.label} workspace`} className="workspace-command-main" type="button" onClick={() => navigate(card.path)}>
-              <span className="workspace-command-icon">{card.label.slice(0, 2).toUpperCase()}</span>
+              <span className="workspace-command-icon">{card.icon}</span>
               <span>
                 <strong>{card.label}</strong>
                 <small>{card.detail}</small>
               </span>
             </button>
             <div className="workspace-command-meta">
-              <span><strong>{card.count}</strong> datasets/assets</span>
+              <span><strong>{card.count}</strong> datasets</span>
+              <span><strong>{displayNumber(card.rows)}</strong> rows</span>
               <span>{card.alert}</span>
+            </div>
+            <div className="workspace-task-strip">
+              {card.tasks.slice(0, 5).map((task) => <span key={task}>{task}</span>)}
             </div>
             <div className="workspace-command-actions">
               <button type="button" onClick={() => navigate(card.path)}>Open</button>
               <button type="button" onClick={() => {
-                setDatasetRegistryModule(card.key === 'data' ? 'all' : card.label.split(' ')[0]);
+                setDatasetRegistryModule(card.key === 'dataProcessing' ? 'all' : card.key === 'finance' || card.key === 'accounting' ? 'Finance' : card.key === 'hr' ? 'HR' : card.key === 'engineering' ? 'Engineering' : card.key === 'crm' ? 'CRM' : 'all');
                 setDrillPanel({ title: `${card.label} datasets`, kind: 'datasets' });
               }}>Datasets</button>
-              <button type="button" onClick={() => setDrillPanel({ title: `${card.label} AI insights`, kind: 'ai' })}>AI</button>
+              <button type="button" onClick={() => navigate(`/data-processing/workspace?createDataset=1&workspace=${card.key}`)}>Create Dataset</button>
               <button type="button" onClick={() => {
                 selectDashboardTab('Reports');
                 setDrillPanel({ title: `${card.label} reports`, kind: 'reports' });
               }}>Reports</button>
               <button type="button" onClick={() => {
-                setActivityWorkspaceFilter(card.key === 'data' ? 'data' : card.key);
+                setActivityWorkspaceFilter(card.key === 'dataProcessing' ? 'data' : card.key);
                 setActivityOpen(true);
               }}>Activity</button>
             </div>
@@ -4918,6 +5076,21 @@ function AssignedCompaniesList({ assignments }: { assignments: CompanyAssignment
   );
 }
 
+function WorkspaceAccessPills({ user }: { user: User }) {
+  const access = workspaceAccessForUser(user);
+  return (
+    <div className="assigned-companies workspace-access-pills">
+      {workspaceDefinitions
+        .filter((workspace) => access.includes(workspace.key))
+        .slice(0, 4)
+        .map((workspace) => (
+          <span className="assignment-chip" key={workspace.key}>{workspace.label.replace(' Workspace', '')}</span>
+        ))}
+      {access.length > 4 && <span className="assignment-chip muted-chip">+{access.length - 4}</span>}
+    </div>
+  );
+}
+
 function CompanyAccessModal({
   accessCompanyIds,
   accessRole,
@@ -5560,6 +5733,7 @@ function ModuleWorkspacePage({
   const [openActionDatasetId, setOpenActionDatasetId] = useState('');
   const [dataHubTab, setDataHubTab] = useState<'datasets' | 'connectors' | 'pipelines' | 'transformations' | 'ai' | 'monitoring'>('datasets');
   const [dataHubCommand, setDataHubCommand] = useState('');
+  const [createDatasetTargetWorkspace, setCreateDatasetTargetWorkspace] = useState('');
   const [pipelineBlocks, setPipelineBlocks] = useState([
     { id: 'source-1', type: 'SOURCE', label: 'CSV Upload', status: 'ready', x: 8, y: 44 },
     { id: 'transform-1', type: 'TRANSFORM', label: 'Normalize columns', status: 'ready', x: 250, y: 44 },
@@ -5649,6 +5823,17 @@ function ModuleWorkspacePage({
     setProcessingAction('');
     setDataSourceType('');
   }, [pipelineConfig.emptyState, route.module, route.path, workflowStages]);
+
+  useEffect(() => {
+    if (!isDataProcessingWorkspace) return;
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('createDataset') !== '1') return;
+    const workspace = params.get('workspace') || 'enterprise';
+    setCreateDatasetTargetWorkspace(workspace);
+    setDataHubTab('datasets');
+    setIngestionStep('source');
+    setWorkflowMessage(`Create Dataset wizard opened for ${workspace.replace(/([A-Z])/g, ' $1')} workspace. Choose a source, configure the connection, preview data, map columns, then create the dataset.`);
+  }, [isDataProcessingWorkspace, route.path]);
 
   useEffect(() => {
     setWorkspaceDatasets((current) => current.filter((dataset) => !safeDatasets.some((entry) => entry.id === dataset.id)));
@@ -6723,6 +6908,12 @@ function ModuleWorkspacePage({
             </div>
             <div className="data-hub-command-bar">
               <input placeholder="Ask MeLai: run pipeline, search datasets, show failed jobs..." value={dataHubCommand} onChange={(event) => setDataHubCommand(event.target.value)} onKeyDown={(event) => event.key === 'Enter' && runDataHubCommand()} />
+              <button type="button" onClick={() => {
+                setCreateDatasetTargetWorkspace(createDatasetTargetWorkspace || 'enterprise');
+                setDataHubTab('datasets');
+                setIngestionStep('source');
+                setWorkflowMessage('Create Dataset wizard opened. Choose source, configure connection, choose tables/files, map columns, then create the dataset.');
+              }}>+ Create Dataset</button>
               <button type="button" onClick={runDataHubCommand}>Run command</button>
               <button className="ghost-button compact" type="button" onClick={startVoiceAssistant}>Voice</button>
             </div>
@@ -6740,6 +6931,7 @@ function ModuleWorkspacePage({
             <div><span>MeLai alerts</span><strong>{aiCopilotPlan.filter((item) => /missing|duplicate|drift|invalid/i.test(item)).length}</strong></div>
             <div><span>Marketplace</span><strong>{marketplacePublished.length}</strong></div>
             <div><span>Automation</span><strong>{automationRules.filter((rule) => rule.enabled).length} active</strong></div>
+            <div><span>Dataset target</span><strong>{createDatasetTargetWorkspace || 'Enterprise'}</strong></div>
           </div>
           <p className="persistence-note">{voiceStatus}</p>
         </article>
@@ -7007,6 +7199,7 @@ function ModuleWorkspacePage({
             <span>{moduleDatasets.length} linked datasets</span>
             <span>{filteredRecords.length} operational records</span>
             <span>{selectedCompanyName}</span>
+            <button type="button" onClick={() => window.location.assign(`/data-processing/workspace?createDataset=1&workspace=${route.module}`)}>+ Create Dataset</button>
           </div>
         </article>
       ) : null}
@@ -11931,7 +12124,7 @@ function AdminUsersWorkspace({
         <div className="record-toolbar"><input placeholder="Search users" value={search} onChange={(event) => setSearch(event.target.value)} /></div>
         <div className="table-wrap routed-table">
           <table>
-            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Assigned Companies</th><th>Status</th><th>Actions</th></tr></thead>
+            <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Assigned Companies</th><th>Workspace Access</th><th>Status</th><th>Actions</th></tr></thead>
             <tbody>
               {filteredUsers.map((adminUser) => (
                 <tr key={adminUser.id}>
@@ -11943,6 +12136,7 @@ function AdminUsersWorkspace({
                     </select>
                   </td>
                   <td><AssignedCompaniesList assignments={adminUser.assignedCompanies ?? []} /></td>
+                  <td><WorkspaceAccessPills user={adminUser} /></td>
                   <td>{adminUser.active ? 'Active' : 'Disabled'}</td>
                   <td>
                     <div className="admin-actions">
