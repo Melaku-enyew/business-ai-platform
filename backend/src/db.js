@@ -48,7 +48,9 @@ const sampleCompanies = [
 ];
 
 export const ownerEmail = (process.env.OWNER_EMAIL || 'melakue@metenovaai.com').toLowerCase();
-export const roles = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+export const roles = ['viewer', 'employee', 'manager', 'workspace_admin', 'admin', 'owner'];
+export const workspaceKeys = ['accounting', 'finance', 'hr', 'engineering', 'crm', 'assistant', 'dataProcessing', 'analytics', 'enterpriseOS'];
+const defaultCompanyWorkspaces = ['accounting', 'finance', 'hr', 'dataProcessing', 'analytics'];
 export const usingPostgres = Boolean(currentDatabaseUrl());
 export let pool = null;
 
@@ -264,6 +266,41 @@ export async function initDatabase() {
     ALTER TABLE user_company_assignments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
     UPDATE user_company_assignments
        SET id = COALESCE(id, md5(user_id || ':' || company_id)),
+           created_at = COALESCE(created_at, assigned_at, NOW())
+     WHERE id IS NULL;
+
+    CREATE TABLE IF NOT EXISTS company_workspaces (
+      id TEXT,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      workspace_key TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL DEFAULT TRUE,
+      plan TEXT NOT NULL DEFAULT 'Professional',
+      metadata JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (company_id, workspace_key)
+    );
+    ALTER TABLE company_workspaces ADD COLUMN IF NOT EXISTS id TEXT;
+    ALTER TABLE company_workspaces ADD COLUMN IF NOT EXISTS plan TEXT NOT NULL DEFAULT 'Professional';
+    ALTER TABLE company_workspaces ADD COLUMN IF NOT EXISTS metadata JSONB NOT NULL DEFAULT '{}'::jsonb;
+    UPDATE company_workspaces
+       SET id = COALESCE(id, md5(company_id || ':' || workspace_key))
+     WHERE id IS NULL;
+
+    CREATE TABLE IF NOT EXISTS user_workspace_assignments (
+      id TEXT,
+      user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+      company_id TEXT NOT NULL REFERENCES companies(id) ON DELETE CASCADE,
+      workspace_key TEXT NOT NULL,
+      role TEXT NOT NULL DEFAULT 'member',
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      PRIMARY KEY (user_id, company_id, workspace_key)
+    );
+    ALTER TABLE user_workspace_assignments ADD COLUMN IF NOT EXISTS id TEXT;
+    ALTER TABLE user_workspace_assignments ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    UPDATE user_workspace_assignments
+       SET id = COALESCE(id, md5(user_id || ':' || company_id || ':' || workspace_key)),
            created_at = COALESCE(created_at, assigned_at, NOW())
      WHERE id IS NULL;
 
@@ -750,6 +787,10 @@ export async function initDatabase() {
     CREATE INDEX IF NOT EXISTS idx_sessions_user_expires_at ON sessions (user_id, expires_at DESC);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_user_company_assignments_id ON user_company_assignments (id);
     CREATE INDEX IF NOT EXISTS idx_user_company_assignments_company ON user_company_assignments (company_id, user_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_company_workspaces_id ON company_workspaces (id);
+    CREATE INDEX IF NOT EXISTS idx_company_workspaces_company ON company_workspaces (company_id, enabled);
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_user_workspace_assignments_id ON user_workspace_assignments (id);
+    CREATE INDEX IF NOT EXISTS idx_user_workspace_assignments_company ON user_workspace_assignments (company_id, workspace_key, user_id);
     CREATE INDEX IF NOT EXISTS idx_companies_updated_at ON companies (updated_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_user_uploaded_at ON datasets (user_id, uploaded_at DESC);
     CREATE INDEX IF NOT EXISTS idx_datasets_company_uploaded_at ON datasets (company_id, uploaded_at DESC);
@@ -810,6 +851,30 @@ export async function initDatabase() {
     WHERE company_id IS NOT NULL
     ON CONFLICT (user_id, company_id) DO UPDATE SET role = EXCLUDED.role;
   `);
+
+  await pgQuery(
+    `INSERT INTO company_workspaces (id, company_id, workspace_key, enabled, plan)
+     SELECT md5(companies.id || ':' || workspace_key), companies.id, workspace_key, TRUE, 'Professional'
+       FROM companies
+       CROSS JOIN unnest($1::text[]) AS workspace_key
+      WHERE companies.id <> $2
+     ON CONFLICT (company_id, workspace_key) DO NOTHING;`,
+    [defaultCompanyWorkspaces, defaultCompanyId]
+  );
+
+  await pgQuery(
+    `INSERT INTO user_workspace_assignments (id, user_id, company_id, workspace_key, role)
+     SELECT md5(users.id || ':' || assignments.company_id || ':' || company_workspaces.workspace_key),
+            users.id,
+            assignments.company_id,
+            company_workspaces.workspace_key,
+            assignments.role
+       FROM users
+       INNER JOIN user_company_assignments assignments ON assignments.user_id = users.id
+       INNER JOIN company_workspaces ON company_workspaces.company_id = assignments.company_id AND company_workspaces.enabled = TRUE
+      WHERE users.role IN ('owner', 'admin', 'manager')
+     ON CONFLICT (user_id, company_id, workspace_key) DO NOTHING;`
+  );
 
   await pgQuery(`
     DO $$
@@ -986,14 +1051,39 @@ export async function canAccessCompany(user, companyId) {
   return assigned.includes(normalizedCompanyId);
 }
 
+export async function canAccessWorkspace(user, companyId, workspaceKey) {
+  const normalizedCompanyId = String(companyId || '').trim();
+  const normalizedWorkspaceKey = normalizeWorkspaceKey(workspaceKey);
+  if (!normalizedCompanyId || !normalizedWorkspaceKey) return false;
+  if (!(await canAccessCompany(user, normalizedCompanyId))) return false;
+  const role = roleForUser(user?.email, user?.role);
+  if (hasGlobalCompanyAccess(user) || role === 'admin' || role === 'manager') return true;
+  const assignments = await listUserWorkspaceAssignments(user?.id);
+  return assignments.some((assignment) => assignment.companyId === normalizedCompanyId && assignment.workspaceKey === normalizedWorkspaceKey);
+}
+
+async function canAccessDataset(user, dataset) {
+  if (!dataset) return false;
+  const datasetWorkspaceKey = workspaceKeyForDataset(dataset);
+  if (!datasetWorkspaceKey) return canAccessCompany(user, dataset.companyId);
+  return canAccessWorkspace(user, dataset.companyId, datasetWorkspaceKey);
+}
+
 export async function listCompanies(user) {
+  const attachWorkspaces = async (company) => ({
+    ...company,
+    enabledWorkspaces: (await listCompanyWorkspaces(company.id)).filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey),
+    workspaces: await listCompanyWorkspaces(company.id)
+  });
+
   if (!usingPostgres) {
     const store = await loadDevStore();
     const assignedCompanyIds = await getAccessibleCompanyIds(user);
-    return (store.companies ?? [])
+    const companies = (store.companies ?? [])
       .filter((company) => assignedCompanyIds === null || assignedCompanyIds.includes(company.id))
       .sort((a, b) => new Date(b.updatedAt ?? b.createdAt).getTime() - new Date(a.updatedAt ?? a.createdAt).getTime())
       .map(rowToCompany);
+    return Promise.all(companies.map(attachWorkspaces));
   }
 
   if (!hasGlobalCompanyAccess(user)) {
@@ -1005,14 +1095,14 @@ export async function listCompanies(user) {
        ORDER BY updated_at DESC, created_at DESC;`,
       [assignedCompanyIds]
     );
-    return result.rows.map(rowToCompany);
+    return Promise.all(result.rows.map(rowToCompany).map(attachWorkspaces));
   }
 
   const result = await pgQuery(
     `SELECT * FROM companies
      ORDER BY updated_at DESC, created_at DESC;`
   );
-  return result.rows.map(rowToCompany);
+  return Promise.all(result.rows.map(rowToCompany).map(attachWorkspaces));
 }
 
 export async function listUserCompanyAssignments(userId) {
@@ -1041,6 +1131,192 @@ export async function listUserCompanyAssignments(userId) {
     [normalizedUserId]
   );
   return result.rows.map(rowToCompanyAssignment);
+}
+
+export async function listCompanyWorkspaces(companyId) {
+  const normalizedCompanyId = String(companyId || '').trim();
+  if (!normalizedCompanyId) return [];
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const existing = (store.companyWorkspaces ?? []).filter((workspace) => workspace.companyId === normalizedCompanyId);
+    const rows = existing.length
+      ? existing
+      : defaultCompanyWorkspaces.map((workspaceKey) => ({
+          id: `${normalizedCompanyId}:${workspaceKey}`,
+          companyId: normalizedCompanyId,
+          workspaceKey,
+          enabled: true,
+          plan: 'Professional',
+          metadata: {},
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString()
+        }));
+    return rows.map(rowToCompanyWorkspace);
+  }
+
+  const result = await pgQuery(
+    `SELECT * FROM company_workspaces
+      WHERE company_id = $1
+      ORDER BY workspace_key ASC;`,
+    [normalizedCompanyId]
+  );
+  return result.rows.map(rowToCompanyWorkspace);
+}
+
+export async function replaceCompanyWorkspaces(companyId, workspaceAssignments) {
+  const normalizedCompanyId = String(companyId || '').trim();
+  const enabledKeys = [...new Set((Array.isArray(workspaceAssignments) ? workspaceAssignments : [])
+    .map((workspace) => normalizeWorkspaceKey(typeof workspace === 'string' ? workspace : workspace.workspaceKey ?? workspace.key))
+    .filter(Boolean))];
+  const now = new Date().toISOString();
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    store.companyWorkspaces = (store.companyWorkspaces ?? []).filter((workspace) => workspace.companyId !== normalizedCompanyId);
+    store.companyWorkspaces.push(...enabledKeys.map((workspaceKey) => ({
+      id: `${normalizedCompanyId}:${workspaceKey}`,
+      companyId: normalizedCompanyId,
+      workspaceKey,
+      enabled: true,
+      plan: 'Professional',
+      metadata: { defaultDatasetsProvisioned: true },
+      createdAt: now,
+      updatedAt: now
+    })));
+    store.userWorkspaceAssignments = (store.userWorkspaceAssignments ?? []).filter((assignment) => assignment.companyId !== normalizedCompanyId || enabledKeys.includes(assignment.workspaceKey));
+    await saveDevStore(store);
+    return listCompanyWorkspaces(normalizedCompanyId);
+  }
+
+  await withTransaction(async (client) => {
+    await client.query('UPDATE company_workspaces SET enabled = FALSE, updated_at = NOW() WHERE company_id = $1;', [normalizedCompanyId]);
+    for (const workspaceKey of enabledKeys) {
+      await client.query(
+        `INSERT INTO company_workspaces (id, company_id, workspace_key, enabled, plan, metadata)
+         VALUES ($1, $2, $3, TRUE, 'Professional', $4)
+         ON CONFLICT (company_id, workspace_key) DO UPDATE SET enabled = TRUE, updated_at = NOW();`,
+        [`${normalizedCompanyId}:${workspaceKey}`, normalizedCompanyId, workspaceKey, JSON.stringify({ defaultDatasetsProvisioned: true })]
+      );
+    }
+    await client.query(
+      `DELETE FROM user_workspace_assignments
+        WHERE company_id = $1
+          AND NOT (workspace_key = ANY($2::text[]));`,
+      [normalizedCompanyId, enabledKeys]
+    );
+  });
+
+  return listCompanyWorkspaces(normalizedCompanyId);
+}
+
+export async function listUserWorkspaceAssignments(userId) {
+  const normalizedUserId = String(userId || '').trim();
+  if (!normalizedUserId) return [];
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const companiesById = new Map((store.companies ?? []).map((company) => [company.id, rowToCompany(company)]));
+    return (store.userWorkspaceAssignments ?? [])
+      .filter((assignment) => assignment.userId === normalizedUserId)
+      .map((assignment) => rowToWorkspaceAssignment({
+        ...assignment,
+        companyName: companiesById.get(assignment.companyId)?.name ?? assignment.companyName ?? ''
+      }))
+      .sort((a, b) => `${a.companyName}:${a.workspaceKey}`.localeCompare(`${b.companyName}:${b.workspaceKey}`));
+  }
+
+  const result = await pgQuery(
+    `SELECT assignments.*, companies.name AS company_name
+       FROM user_workspace_assignments assignments
+       INNER JOIN companies ON companies.id = assignments.company_id
+       INNER JOIN company_workspaces workspaces ON workspaces.company_id = assignments.company_id
+        AND workspaces.workspace_key = assignments.workspace_key
+        AND workspaces.enabled = TRUE
+      WHERE assignments.user_id = $1
+      ORDER BY companies.name ASC, assignments.workspace_key ASC;`,
+    [normalizedUserId]
+  );
+  return result.rows.map(rowToWorkspaceAssignment);
+}
+
+export async function replaceUserWorkspaceAssignments(userId, assignments, actingUser) {
+  const normalizedUserId = String(userId || '').trim();
+  const actingRole = roleForUser(actingUser?.email, actingUser?.role);
+  const allowedCompanyIds = await getAccessibleCompanyIds(actingUser);
+  const actingWorkspaceAssignments = await listUserWorkspaceAssignments(actingUser?.id);
+  const actingWorkspaceKeysByCompany = new Map();
+  actingWorkspaceAssignments.forEach((assignment) => {
+    const set = actingWorkspaceKeysByCompany.get(assignment.companyId) ?? new Set();
+    set.add(assignment.workspaceKey);
+    actingWorkspaceKeysByCompany.set(assignment.companyId, set);
+  });
+
+  const normalizedAssignments = (Array.isArray(assignments) ? assignments : [])
+    .map((assignment) => ({
+      companyId: String(assignment.companyId || '').trim(),
+      workspaceKey: normalizeWorkspaceKey(assignment.workspaceKey ?? assignment.key),
+      role: normalizeRole(assignment.role)
+    }))
+    .filter((assignment) => assignment.companyId && assignment.workspaceKey);
+
+  const uniqueAssignments = [...new Map(normalizedAssignments.map((assignment) => [`${assignment.companyId}:${assignment.workspaceKey}`, assignment])).values()]
+    .filter((assignment) => {
+      if (allowedCompanyIds !== null && !allowedCompanyIds.includes(assignment.companyId)) return false;
+      if (hasGlobalCompanyAccess(actingUser) || actingRole === 'admin' || actingRole === 'manager') return true;
+      const assignedWorkspaceKeys = actingWorkspaceKeysByCompany.get(assignment.companyId);
+      return assignedWorkspaceKeys?.has(assignment.workspaceKey);
+    });
+
+  if (!usingPostgres) {
+    const store = await loadDevStore();
+    const enabled = new Set((store.companyWorkspaces ?? []).filter((workspace) => workspace.enabled !== false).map((workspace) => `${workspace.companyId}:${workspace.workspaceKey}`));
+    const validAssignments = uniqueAssignments.filter((assignment) => enabled.has(`${assignment.companyId}:${assignment.workspaceKey}`));
+    const canReplaceAll = hasGlobalCompanyAccess(actingUser) || actingRole === 'admin' || actingRole === 'manager';
+    const isInActingScope = (assignment) => canReplaceAll || actingWorkspaceKeysByCompany.get(assignment.companyId)?.has(assignment.workspaceKey);
+    store.userWorkspaceAssignments = [
+      ...(store.userWorkspaceAssignments ?? []).filter((assignment) => assignment.userId !== normalizedUserId || !isInActingScope(assignment)),
+      ...validAssignments.map((assignment) => ({
+        id: `${normalizedUserId}:${assignment.companyId}:${assignment.workspaceKey}`,
+        userId: normalizedUserId,
+        companyId: assignment.companyId,
+        workspaceKey: assignment.workspaceKey,
+        role: assignment.role,
+        assignedAt: new Date().toISOString(),
+        createdAt: new Date().toISOString()
+      }))
+    ];
+    await saveDevStore(store);
+    return listUserWorkspaceAssignments(normalizedUserId);
+  }
+
+  await withTransaction(async (client) => {
+    if (hasGlobalCompanyAccess(actingUser) || actingRole === 'admin' || actingRole === 'manager') {
+      await client.query('DELETE FROM user_workspace_assignments WHERE user_id = $1;', [normalizedUserId]);
+    } else {
+      const scopedPairs = actingWorkspaceAssignments.map((assignment) => `${assignment.companyId}:${assignment.workspaceKey}`);
+      await client.query(
+        `DELETE FROM user_workspace_assignments
+          WHERE user_id = $1
+            AND (company_id || ':' || workspace_key) = ANY($2::text[]);`,
+        [normalizedUserId, scopedPairs]
+      );
+    }
+    for (const assignment of uniqueAssignments) {
+      await client.query(
+        `INSERT INTO user_workspace_assignments (id, user_id, company_id, workspace_key, role)
+         SELECT $1, $2, $3, $4, $5
+         WHERE EXISTS (
+           SELECT 1 FROM company_workspaces
+            WHERE company_id = $3 AND workspace_key = $4 AND enabled = TRUE
+         )
+         ON CONFLICT (user_id, company_id, workspace_key) DO UPDATE SET role = EXCLUDED.role;`,
+        [`${normalizedUserId}:${assignment.companyId}:${assignment.workspaceKey}`, normalizedUserId, assignment.companyId, assignment.workspaceKey, assignment.role]
+      );
+    }
+  });
+
+  return listUserWorkspaceAssignments(normalizedUserId);
 }
 
 export async function replaceUserCompanyAssignments(userId, assignments) {
@@ -1110,7 +1386,11 @@ export async function createCompany(company) {
     const store = await loadDevStore();
     store.companies = [saved, ...(store.companies ?? []).filter((entry) => entry.id !== saved.id)];
     await saveDevStore(store);
-    return rowToCompany(saved);
+    if (Array.isArray(company.enabledWorkspaces)) await replaceCompanyWorkspaces(saved.id, company.enabledWorkspaces);
+    return {
+      ...rowToCompany(saved),
+      enabledWorkspaces: (await listCompanyWorkspaces(saved.id)).filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey)
+    };
   }
 
   const result = await pgQuery(
@@ -1119,7 +1399,12 @@ export async function createCompany(company) {
      RETURNING *;`,
     [saved.id, saved.name, saved.industry, saved.ownerName, saved.email, saved.phone, saved.status]
   );
-  return rowToCompany(result.rows[0]);
+  if (Array.isArray(company.enabledWorkspaces)) await replaceCompanyWorkspaces(saved.id, company.enabledWorkspaces);
+  const savedCompany = rowToCompany(result.rows[0]);
+  return {
+    ...savedCompany,
+    enabledWorkspaces: (await listCompanyWorkspaces(savedCompany.id)).filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey)
+  };
 }
 
 export async function updateCompany(id, updates) {
@@ -1151,7 +1436,11 @@ export async function updateCompany(id, updates) {
       return updated;
     });
     await saveDevStore(store);
-    return updated ? rowToCompany(updated) : undefined;
+    if (updated && Array.isArray(updates.enabledWorkspaces)) await replaceCompanyWorkspaces(companyId, updates.enabledWorkspaces);
+    return updated ? {
+      ...rowToCompany(updated),
+      enabledWorkspaces: (await listCompanyWorkspaces(companyId)).filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey)
+    } : undefined;
   }
 
   const result = await pgQuery(
@@ -1167,7 +1456,13 @@ export async function updateCompany(id, updates) {
      RETURNING *;`,
     [companyId, normalized.name, normalized.industry, normalized.ownerName, normalized.email, normalized.phone, normalized.status, defaultCompanyId]
   );
-  return result.rows[0] ? rowToCompany(result.rows[0]) : undefined;
+  if (result.rows[0] && Array.isArray(updates.enabledWorkspaces)) await replaceCompanyWorkspaces(companyId, updates.enabledWorkspaces);
+  if (!result.rows[0]) return undefined;
+  const company = rowToCompany(result.rows[0]);
+  return {
+    ...company,
+    enabledWorkspaces: (await listCompanyWorkspaces(company.id)).filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey)
+  };
 }
 
 export async function deleteCompany(id) {
@@ -1193,6 +1488,8 @@ export async function deleteCompany(id) {
     store.workflowIntelligence = (store.workflowIntelligence ?? []).filter((entry) => entry.companyId !== companyId);
     store.accessRequests = (store.accessRequests ?? []).filter((entry) => entry.companyId !== companyId);
     store.userCompanyAssignments = (store.userCompanyAssignments ?? []).filter((assignment) => assignment.companyId !== companyId);
+    store.companyWorkspaces = (store.companyWorkspaces ?? []).filter((workspace) => workspace.companyId !== companyId);
+    store.userWorkspaceAssignments = (store.userWorkspaceAssignments ?? []).filter((assignment) => assignment.companyId !== companyId);
     await saveDevStore(store);
     return (store.companies?.length ?? 0) < before;
   }
@@ -1207,6 +1504,8 @@ export async function deleteCompany(id) {
   await pgQuery('DELETE FROM pipeline_schedules WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM workflow_intelligence WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM access_requests WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM user_workspace_assignments WHERE company_id = $1;', [companyId]);
+  await pgQuery('DELETE FROM company_workspaces WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM pipelines WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM module_records WHERE company_id = $1;', [companyId]);
   await pgQuery('DELETE FROM invitations WHERE company_id = $1;', [companyId]);
@@ -1353,7 +1652,8 @@ export async function listUsers(requestingUser) {
     const user = rowToUser(row);
     return {
       ...user,
-      assignedCompanies: await listUserCompanyAssignments(user.id)
+      assignedCompanies: await listUserCompanyAssignments(user.id),
+      workspaceAssignments: await listUserWorkspaceAssignments(user.id)
     };
   }));
 }
@@ -1438,6 +1738,7 @@ export async function deleteUser(id) {
     store.reports = store.reports.filter((report) => report.userId !== id);
     store.moduleRecords = (store.moduleRecords ?? []).filter((record) => record.userId !== id);
     store.userCompanyAssignments = (store.userCompanyAssignments ?? []).filter((assignment) => assignment.userId !== id);
+    store.userWorkspaceAssignments = (store.userWorkspaceAssignments ?? []).filter((assignment) => assignment.userId !== id);
     await saveDevStore(store);
     return;
   }
@@ -1814,11 +2115,18 @@ export async function listDatasets(user, companyId) {
   const assignedCompanyIds = await getAccessibleCompanyIds(user);
   if (!usingPostgres) {
     const store = await loadDevStore();
-    return store.datasets
+    const visible = [];
+    for (const dataset of store.datasets) {
+      if (dataset.deletedAt) continue;
+      if (requestedCompanyId && dataset.companyId !== requestedCompanyId) continue;
+      if (assignedCompanyIds !== null && !assignedCompanyIds.includes(dataset.companyId)) continue;
+      if (!(await canAccessDataset(user, rowToDataset(dataset)))) continue;
+      visible.push(dataset);
+    }
+    return visible
       .filter((dataset) => {
-        if (dataset.deletedAt) return false;
-        if (!requestedCompanyId) return assignedCompanyIds === null || assignedCompanyIds.includes(dataset.companyId);
-        return dataset.companyId === requestedCompanyId && (assignedCompanyIds === null || assignedCompanyIds.includes(dataset.companyId));
+        if (!requestedCompanyId) return true;
+        return dataset.companyId === requestedCompanyId;
       })
       .slice(0, 50)
       .map(rowToDataset);
@@ -1839,8 +2147,14 @@ export async function listDatasets(user, companyId) {
     where = 'WHERE company_id = ANY($1::text[])';
   }
   const activeWhere = where ? `${where} AND deleted_at IS NULL` : 'WHERE deleted_at IS NULL';
-  const result = await pgQuery(`SELECT * FROM datasets ${activeWhere} ORDER BY uploaded_at DESC LIMIT 50;`, params);
-  return result.rows.map(rowToDataset);
+  const result = await pgQuery(`SELECT * FROM datasets ${activeWhere} ORDER BY uploaded_at DESC LIMIT 200;`, params);
+  const visible = [];
+  for (const row of result.rows) {
+    const dataset = rowToDataset(row);
+    if (await canAccessDataset(user, dataset)) visible.push(dataset);
+    if (visible.length >= 50) break;
+  }
+  return visible;
 }
 
 export async function getDataset(id, user) {
@@ -1848,13 +2162,15 @@ export async function getDataset(id, user) {
   if (!usingPostgres) {
     const store = await loadDevStore();
     const dataset = store.datasets.find((entry) => !entry.deletedAt && entry.id === id && (assignedCompanyIds === null || assignedCompanyIds.includes(entry.companyId)));
-    return dataset ? rowToDataset(dataset) : undefined;
+    const normalized = dataset ? rowToDataset(dataset) : undefined;
+    return normalized && await canAccessDataset(user, normalized) ? normalized : undefined;
   }
   const params = [id];
   const accessFilter = assignedCompanyIds === null ? '' : 'AND company_id = ANY($2::text[])';
   if (assignedCompanyIds !== null) params.push(assignedCompanyIds);
   const result = await pgQuery(`SELECT * FROM datasets WHERE id = $1 AND deleted_at IS NULL ${accessFilter} LIMIT 1;`, params);
-  return result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
+  const dataset = result.rows[0] ? rowToDataset(result.rows[0]) : undefined;
+  return dataset && await canAccessDataset(user, dataset) ? dataset : undefined;
 }
 
 export async function deleteDataset(user, id) {
@@ -3245,6 +3561,7 @@ function rowToCompany(row) {
     email: row.email ?? '',
     phone: row.phone ?? '',
     status: row.status ?? 'Active',
+    enabledWorkspaces: row.enabledWorkspaces ?? row.enabled_workspaces ?? [],
     createdAt: toIso(row.created_at ?? row.createdAt),
     updatedAt: toIso(row.updated_at ?? row.updatedAt ?? row.created_at ?? row.createdAt)
   };
@@ -3356,6 +3673,32 @@ function rowToCompanyAssignment(row) {
     userId: row.user_id ?? row.userId,
     companyId: row.company_id ?? row.companyId,
     companyName: row.company_name ?? row.companyName ?? '',
+    role: normalizeRole(row.role),
+    assignedAt: toIso(row.assigned_at ?? row.assignedAt ?? row.created_at ?? row.createdAt),
+    createdAt: toIso(row.created_at ?? row.createdAt ?? row.assigned_at ?? row.assignedAt)
+  };
+}
+
+function rowToCompanyWorkspace(row) {
+  return {
+    id: row.id ?? `${row.company_id ?? row.companyId}:${row.workspace_key ?? row.workspaceKey}`,
+    companyId: row.company_id ?? row.companyId,
+    workspaceKey: normalizeWorkspaceKey(row.workspace_key ?? row.workspaceKey),
+    enabled: row.enabled !== false,
+    plan: row.plan ?? 'Professional',
+    metadata: parseJson(row.metadata, {}),
+    createdAt: toIso(row.created_at ?? row.createdAt),
+    updatedAt: toIso(row.updated_at ?? row.updatedAt ?? row.created_at ?? row.createdAt)
+  };
+}
+
+function rowToWorkspaceAssignment(row) {
+  return {
+    id: row.id ?? `${row.user_id ?? row.userId}:${row.company_id ?? row.companyId}:${row.workspace_key ?? row.workspaceKey}`,
+    userId: row.user_id ?? row.userId,
+    companyId: row.company_id ?? row.companyId,
+    companyName: row.company_name ?? row.companyName ?? '',
+    workspaceKey: normalizeWorkspaceKey(row.workspace_key ?? row.workspaceKey),
     role: normalizeRole(row.role),
     assignedAt: toIso(row.assigned_at ?? row.assignedAt ?? row.created_at ?? row.createdAt),
     createdAt: toIso(row.created_at ?? row.createdAt ?? row.assigned_at ?? row.assignedAt)
@@ -3676,6 +4019,19 @@ function normalizeRole(role) {
   return roles.includes(role) ? role : 'employee';
 }
 
+function normalizeWorkspaceKey(workspaceKey) {
+  const normalized = String(workspaceKey || '').trim();
+  if (normalized === 'enterpriseDataHub') return 'dataProcessing';
+  if (normalized === 'businessAssistant') return 'assistant';
+  return workspaceKeys.includes(normalized) ? normalized : '';
+}
+
+function workspaceKeyForDataset(dataset) {
+  const moduleKey = normalizeWorkspaceKey(dataset?.module);
+  if (moduleKey) return moduleKey;
+  return normalizeWorkspaceKey(dataset?.workspace);
+}
+
 function parseJson(value, fallback) {
   if (value == null) return fallback;
   if (typeof value !== 'string') return value;
@@ -3814,7 +4170,9 @@ async function loadDevStore() {
       workflowIntelligence: [],
       accessRequests: [],
       loginHistory: [],
-      userCompanyAssignments: []
+      userCompanyAssignments: [],
+      companyWorkspaces: [],
+      userWorkspaceAssignments: []
     };
   }
 
@@ -3843,7 +4201,9 @@ async function loadDevStore() {
     workflowIntelligence: store.workflowIntelligence ?? [],
     accessRequests: store.accessRequests ?? [],
     loginHistory: store.loginHistory ?? [],
-    userCompanyAssignments: store.userCompanyAssignments ?? []
+    userCompanyAssignments: store.userCompanyAssignments ?? [],
+    companyWorkspaces: store.companyWorkspaces ?? [],
+    userWorkspaceAssignments: store.userWorkspaceAssignments ?? []
   };
 }
 

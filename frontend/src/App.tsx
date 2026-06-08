@@ -103,7 +103,7 @@ type ChartType = 'bar' | 'line' | 'donut';
 type Theme = 'light' | 'dark';
 type ChatMessage = { role: 'assistant' | 'user'; text: string };
 type AuthMode = 'login' | 'signup';
-type UserRole = 'owner' | 'admin' | 'manager' | 'employee' | 'viewer';
+type UserRole = 'owner' | 'admin' | 'manager' | 'workspace_admin' | 'employee' | 'viewer';
 type PreviewMode = 'upload' | 'schema' | 'transform' | 'validation' | 'duplicates' | 'normalization' | 'cleanup' | 'approval' | 'export' | 'compare' | 'history' | 'edit' | 'query' | 'ai' | 'pipeline';
 type AppView =
   | 'dashboard'
@@ -136,6 +136,7 @@ type User = {
   lastLoginAt?: string;
   createdAt?: string;
   assignedCompanies?: CompanyAssignment[];
+  workspaceAssignments?: WorkspaceAssignment[];
 };
 
 type AdminUser = User & {
@@ -235,6 +236,17 @@ type AuditLog = {
   createdAt: string;
 };
 
+type WorkspaceAssignment = {
+  id: string;
+  userId: string;
+  companyId: string;
+  companyName?: string;
+  workspaceKey: WorkspaceKey;
+  role: UserRole;
+  assignedAt?: string;
+  createdAt?: string;
+};
+
 type DatasetUploadOptions = {
   action?: 'create_new' | 'merge_existing';
   targetDatasetId?: string;
@@ -302,6 +314,8 @@ type NotificationItem = {
   title: string;
   message: string;
   status: string;
+  enabledWorkspaces?: WorkspaceKey[];
+  workspaces?: { workspaceKey: WorkspaceKey; enabled: boolean; plan?: string }[];
   createdAt: string;
 };
 
@@ -413,6 +427,7 @@ type CompanyFormValues = {
   ownerName: string;
   email: string;
   phone: string;
+  enabledWorkspaces: WorkspaceKey[];
 };
 
 type ModuleMetrics = Record<string, { total: number; open: number }>;
@@ -473,7 +488,7 @@ const fallbackInsights: InsightResponse = {
 };
 
 const ownerEmail = 'melakue@metenovaai.com';
-const roleOptions: UserRole[] = ['viewer', 'employee', 'manager', 'admin', 'owner'];
+const roleOptions: UserRole[] = ['viewer', 'employee', 'workspace_admin', 'manager', 'admin', 'owner'];
 const viteEnv = (import.meta as ViteImportMeta).env;
 const API_BASE = (viteEnv.VITE_API_URL || window.location.origin).replace(/\/$/, '');
 const AUTH_TOKEN_KEY = 'metenovaSessionToken';
@@ -769,22 +784,38 @@ const workspaceDefinitions: WorkspaceDefinition[] = [
   }
 ];
 
-function workspaceAccessForUser(user?: User | null): WorkspaceKey[] {
-  if (!user) return [];
-  if (user.role === 'owner' || user.role === 'admin' || user.role === 'manager') {
-    return workspaceDefinitions.map((workspace) => workspace.key);
-  }
-  const profile = `${user.name ?? ''} ${user.email ?? ''}`.toLowerCase();
-  if (/\b(hr|people|talent|recruit)/.test(profile)) return ['hr'];
-  if (/\b(cfo|finance|budget|forecast|controller)/.test(profile)) return ['finance'];
-  if (/\b(account|invoice|expense|ap|ar|bookkeep)/.test(profile)) return ['accounting'];
-  if (/\b(engineer|project|developer|devops|deployment)/.test(profile)) return ['engineering'];
-  if (/\b(crm|sales|lead|customer|revenue)/.test(profile)) return ['crm'];
-  return ['accounting'];
+function companyEnabledWorkspaceKeys(company?: Company | null): WorkspaceKey[] {
+  const enabled = company?.enabledWorkspaces?.length
+    ? company.enabledWorkspaces
+    : company?.workspaces?.filter((workspace) => workspace.enabled).map((workspace) => workspace.workspaceKey);
+  return enabled?.length ? enabled : workspaceDefinitions.map((workspace) => workspace.key);
 }
 
-function canAccessWorkspace(user: User | null | undefined, workspaceKey: WorkspaceKey) {
-  return workspaceAccessForUser(user).includes(workspaceKey);
+function workspaceAccessForUser(user?: User | null, company?: Company | null): WorkspaceKey[] {
+  if (!user) return [];
+  const enabled = companyEnabledWorkspaceKeys(company);
+  if (user.role === 'owner' || user.role === 'admin' || user.role === 'manager') {
+    return enabled;
+  }
+  const assigned = (user.workspaceAssignments ?? [])
+    .filter((assignment) => (!company?.id || assignment.companyId === company.id) && enabled.includes(assignment.workspaceKey))
+    .map((assignment) => assignment.workspaceKey);
+  if (assigned.length) {
+    return [...new Set(assigned)];
+  }
+  if (user.role === 'workspace_admin') return [];
+  const profile = `${user.name ?? ''} ${user.email ?? ''}`.toLowerCase();
+  const inferred = /\b(hr|people|talent|recruit)/.test(profile) ? 'hr'
+    : /\b(cfo|finance|budget|forecast|controller)/.test(profile) ? 'finance'
+      : /\b(account|invoice|expense|ap|ar|bookkeep)/.test(profile) ? 'accounting'
+        : /\b(engineer|project|developer|devops|deployment)/.test(profile) ? 'engineering'
+          : /\b(crm|sales|lead|customer|revenue)/.test(profile) ? 'crm'
+            : enabled[0] ?? 'accounting';
+  return enabled.includes(inferred) ? [inferred] : enabled.slice(0, 1);
+}
+
+function canAccessWorkspace(user: User | null | undefined, workspaceKey: WorkspaceKey, company?: Company | null) {
+  return workspaceAccessForUser(user, company).includes(workspaceKey);
 }
 
 function navItemAllowedForWorkspaces(view: AppView, access: WorkspaceKey[], canManage: boolean) {
@@ -938,6 +969,7 @@ export function App() {
   const [adminMessage, setAdminMessage] = useState('Admin user controls are ready.');
   const [accessUser, setAccessUser] = useState<AdminUser | null>(null);
   const [accessCompanyIds, setAccessCompanyIds] = useState<string[]>([]);
+  const [accessWorkspaceKeys, setAccessWorkspaceKeys] = useState<Record<string, WorkspaceKey[]>>({});
   const [accessRole, setAccessRole] = useState<UserRole>('employee');
   const [accessSaving, setAccessSaving] = useState(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
@@ -960,7 +992,8 @@ export function App() {
     industry: '',
     ownerName: '',
     email: '',
-    phone: ''
+    phone: '',
+    enabledWorkspaces: ['accounting', 'finance', 'hr', 'dataProcessing', 'analytics']
   });
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteRole, setInviteRole] = useState<UserRole>('employee');
@@ -1485,7 +1518,7 @@ export function App() {
     () => companies.find((company) => company.id === selectedCompanyId) ?? companies[0] ?? sampleCompanies[0],
     [companies, selectedCompanyId]
   );
-  const workspaceAccess = useMemo(() => workspaceAccessForUser(user), [user?.id, user?.role, user?.email, user?.name]);
+  const workspaceAccess = useMemo(() => workspaceAccessForUser(user, selectedCompany), [user?.id, user?.role, user?.email, user?.name, user?.workspaceAssignments, selectedCompany?.id, selectedCompany?.enabledWorkspaces]);
   const enabledWorkspaces = useMemo(
     () => workspaceDefinitions.filter((workspace) => workspaceAccess.includes(workspace.key)),
     [workspaceAccess]
@@ -2124,6 +2157,11 @@ export function App() {
     setAccessUser(userRecord);
     setAccessCompanyIds((userRecord.assignedCompanies ?? []).map((assignment) => assignment.companyId));
     setAccessRole((userRecord.assignedCompanies?.[0]?.role as UserRole | undefined) ?? userRecord.role ?? 'employee');
+    const nextWorkspaceKeys: Record<string, WorkspaceKey[]> = {};
+    (userRecord.workspaceAssignments ?? []).forEach((assignment) => {
+      nextWorkspaceKeys[assignment.companyId] = [...(nextWorkspaceKeys[assignment.companyId] ?? []), assignment.workspaceKey];
+    });
+    setAccessWorkspaceKeys(nextWorkspaceKeys);
   }
 
   function toggleAccessCompany(companyId: string) {
@@ -2132,6 +2170,24 @@ export function App() {
         ? current.filter((entry) => entry !== companyId)
         : [...current, companyId]
     ));
+    setAccessWorkspaceKeys((current) => {
+      if (accessCompanyIds.includes(companyId)) {
+        const { [companyId]: _removed, ...rest } = current;
+        return rest;
+      }
+      const company = companies.find((entry) => entry.id === companyId);
+      return { ...current, [companyId]: companyEnabledWorkspaceKeys(company).slice(0, 1) };
+    });
+  }
+
+  function toggleAccessWorkspace(companyId: string, workspaceKey: WorkspaceKey) {
+    setAccessWorkspaceKeys((current) => {
+      const existing = current[companyId] ?? [];
+      const next = existing.includes(workspaceKey)
+        ? existing.filter((entry) => entry !== workspaceKey)
+        : [...existing, workspaceKey];
+      return { ...current, [companyId]: next };
+    });
   }
 
   async function saveCompanyAccess() {
@@ -2139,10 +2195,13 @@ export function App() {
     setAccessSaving(true);
     try {
       const assignments = accessCompanyIds.map((companyId) => ({ companyId, role: accessRole }));
+      const workspaceAssignments = accessCompanyIds.flatMap((companyId) =>
+        (accessWorkspaceKeys[companyId] ?? []).map((workspaceKey) => ({ companyId, workspaceKey, role: accessRole }))
+      );
       const response = await apiFetch(`/api/admin/users/${accessUser.id}/company-assignments`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ assignments })
+        body: JSON.stringify({ assignments, workspaceAssignments })
       });
       const payload = await readJson<{ user?: AdminUser; assignments?: CompanyAssignment[]; error?: string }>(response);
       if (!response.ok || !payload.user) {
@@ -2344,8 +2403,17 @@ export function App() {
     }
   }
 
-  function updateCompanyForm(field: keyof CompanyFormValues, value: string) {
+  function updateCompanyForm(field: Exclude<keyof CompanyFormValues, 'enabledWorkspaces'>, value: string) {
     setCompanyForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function toggleCompanyFormWorkspace(workspaceKey: WorkspaceKey) {
+    setCompanyForm((current) => {
+      const enabled = current.enabledWorkspaces.includes(workspaceKey)
+        ? current.enabledWorkspaces.filter((key) => key !== workspaceKey)
+        : [...current.enabledWorkspaces, workspaceKey];
+      return { ...current, enabledWorkspaces: enabled };
+    });
   }
 
   function resetCompanyForm() {
@@ -2354,7 +2422,8 @@ export function App() {
       industry: '',
       ownerName: '',
       email: '',
-      phone: ''
+      phone: '',
+      enabledWorkspaces: ['accounting', 'finance', 'hr', 'dataProcessing', 'analytics']
     });
   }
 
@@ -2434,7 +2503,8 @@ export function App() {
       industry: companyForm.industry.trim(),
       ownerName: companyForm.ownerName.trim(),
       email: companyForm.email.trim(),
-      phone: companyForm.phone.trim()
+      phone: companyForm.phone.trim(),
+      enabledWorkspaces: companyForm.enabledWorkspaces
     };
 
     if (!nextCompany.name || !nextCompany.industry || !nextCompany.ownerName || !nextCompany.email || !nextCompany.phone) {
@@ -2483,6 +2553,33 @@ export function App() {
       setPersistenceState('Company renamed.');
     } catch (error) {
       setPersistenceState(error instanceof Error ? error.message : 'Company update failed.');
+    } finally {
+      setWorkspaceAction('');
+    }
+  }
+
+  async function toggleCompanyWorkspace(company: Company, workspaceKey: WorkspaceKey) {
+    const current = companyEnabledWorkspaceKeys(company);
+    const enabledWorkspaces = current.includes(workspaceKey)
+      ? current.filter((key) => key !== workspaceKey)
+      : [...current, workspaceKey];
+    if (!enabledWorkspaces.length) {
+      setPersistenceState('A company must keep at least one workspace enabled.');
+      return;
+    }
+    setWorkspaceAction(`Updating ${company.name} workspaces...`);
+    try {
+      const response = await apiFetch(`/api/companies/${company.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ enabledWorkspaces })
+      });
+      const payload = await readJson<{ company?: Company; error?: string }>(response);
+      if (!response.ok || !payload.company) throw new Error(payload.error || 'Company workspace update failed.');
+      setCompanies((currentCompanies) => currentCompanies.map((entry) => entry.id === company.id ? payload.company as Company : entry));
+      setPersistenceState(`${company.name} workspace configuration updated.`);
+    } catch (error) {
+      setPersistenceState(error instanceof Error ? error.message : 'Company workspace update failed.');
     } finally {
       setWorkspaceAction('');
     }
@@ -2937,11 +3034,13 @@ export function App() {
           <CompanyAccessModal
             accessCompanyIds={accessCompanyIds}
             accessRole={accessRole}
+            accessWorkspaceKeys={accessWorkspaceKeys}
             companies={uploadCompanies}
             onClose={() => setAccessUser(null)}
             onRoleChange={setAccessRole}
             onSave={saveCompanyAccess}
             onToggleCompany={toggleAccessCompany}
+            onToggleWorkspace={toggleAccessWorkspace}
             saving={accessSaving}
             user={accessUser}
           />
@@ -2984,8 +3083,10 @@ export function App() {
             loginHistory={loginHistory}
             systemStatus={systemStatus}
             updateCompanyName={updateCompanyName}
+            toggleCompanyWorkspace={toggleCompanyWorkspace}
             updateAdminUser={updateAdminUser}
             updateCompanyForm={updateCompanyForm}
+            toggleCompanyFormWorkspace={toggleCompanyFormWorkspace}
             users={adminUsers}
             user={user}
             uploadDataset={uploadDataset}
@@ -4663,11 +4764,11 @@ function renderCleanupPanel(
 }
 
 function canManageUsers(user: User | null) {
-  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager' || user?.role === 'workspace_admin';
 }
 
 function canManageWorkspaceData(user: User | null) {
-  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager';
+  return user?.role === 'owner' || user?.role === 'admin' || user?.role === 'manager' || user?.role === 'workspace_admin';
 }
 
 const EMPTY_ARRAY: never[] = [];
@@ -4903,6 +5004,7 @@ function roleLabel(role?: string) {
     owner: 'Owner / Super Admin',
     admin: 'Admin',
     manager: 'Manager',
+    workspace_admin: 'Workspace Admin',
     employee: 'Employee',
     viewer: 'Viewer / Client'
   };
@@ -5077,7 +5179,9 @@ function AssignedCompaniesList({ assignments }: { assignments: CompanyAssignment
 }
 
 function WorkspaceAccessPills({ user }: { user: User }) {
-  const access = workspaceAccessForUser(user);
+  const access = user.workspaceAssignments?.length
+    ? [...new Set(user.workspaceAssignments.map((assignment) => assignment.workspaceKey))]
+    : workspaceAccessForUser(user);
   return (
     <div className="assigned-companies workspace-access-pills">
       {workspaceDefinitions
@@ -5094,21 +5198,25 @@ function WorkspaceAccessPills({ user }: { user: User }) {
 function CompanyAccessModal({
   accessCompanyIds,
   accessRole,
+  accessWorkspaceKeys,
   companies,
   onClose,
   onRoleChange,
   onSave,
   onToggleCompany,
+  onToggleWorkspace,
   saving,
   user
 }: {
   accessCompanyIds: string[];
   accessRole: UserRole;
+  accessWorkspaceKeys: Record<string, WorkspaceKey[]>;
   companies: Company[];
   onClose: () => void;
   onRoleChange: (role: UserRole) => void;
   onSave: () => void;
   onToggleCompany: (companyId: string) => void;
+  onToggleWorkspace: (companyId: string, workspaceKey: WorkspaceKey) => void;
   saving: boolean;
   user: AdminUser;
 }) {
@@ -5133,17 +5241,35 @@ function CompanyAccessModal({
         </label>
         <div className="company-access-list">
           {companies.map((company) => (
-            <label className="company-access-row" key={company.id}>
-              <input
-                checked={accessCompanyIds.includes(company.id)}
-                type="checkbox"
-                onChange={() => onToggleCompany(company.id)}
-              />
-              <span>
-                <strong>{company.name}</strong>
-                <small>{company.industry}</small>
-              </span>
-            </label>
+            <div className="company-access-row stacked-access-row" key={company.id}>
+              <label>
+                <input
+                  checked={accessCompanyIds.includes(company.id)}
+                  type="checkbox"
+                  onChange={() => onToggleCompany(company.id)}
+                />
+                <span>
+                  <strong>{company.name}</strong>
+                  <small>{company.industry}</small>
+                </span>
+              </label>
+              {accessCompanyIds.includes(company.id) && (
+                <div className="workspace-access-grid">
+                  {workspaceDefinitions
+                    .filter((workspace) => companyEnabledWorkspaceKeys(company).includes(workspace.key))
+                    .map((workspace) => (
+                      <label className="workspace-access-option" key={workspace.key}>
+                        <input
+                          checked={(accessWorkspaceKeys[company.id] ?? []).includes(workspace.key)}
+                          type="checkbox"
+                          onChange={() => onToggleWorkspace(company.id, workspace.key)}
+                        />
+                        <span>{workspace.label}</span>
+                      </label>
+                    ))}
+                </div>
+              )}
+            </div>
           ))}
           {!companies.length && <p className="muted">No companies are available to assign.</p>}
         </div>
@@ -5313,7 +5439,9 @@ function RoutedPages(props: {
   systemStatus: SystemStatus | null;
   updateAdminUser: (userId: string, updates: Partial<AdminUser>) => void;
   updateCompanyName: (company: Company) => void;
-  updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
+  toggleCompanyWorkspace: (company: Company, workspaceKey: WorkspaceKey) => void;
+  updateCompanyForm: (field: Exclude<keyof CompanyFormValues, 'enabledWorkspaces'>, value: string) => void;
+  toggleCompanyFormWorkspace: (workspaceKey: WorkspaceKey) => void;
   users: AdminUser[];
   user: User | null;
   uploadDataset: (file: File, worksheetName?: string, companyIdOverride?: string, moduleOverride?: string, workspaceOverride?: string) => Promise<Dataset | undefined>;
@@ -5445,7 +5573,9 @@ function RoutedPages(props: {
             runCompanyAction={props.runCompanyAction}
             deleteCompanyWorkspace={props.deleteCompanyWorkspace}
             updateCompanyName={props.updateCompanyName}
+            toggleCompanyWorkspace={props.toggleCompanyWorkspace}
             updateCompanyForm={props.updateCompanyForm}
+            toggleCompanyFormWorkspace={props.toggleCompanyFormWorkspace}
             user={props.user}
             workspaceAction={props.workspaceAction}
           />
@@ -5474,6 +5604,8 @@ function CompaniesWorkspace({
   saveCompany,
   saving,
   setFormOpen,
+  toggleCompanyWorkspace,
+  toggleCompanyFormWorkspace,
   updateCompanyForm,
   updateCompanyName,
   deleteCompanyWorkspace,
@@ -5491,7 +5623,9 @@ function CompaniesWorkspace({
   saveCompany: (event: FormEvent<HTMLFormElement>) => Promise<void>;
   saving: boolean;
   setFormOpen: (open: boolean) => void;
-  updateCompanyForm: (field: keyof CompanyFormValues, value: string) => void;
+  toggleCompanyWorkspace: (company: Company, workspaceKey: WorkspaceKey) => void;
+  toggleCompanyFormWorkspace: (workspaceKey: WorkspaceKey) => void;
+  updateCompanyForm: (field: Exclude<keyof CompanyFormValues, 'enabledWorkspaces'>, value: string) => void;
   updateCompanyName: (company: Company) => void;
   deleteCompanyWorkspace: (company: Company) => void;
   user: User | null;
@@ -5579,6 +5713,25 @@ function CompaniesWorkspace({
               Phone
               <input value={companyForm.phone} onChange={(event) => updateCompanyForm('phone', event.target.value)} />
             </label>
+            <div className="workspace-config-section">
+              <div>
+                <p className="eyebrow">Workspace configuration</p>
+                <strong>Enabled workspaces</strong>
+                <small>Only enabled workspaces can be assigned to company users.</small>
+              </div>
+              <div className="workspace-access-grid">
+                {workspaceDefinitions.map((workspace) => (
+                  <label className="workspace-access-option" key={workspace.key}>
+                    <input
+                      checked={companyForm.enabledWorkspaces.includes(workspace.key)}
+                      type="checkbox"
+                      onChange={() => toggleCompanyFormWorkspace(workspace.key)}
+                    />
+                    <span>{workspace.label}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
             <div className="company-form-actions">
               <button type="submit" disabled={saving}>{saving ? 'Saving...' : 'Save Company'}</button>
               <button className="ghost-button compact" type="button" onClick={closeForm}>Cancel</button>
@@ -5603,6 +5756,7 @@ function CompaniesWorkspace({
                 <th>Owner</th>
                 <th>Email</th>
                 <th>Phone</th>
+                <th>Workspaces</th>
                 <th>Status</th>
                 <th>Created Date</th>
                 <th>Workspace Actions</th>
@@ -5611,7 +5765,7 @@ function CompaniesWorkspace({
             <tbody>
               {loading ? (
                 <tr>
-                  <td colSpan={8}>Loading companies...</td>
+                  <td colSpan={9}>Loading companies...</td>
                 </tr>
               ) : companies.map((company) => (
                 <tr key={company.id}>
@@ -5620,6 +5774,28 @@ function CompaniesWorkspace({
                   <td>{company.ownerName}</td>
                   <td>{company.email}</td>
                   <td>{company.phone}</td>
+                  <td>
+                    <div className="workspace-mini-list">
+                      {workspaceDefinitions.slice(0, 7).map((workspace) => (
+                        canManageCompanyOps ? (
+                          <button
+                            className={`assignment-chip chip-button ${companyEnabledWorkspaceKeys(company).includes(workspace.key) ? '' : 'muted-chip'}`}
+                            disabled={Boolean(workspaceAction)}
+                            key={workspace.key}
+                            type="button"
+                            onClick={() => toggleCompanyWorkspace(company, workspace.key)}
+                            title={`${companyEnabledWorkspaceKeys(company).includes(workspace.key) ? 'Disable' : 'Enable'} ${workspace.label}`}
+                          >
+                            {workspace.icon}
+                          </button>
+                        ) : (
+                          <span className={`assignment-chip ${companyEnabledWorkspaceKeys(company).includes(workspace.key) ? '' : 'muted-chip'}`} key={workspace.key}>
+                            {workspace.icon}
+                          </span>
+                        )
+                      ))}
+                    </div>
+                  </td>
                   <td><span className="status-pill active">{company.status}</span></td>
                   <td>{new Date(company.createdAt).toLocaleDateString()}</td>
                   <td>

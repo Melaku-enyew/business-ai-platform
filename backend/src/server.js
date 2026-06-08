@@ -32,10 +32,12 @@ import {
   findInvitationByToken,
   findEmailLog,
   getDatabaseRuntimeStatus,
+  listCompanyWorkspaces,
   getAccessibleCompanyIds,
   hasRole,
   isOwner,
   canAccessCompany,
+  canAccessWorkspace,
   clearDatabaseRuntimeFailure,
   findSessionById,
   getDevUser,
@@ -60,6 +62,7 @@ import {
   listReports,
   listSessions,
   listUserCompanyAssignments,
+  listUserWorkspaceAssignments,
   listUsers,
   markAccountTokenUsed,
   markInvitationAccepted,
@@ -94,6 +97,8 @@ import {
   updateModuleRecord,
   updateUser,
   replaceUserCompanyAssignments,
+  replaceUserWorkspaceAssignments,
+  replaceCompanyWorkspaces,
   usingPostgres
 } from './db.js';
 import { cleanDataset, recordsToCsv } from './dataCleanup.js';
@@ -738,7 +743,8 @@ function publicUser(user) {
     twoFactorEnabled: user.twoFactorEnabled === true,
     lastLoginAt: user.lastLoginAt,
     createdAt: user.createdAt,
-    assignedCompanies: user.assignedCompanies ?? []
+    assignedCompanies: user.assignedCompanies ?? [],
+    workspaceAssignments: user.workspaceAssignments ?? []
   };
 }
 
@@ -892,6 +898,7 @@ async function requireAuth(req, res, next) {
 
     req.user = user;
     req.user.accessibleCompanyIds = await getAccessibleCompanyIds(user);
+    req.user.workspaceAssignments = await listUserWorkspaceAssignments(user.id);
     req.session = session;
     next();
   } catch {
@@ -926,7 +933,7 @@ function requireRole(role) {
 }
 
 function canManageCompany(user, companyId) {
-  return isOwner(user) || (hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(companyId));
+  return isOwner(user) || (user?.role !== 'workspace_admin' && hasRole(user, 'manager') && Array.isArray(user.accessibleCompanyIds) && user.accessibleCompanyIds.includes(companyId));
 }
 
 function canManageDataset(user, dataset) {
@@ -1012,7 +1019,8 @@ function validateCompanyInput(body) {
     industry: String(body?.industry || '').trim(),
     ownerName: String(body?.ownerName || body?.owner_name || '').trim(),
     email: String(body?.email || '').trim().toLowerCase(),
-    phone: String(body?.phone || '').trim()
+    phone: String(body?.phone || '').trim(),
+    enabledWorkspaces: Array.isArray(body?.enabledWorkspaces) ? body.enabledWorkspaces.map(String) : undefined
   };
 
   if (!company.name || !company.industry || !company.ownerName || !company.email || !company.phone) {
@@ -1187,6 +1195,14 @@ async function canManageTargetUser(actor, target) {
   if (!hasRole(actor, 'manager') || !Array.isArray(actor.accessibleCompanyIds)) return false;
   const assignments = await listUserCompanyAssignments(target.id);
   const targetCompanyIds = new Set([target.companyId, ...assignments.map((assignment) => assignment.companyId)].filter(Boolean));
+  if (actor.role === 'workspace_admin') {
+    const [actorWorkspaces, targetWorkspaces] = await Promise.all([
+      listUserWorkspaceAssignments(actor.id),
+      listUserWorkspaceAssignments(target.id)
+    ]);
+    const targetWorkspaceKeys = new Set(targetWorkspaces.map((assignment) => `${assignment.companyId}:${assignment.workspaceKey}`));
+    return actorWorkspaces.some((assignment) => targetWorkspaceKeys.has(`${assignment.companyId}:${assignment.workspaceKey}`));
+  }
   return [...targetCompanyIds].some((companyId) => actor.accessibleCompanyIds.includes(companyId));
 }
 
@@ -1200,6 +1216,9 @@ function canAssignRole(actor, role) {
   if (role === 'manager') {
     return hasRole(actor, 'admin');
   }
+  if (role === 'workspace_admin') {
+    return hasRole(actor, 'manager');
+  }
   return hasRole(actor, 'manager');
 }
 
@@ -1208,6 +1227,7 @@ function roleLabel(role) {
     owner: 'Owner / Super Admin',
     admin: 'Company Admin',
     manager: 'Manager',
+    workspace_admin: 'Workspace Admin',
     employee: 'Employee',
     viewer: 'Viewer'
   }[role] || 'Employee';
@@ -1587,6 +1607,8 @@ app.post('/api/auth/signup', authRateLimit, requireDatabaseReady, async (req, re
       targetId: user.id,
       metadata: { role: user.role }
     });
+    user.assignedCompanies = await listUserCompanyAssignments(user.id);
+    user.workspaceAssignments = await listUserWorkspaceAssignments(user.id);
     const { token, session } = await createLoginSession(user);
     res.status(201).json({ token, user: publicUser(user), session });
   } catch (error) {
@@ -1630,6 +1652,8 @@ app.post('/api/auth/accept-invite', authRateLimit, requireDatabaseReady, async (
 
     await markInvitationAccepted(invitation.id);
     await audit({ user, body: { email: user.email } }, 'auth.invitation_accepted', 'invitation', invitation.id, { role: user.role });
+    user.assignedCompanies = await listUserCompanyAssignments(user.id);
+    user.workspaceAssignments = await listUserWorkspaceAssignments(user.id);
     const sessionPayload = await createLoginSession(user);
     res.status(201).json({ token: sessionPayload.token, user: publicUser(user), session: sessionPayload.session });
   } catch (error) {
@@ -1823,6 +1847,8 @@ app.post('/api/auth/login', authRateLimit, requireDatabaseReady, async (req, res
       targetId: user.id,
       metadata: { role: user.role }
     });
+    user.assignedCompanies = await listUserCompanyAssignments(user.id);
+    user.workspaceAssignments = await listUserWorkspaceAssignments(user.id);
     res.json({ token, user: publicUser(user), session });
   } catch (error) {
     next(error);
@@ -1934,7 +1960,10 @@ app.get('/api/admin/users/:id/company-assignments', requireAuth, requireRole('ma
       res.status(403).json({ error: 'You can only manage users assigned to your company workspace.', code: 'COMPANY_FORBIDDEN', requestId: req.requestId });
       return;
     }
-    res.json({ assignments: await listUserCompanyAssignments(req.params.id) });
+    res.json({
+      assignments: await listUserCompanyAssignments(req.params.id),
+      workspaceAssignments: await listUserWorkspaceAssignments(req.params.id)
+    });
   } catch (error) {
     next(error);
   }
@@ -1975,12 +2004,18 @@ app.put('/api/admin/users/:id/company-assignments', requireAuth, requireRole('ma
     }
 
     const assignments = await replaceUserCompanyAssignments(req.params.id, normalizedAssignments);
+    const workspaceAssignments = await replaceUserWorkspaceAssignments(
+      req.params.id,
+      Array.isArray(req.body?.workspaceAssignments) ? req.body.workspaceAssignments : [],
+      req.user
+    );
     const updatedUser = await findUserById(req.params.id);
-    const responseUser = { ...updatedUser, assignedCompanies: assignments };
+    const responseUser = { ...updatedUser, assignedCompanies: assignments, workspaceAssignments };
     await audit(req, 'admin.company_assignments_updated', 'user', req.params.id, {
-      companyIds: assignments.map((assignment) => assignment.companyId)
+      companyIds: assignments.map((assignment) => assignment.companyId),
+      workspaces: workspaceAssignments.map((assignment) => `${assignment.companyId}:${assignment.workspaceKey}`)
     });
-    res.json({ user: publicUser(responseUser), assignments });
+    res.json({ user: publicUser(responseUser), assignments, workspaceAssignments });
   } catch (error) {
     next(error);
   }
@@ -2208,7 +2243,8 @@ app.patch('/api/companies/:id', requireRole('manager'), requireDurableStorage, a
       ownerName: req.body?.ownerName,
       email: req.body?.email,
       phone: req.body?.phone,
-      status: req.body?.status
+      status: req.body?.status,
+      enabledWorkspaces: Array.isArray(req.body?.enabledWorkspaces) ? req.body.enabledWorkspaces : undefined
     });
     if (!company) {
       res.status(404).json({ error: 'Company not found.' });
@@ -3018,6 +3054,12 @@ async function handleDatasetUpload(req, res) {
 
   const moduleName = String(req.body?.module || 'dataProcessing').trim();
   const workspaceName = String(req.body?.workspace || moduleName || 'workspace').trim();
+  if (!(await canAccessWorkspace(req.user, companyId, moduleName))) {
+    logUploadStage(req, 'workspace_authorization_failed', { companyId, module: moduleName, workspace: workspaceName, validationResult: 'forbidden' });
+    const error = uploadError('Workspace is not assigned to this account.', 'UPLOAD_WORKSPACE_FORBIDDEN', 'workspace_assignment', 403);
+    res.status(403).json(uploadFailurePayload(req, error, 'workspace_assignment'));
+    return;
+  }
   const datasetAction = String(req.body?.datasetAction || 'create_new').trim();
   const targetDatasetId = String(req.body?.targetDatasetId || '').trim();
   const duplicateMode = String(req.body?.duplicateMode || 'merge_update').trim();
