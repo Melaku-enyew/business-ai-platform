@@ -4923,10 +4923,6 @@ th {
   color: #0f172a;
 }
 
-.legacy-dashboard-hidden {
-  display: none;
-}
-
 .dashboard-cockpit {
   display: grid;
   gap: 12px;
@@ -6013,8 +6009,56 @@ th {
   color: var(--accent-text);
 }
 
+.generated-report-tray {
+  display: grid;
+  gap: 6px;
+  max-height: 190px;
+  overflow: auto;
+}
+
+.generated-report-tray > button,
+.generated-report-tray > span {
+  display: grid;
+  gap: 3px;
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  padding: 8px;
+  text-align: left;
+}
+
+.generated-report-tray small,
+.generated-report-tray span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
 .sql-smoke-profile {
   background: color-mix(in srgb, var(--warning) 7%, var(--panel));
+}
+
+.connector-live-preview {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: center;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  padding: 10px;
+}
+
+.connector-live-preview > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.connector-live-preview span {
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 750;
 }
 
 .sql-smoke-profile span,

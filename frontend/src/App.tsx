@@ -3512,441 +3512,6 @@ export function App() {
               workflows={workflows}
               />
             </WorkspaceErrorBoundary>
-            <div className="legacy-dashboard-hidden">
-            <section className="panel ops-command-center">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Interactive operations command center</p>
-                  <h2>{selectedCompany?.name ?? 'Company'} workspace</h2>
-                </div>
-                <span className="status-pill active">{roleLabel(user?.role)} visibility</span>
-              </div>
-              <div className="command-center-grid">
-                <button type="button" onClick={() => openView('companies')}>
-                  <span>Company dashboard</span>
-                  <strong>{canManageUsers(user) ? `${companies.length} companies` : selectedCompany?.name ?? 'Assigned workspace'}</strong>
-                  <small>{canManageUsers(user) ? 'Owner/Admin global view' : 'Scoped to assigned company data'}</small>
-                </button>
-                  <button type="button" onClick={() => navigate('/data-processing/workspace')}>
-                  <span>Pipeline progress</span>
-                  <strong>{companyCleanupJobs.filter((job) => job.status === 'completed').length}/{companyCleanupJobs.length}</strong>
-                  <small>Completed cleanup jobs</small>
-                </button>
-                <button type="button" onClick={() => openView('reports')}>
-                  <span>Approval and export queue</span>
-                  <strong>{companyReports.length}</strong>
-                  <small>Reports and export-ready outputs</small>
-                </button>
-                <button type="button" onClick={() => openView('analytics')}>
-                  <span>Dataset health score</span>
-                  <strong>{datasetHealthScore}%</strong>
-                  <small>{failedRecordCount.toLocaleString()} failed records isolated</small>
-                </button>
-                <button type="button" onClick={createNightlySchedule}>
-                  <span>Enterprise scheduling</span>
-                  <strong>{enterpriseOps.schedules.length}</strong>
-                  <small>Nightly, hourly, event, SLA, and retry orchestration</small>
-                </button>
-                <button type="button" onClick={requestWorkflowAccess}>
-                  <span>Access governance</span>
-                  <strong>{enterpriseOps.accessRequests.filter((request) => request.status === 'pending').length}</strong>
-                  <small>Approval routing, temporary access, and security logs</small>
-                </button>
-              </div>
-              <div className="approval-queue">
-                <div>
-                  <strong>Workflow status</strong>
-                  <span>{companyCleanupJobs.filter((job) => job.status === 'processing' || job.status === 'pending').length} active or queued jobs</span>
-                </div>
-                <div>
-                  <strong>Export history</strong>
-                  <span>{companyReports.length + companyDashboards.length} saved reports and dashboards</span>
-                </div>
-                <div>
-                  <strong>Notifications</strong>
-                  <span>{notifications.filter((notification) => notification.status !== 'read').length} unread alerts</span>
-                </div>
-                <div>
-                  <strong>Connector health</strong>
-                  <span>{connectorHealth.healthy}/{connectorHealth.total} healthy, {connectorHealth.failed} failed</span>
-                </div>
-              </div>
-              <p className="persistence-note">{enterpriseOpsMessage}</p>
-              <div className="enterprise-ops-grid">
-                <article>
-                  <div className="panel-header compact-header">
-                    <div>
-                      <p className="eyebrow">Enterprise connectors</p>
-                      <h3>Automatic data ingestion</h3>
-                    </div>
-                    <span className="status-pill active">{connectorHealth.total} sources</span>
-                  </div>
-                  <div className="connector-list">
-                    {enterpriseOps.connectors.slice(0, 12).map((connector) => (
-                      <div className="connector-row" key={connector.id}>
-                        <div>
-                          <strong>{connector.name}</strong>
-                          <span>{connector.connectorType.replaceAll('_', ' ')} | {connector.credentialEncrypted ? 'encrypted credentials' : 'credential setup pending'}</span>
-                          <small>Last sync: {connector.lastSyncAt ? new Date(connector.lastSyncAt).toLocaleString() : 'Not synced'} | Next: {connector.nextSyncAt ? new Date(connector.nextSyncAt).toLocaleString() : 'Unscheduled'}</small>
-                        </div>
-                        <div>
-                          <span className={`status-pill ${connector.healthStatus === 'healthy' ? 'active' : 'disabled'}`}>{connector.healthStatus}</span>
-                          <button className="ghost-button compact" type="button" disabled={syncingConnectorId === connector.id} onClick={() => syncEnterpriseConnector(connector)}>
-                            {syncingConnectorId === connector.id ? 'Syncing' : 'Sync'}
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-                <article>
-                  <div className="panel-header compact-header">
-                    <div>
-                      <p className="eyebrow">Workflow intelligence</p>
-                      <h3>AI operations layer</h3>
-                    </div>
-                    <span className="status-pill active">{enterpriseOps.intelligence.length} insights</span>
-                  </div>
-                  <div className="insight-list">
-                    {enterpriseOps.intelligence.slice(0, 5).map((insight) => (
-                      <div className="insight-row" key={insight.id}>
-                        <div>
-                          <strong>{insight.title}</strong>
-                          <span>{insight.summary}</span>
-                        </div>
-                        <small>{Math.round(insight.confidence * 100)}% confidence | {insight.module}</small>
-                      </div>
-                    ))}
-                    {!enterpriseOps.intelligence.length && <p className="muted">AI recommendations, anomaly scoring, fraud detection, and risk forecasting will appear here.</p>}
-                  </div>
-                </article>
-                <article>
-                  <div className="panel-header compact-header">
-                    <div>
-                      <p className="eyebrow">Scheduled pipelines</p>
-                      <h3>Orchestration engine</h3>
-                    </div>
-                    <button className="ghost-button compact" type="button" onClick={createNightlySchedule}>Add nightly</button>
-                  </div>
-                  <div className="schedule-list">
-                    {enterpriseOps.schedules.slice(0, 5).map((schedule) => (
-                      <div className="schedule-row" key={schedule.id}>
-                        <strong>{schedule.name}</strong>
-                        <span>{schedule.scheduleType} {schedule.cronExpression || schedule.eventTrigger || 'manual'} | SLA {schedule.slaMinutes}m | priority {schedule.priority}</span>
-                        <small>{schedule.status} | next run {schedule.nextRunAt ? new Date(schedule.nextRunAt).toLocaleString() : 'not scheduled'}</small>
-                      </div>
-                    ))}
-                  </div>
-                </article>
-                <article>
-                  <div className="panel-header compact-header">
-                    <div>
-                      <p className="eyebrow">Sync logs</p>
-                      <h3>Connector observability</h3>
-                    </div>
-                    <span className="status-pill active">{enterpriseOps.syncLogs.length} events</span>
-                  </div>
-                  <div className="sync-log-list">
-                    {enterpriseOps.syncLogs.slice(0, 6).map((log) => (
-                      <div className="sync-log-row" key={log.id}>
-                        <strong>{log.status}</strong>
-                        <span>{log.recordsProcessed.toLocaleString()} processed | {log.failedRows.toLocaleString()} failed | {log.retries} retries</span>
-                        <small>{(log.durationMs / 1000).toFixed(1)}s | {new Date(log.createdAt).toLocaleString()}</small>
-                      </div>
-                    ))}
-                    {!enterpriseOps.syncLogs.length && <p className="muted">Sync duration, failed rows, retry attempts, and incremental sync logs will appear here.</p>}
-                  </div>
-                </article>
-              </div>
-            </section>
-            <section className="metrics-grid" aria-label="Performance metrics">
-              {insights.metrics.map((metric) => (
-                <article className="metric-card" key={metric.label}>
-                  <span>{metric.label}</span>
-                  <strong>{metric.value}</strong>
-                  <small>{metric.trend} this month</small>
-                </article>
-              ))}
-            </section>
-
-            <section className="panel notification-center" aria-label="Notification center">
-              <div className="panel-header">
-                <div>
-                  <p className="eyebrow">Notifications</p>
-                  <h2>Company activity feed</h2>
-                </div>
-                <span className="status-pill active">{notifications.length} updates</span>
-              </div>
-              <div className="notification-list">
-                {notifications.slice(0, 5).map((notification) => (
-                  <div key={notification.id}>
-                    <div>
-                      <strong>{notification.title}</strong>
-                      <span>{notification.message} - {new Date(notification.createdAt).toLocaleString()}</span>
-                    </div>
-                    <div className="notification-actions">
-                      <button className="ghost-button compact" type="button" onClick={() => updateNotificationRecord(notification, { status: 'read' })}>Mark Read</button>
-                      <button className="ghost-button compact" type="button" onClick={() => updateNotificationRecord(notification, { archive: true })}>Archive</button>
-                    </div>
-                  </div>
-                ))}
-                {!notifications.length && <p className="muted">Upload, cleanup, export, report, and failed pipeline alerts will appear here.</p>}
-              </div>
-            </section>
-
-            <section className="csv-section" id="csv">
-              <div className="section-heading">
-                <div>
-                  <p className="eyebrow">Data studio</p>
-                  <h2>Analyze business data in one clean view</h2>
-                </div>
-                <label className="company-selector">
-                  Company
-                  <select value={effectiveCompanyId} onChange={(event) => setSelectedCompanyId(event.target.value)}>
-                    {uploadCompanies.map((company) => (
-                      <option key={company.id} value={company.id}>{company.name}</option>
-                    ))}
-                  </select>
-                </label>
-                <button className="ghost-button" type="button" disabled={!activeDataset} onClick={downloadPdfReport}>
-                  Download PDF
-                </button>
-                <button className="ghost-button" type="button" disabled={!activeDataset || cleanupRunning || Boolean(activeDataset?.originalDatasetId)} onClick={cleanActiveDataset}>
-                  {cleanupRunning ? 'Cleaning...' : 'Clean Data'}
-                </button>
-                <button className="ghost-button" type="button" disabled={!activeCleanedDataset} onClick={() => downloadDatasetExport(activeCleanedDataset)}>
-                  Download Cleaned CSV
-                </button>
-                <button className="ghost-button" type="button" disabled={!activeDataset} onClick={saveCurrentDashboard}>
-                  Save dashboard
-                </button>
-              </div>
-
-              <label
-                className={`drop-zone ${isDragging ? 'dragging' : ''}`}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={handleDrop}
-              >
-                <input accept=".csv,.xlsx,.xls,.json,text/csv,application/json,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" type="file" onChange={handleDatasetUpload} />
-                <strong>Drop CSV, Excel, or JSON file here</strong>
-                <span>{selectedCompany ? `${selectedCompany.name}: ${uploadState}` : uploadState}</span>
-              </label>
-
-              <div className="dataset-strip">
-                {companyDatasets.map((dataset) => (
-                  <button
-                    className={activeDataset?.id === dataset.id ? 'selected' : ''}
-                    key={dataset.id}
-                    type="button"
-                    onClick={() => setActiveDataset(dataset)}
-                  >
-                    <strong>{dataset.fileName}</strong>
-                    <span>{dataset.rows} rows - {dataset.columns} columns - {(dataset.fileType ?? 'csv').toUpperCase()}</span>
-                    {dataset.worksheetName && <small>{dataset.worksheetName}</small>}
-                    <small>{dataset.originalDatasetId ? 'Cleaned dataset' : `Cleanup ${dataset.cleanupStatus ?? 'pending'}`}</small>
-                  </button>
-                ))}
-                {!companyDatasets.length && <span className="muted">No datasets for this company yet.</span>}
-              </div>
-
-              <p className="persistence-note">{persistenceState}</p>
-              {renderCleanupPanel(activeDataset, cleanupJobs, cleanupMessage, deleteCleanupJobRecord)}
-
-              <div className="csv-grid">
-                <article className="panel data-panel">
-                  <div className="panel-header">
-                    <h3>{activeDataset?.fileName ?? 'Data preview'}</h3>
-                    <div className="count-strip">
-                      <span>{activeDataset?.rows ?? 0} rows</span>
-                      <span>{activeDataset?.columns ?? 0} columns</span>
-                      <span>{(activeDataset?.fileType ?? 'csv').toUpperCase()}</span>
-                    </div>
-                  </div>
-
-                  {activeDataset ? (
-                    <>
-                      <div className="file-meta">
-                        <span>File type: {(activeDataset.fileType ?? 'csv').toUpperCase()}</span>
-                        <span>Cleanup status: {activeDataset.cleanupStatus ?? 'original'}</span>
-                        {activeDataset.worksheetName && <span>Worksheet: {activeDataset.worksheetName}</span>}
-                      </div>
-                      <div className="dataset-actions-row">
-                        <button className="ghost-button compact" type="button" onClick={() => downloadDatasetExport(activeDataset)}>
-                          Export CSV
-                        </button>
-                        <button className="ghost-button compact" type="button" onClick={cleanActiveDataset} disabled={cleanupRunning || Boolean(activeDataset.originalDatasetId)}>
-                          Reprocess
-                        </button>
-                        <button className="ghost-button compact" type="button" onClick={() => archiveDatasetRecord(activeDataset)}>
-                          Archive Dataset
-                        </button>
-                        <button className="ghost-button compact danger" type="button" disabled={deletingDatasetId === activeDataset.id} onClick={() => deleteDatasetRecord(activeDataset)}>
-                          {deletingDatasetId === activeDataset.id ? 'Deleting...' : 'Delete Dataset'}
-                        </button>
-                      </div>
-                      {asArray(activeDataset.worksheets).length > 1 && (
-                        <div className="sheet-tabs" aria-label="Worksheet tabs">
-                          {asArray(activeDataset.worksheets).map((sheetName) => (
-                            <button
-                              className={activeDataset.worksheetName === sheetName ? 'active' : ''}
-                              key={sheetName}
-                              type="button"
-                              onClick={() => selectWorksheet(sheetName)}
-                            >
-                              {sheetName}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="table-wrap">
-                        <table>
-                          <thead>
-                            <tr>
-                              {datasetHeaders(activeDataset).map((header) => (
-                                <th key={header}>{header}</th>
-                              ))}
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {datasetPreview(activeDataset).map((row, rowIndex) => (
-                              <tr key={`${activeDataset.id}-${rowIndex}`}>
-                                {datasetHeaders(activeDataset).map((header) => (
-                                  <td key={header}>{row[header]}</td>
-                                ))}
-                              </tr>
-                            ))}
-                            {!datasetPreview(activeDataset).length && (
-                              <tr><td colSpan={Math.max(datasetHeaders(activeDataset).length, 1)}>No preview rows are available for this dataset yet.</td></tr>
-                            )}
-                          </tbody>
-                        </table>
-                      </div>
-                    </>
-                  ) : (
-                    <div className="empty-state">No dataset uploaded yet.</div>
-                  )}
-                </article>
-
-                <aside className="side-stack">
-                  <article className="panel">
-                    <div className="panel-header">
-                      <div>
-                        <h3>Auto chart</h3>
-                        <p className="muted">{activeDataset ? `Showing ${activeDataset.chartColumn ?? 'dataset values'}` : 'A chart appears after upload.'}</p>
-                      </div>
-                      <div className="segmented" aria-label="Chart type">
-                        {(['bar', 'line', 'donut'] as ChartType[]).map((type) => (
-                          <button className={chartType === type ? 'active' : ''} key={type} type="button" onClick={() => setChartType(type)}>
-                            {type}
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-                    {renderChart(chartType, activeDataset, chartMax, linePoints)}
-                  </article>
-
-                  <article className="panel ai-panel">
-                    <h3>Business insights</h3>
-                    <ul>
-                      {(datasetInsights(activeDataset).length ? datasetInsights(activeDataset) : ['Upload a CSV or Excel file to generate clear, practical data insights.']).map((item) => (
-                        <li key={item}>{item}</li>
-                      ))}
-                    </ul>
-                  </article>
-                </aside>
-              </div>
-            </section>
-
-            <section className="history-grid">
-              <article className="panel">
-                <div className="panel-header">
-                  <h2>Saved dashboards</h2>
-                  <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
-                </div>
-                <div className="history-list">
-                  {companyDashboards.length ? companyDashboards.map((dashboard) => (
-                    <button key={dashboard.id} type="button" onClick={() => openDashboard(dashboard)}>
-                      <strong>{dashboard.name}</strong>
-                      <span>
-                        {dashboard.datasetName} - {dashboard.chartType} chart - {new Date(dashboard.updatedAt).toLocaleString()}
-                        {canManageUsers(user) && dashboard.ownerEmail ? ` - ${dashboard.ownerEmail}` : ''}
-                      </span>
-                    </button>
-                  )) : <p className="muted">No dashboards saved yet.</p>}
-                </div>
-              </article>
-
-              <article className="panel">
-                <div className="panel-header">
-                  <h2>Report history</h2>
-                  <button className="ghost-button compact" type="button" onClick={refreshHistory}>Refresh</button>
-                </div>
-                <div className="history-list">
-                  {companyReports.length ? companyReports.map((report) => (
-                    <div className="history-item" key={report.id}>
-                      <div>
-                        <strong>{report.title}</strong>
-                        <span>
-                          {report.datasetName} - {new Date(report.createdAt).toLocaleString()}
-                          {canManageUsers(user) && report.ownerEmail ? ` - ${report.ownerEmail}` : ''}
-                        </span>
-                      </div>
-                      <button className="ghost-button compact" type="button" onClick={() => downloadHistoricalReport(report)}>
-                        Download
-                      </button>
-                      <button className="ghost-button compact danger" type="button" onClick={() => deleteReportRecord(report)}>
-                        Delete Report
-                      </button>
-                    </div>
-                  )) : <p className="muted">Downloaded reports will appear here.</p>}
-                </div>
-              </article>
-            </section>
-
-            <section className="assistant-grid" id="assistant">
-              <article className="panel chat-panel">
-                <div className="panel-header">
-                  <h2>Business data assistant</h2>
-                  <span>{activeDataset ? activeDataset.fileName : 'No dataset selected'}</span>
-                </div>
-                <div className="messages">
-                  {chat.map((message, index) => (
-                    <div className={`message ${message.role}`} key={`${message.role}-${index}`}>
-                      {message.text}
-                    </div>
-                  ))}
-                </div>
-                <form className="chat-form" onSubmit={askAssistant}>
-                  <input
-                    disabled={!activeDataset}
-                    onChange={(event) => setQuestion(event.target.value)}
-                    placeholder="Ask about totals, averages, columns..."
-                    value={question}
-                  />
-                  <button disabled={!activeDataset || !question.trim()} type="submit">Ask</button>
-                </form>
-              </article>
-
-              <article className="panel">
-                <h2>Active workflows</h2>
-                <div className="workflow-list">
-                  {workflows.map((workflow) => (
-                    <div className="workflow-row" key={workflow.name}>
-                      <div>
-                        <strong>{workflow.name}</strong>
-                        <span>{workflow.owner} - {workflow.steps} steps</span>
-                      </div>
-                      <small>{workflow.status}</small>
-                    </div>
-                  ))}
-                </div>
-              </article>
-            </section>
-            </div>
           </>
         )}
       </section>
@@ -5926,6 +5491,7 @@ function ModuleWorkspacePage({
   const [connectorWorkflowState, setConnectorWorkflowState] = useState<Record<string, { configured?: boolean; tested?: boolean; previewed?: boolean; cleaned?: boolean; reportReady?: boolean }>>({});
   const [selectedReportType, setSelectedReportType] = useState('Executive Report');
   const [selectedReportCharts, setSelectedReportCharts] = useState<string[]>(['KPI Cards', 'Tables']);
+  const [generatedWorkspaceReports, setGeneratedWorkspaceReports] = useState<Array<{ id: string; title: string; source: string; reportType: string; charts: string[]; createdAt: string }>>([]);
   const [pipelineStudioMode, setPipelineStudioMode] = useState<'develop' | 'preview' | 'execute' | 'monitor'>('develop');
   const [pipelineZoom, setPipelineZoom] = useState(88);
   const [fullPreviewOpen, setFullPreviewOpen] = useState(false);
@@ -6609,6 +6175,15 @@ function ModuleWorkspacePage({
       return;
     }
     updateSelectedNodeWorkflow({ reportReady: true });
+    const report = {
+      id: `workspace-report-${Date.now()}`,
+      title: `${selectedReportType} - ${selectedPipelineBlock.label}`,
+      source: selectedPipelineBlock.label,
+      reportType: selectedReportType,
+      charts: selectedReportCharts,
+      createdAt: new Date().toISOString()
+    };
+    setGeneratedWorkspaceReports((current) => [report, ...current].slice(0, 8));
     setPipelineExecutionLogs((current) => [{
       id: `report-build-${Date.now()}`,
       message: `${selectedReportType} created from ${selectedPipelineBlock.label} with charts: ${selectedReportCharts.join(', ') || 'none selected'}.`,
@@ -7402,10 +6977,12 @@ function ModuleWorkspacePage({
             </div>
             {/(SQL Server|PostgreSQL|MySQL|Snowflake|Oracle)/i.test(selectedConnector) ? (
               <div className="source-config-grid">
-                <input placeholder="Server / warehouse" />
-                <input placeholder="Database / schema" />
-                <select><option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option></select>
-                <input placeholder="Username / role" />
+                <input placeholder="Server / warehouse" value={sourceConfig.host || (/SQL Server/i.test(selectedConnector) ? 'DESKTOP-1EOGPVO' : '')} onChange={(event) => setSourceConfig((current) => ({ ...current, host: event.target.value }))} />
+                <input placeholder="Database / schema" value={sourceConfig.database || (/SQL Server/i.test(selectedConnector) ? 'AdventureWorks2017' : '')} onChange={(event) => setSourceConfig((current) => ({ ...current, database: event.target.value }))} />
+                <select value={sourceConfig.username || (/SQL Server/i.test(selectedConnector) ? 'Windows authentication' : 'SQL authentication')} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))}>
+                  <option>SQL authentication</option><option>Windows authentication</option><option>OAuth / SSO</option>
+                </select>
+                <input placeholder="Username / role" value={/Windows authentication/i.test(sourceConfig.username) ? 'Current Windows identity' : sourceConfig.username} onChange={(event) => setSourceConfig((current) => ({ ...current, username: event.target.value }))} />
               </div>
             ) : /SharePoint|OneDrive|S3|Azure|Google Sheets/i.test(selectedConnector) ? (
               <div className="source-config-grid">
@@ -7434,6 +7011,18 @@ function ModuleWorkspacePage({
               <button type="button" onClick={() => discoverDataSourceSchema(selectedConnector)}>Discover tables/files</button>
               <button type="button" onClick={() => importFromConfiguredSource(selectedConnector)}>Preview data</button>
               <button type="button" onClick={() => setConnectorMessage(`${selectedConnector} reusable credentials saved with company-scoped permissions.`)}>Save credentials</button>
+            </div>
+            <div className="connector-live-preview">
+              <div>
+                <p className="eyebrow">Live preview</p>
+                <strong>{stagedDataset?.fileName ?? `${selectedConnector} preview not loaded`}</strong>
+                <span>{stagedDataset ? `${stagedDataset.rows} rows | ${stagedDataset.columns} columns | ${stagedDataset.status}` : 'Configure, test, then preview data before cleaning or reporting.'}</span>
+              </div>
+              <div className="inline-actions">
+                <button type="button" disabled={!stagedDataset} onClick={() => stagedDataset && setPreviewState({ dataset: stagedDataset, mode: 'edit' })}>Edit preview</button>
+                <button type="button" disabled={!stagedDataset} onClick={() => stagedDataset && normalizeDataset(stagedDataset)}>Clean data</button>
+                <button type="button" disabled={!stagedDataset} onClick={() => { setDataHubTab('pipelines'); if (stagedDataset) setActiveDataset(stagedDataset); }}>Build report</button>
+              </div>
             </div>
           </div>
           <div className="connector-accordion">
@@ -7640,6 +7229,15 @@ function ModuleWorkspacePage({
                     <button type="button" disabled={!selectedNodeWorkflow.cleaned || !selectedReportCharts.length} onClick={buildReportFromSelectedEndpoint}>
                       Build report/dashboard
                     </button>
+                    <div className="generated-report-tray">
+                      {generatedWorkspaceReports.length ? generatedWorkspaceReports.map((report) => (
+                        <button key={report.id} type="button" onClick={() => setConnectorMessage(`${report.title} reopened with ${report.charts.join(', ')}.`)}>
+                          <strong>{report.title}</strong>
+                          <span>{report.reportType} | {report.charts.join(', ')}</span>
+                          <small>{new Date(report.createdAt).toLocaleString()}</small>
+                        </button>
+                      )) : <span>No reports built from this node yet.</span>}
+                    </div>
                   </div>
                 </div>
               )}
