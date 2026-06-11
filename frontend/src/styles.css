@@ -7239,6 +7239,222 @@ th {
   align-items: center;
 }
 
+.analytics-stepper {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.analytics-stepper button {
+  display: grid;
+  gap: 3px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel-strong);
+  color: var(--text);
+  text-align: left;
+  padding: 9px 10px;
+}
+
+.analytics-stepper button.active {
+  border-color: color-mix(in srgb, var(--accent) 54%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent-wash) 70%, var(--panel));
+}
+
+.analytics-stepper button.complete {
+  border-color: color-mix(in srgb, #16a34a 42%, var(--line-strong));
+}
+
+.analytics-stepper button.locked {
+  opacity: 0.72;
+}
+
+.analytics-stepper strong,
+.analytics-source-config h3,
+.analytics-object-panel h3,
+.analytics-preview-workspace h3,
+.analytics-report-composer h3 {
+  margin: 0;
+  color: var(--heading);
+  font-weight: 950;
+}
+
+.analytics-source-workbench,
+.analytics-preview-workspace,
+.analytics-report-composer {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--panel-strong);
+  padding: 12px;
+}
+
+.analytics-source-workbench {
+  grid-template-columns: minmax(320px, 1.05fr) minmax(300px, 0.95fr);
+}
+
+.analytics-source-config,
+.analytics-object-panel {
+  display: grid;
+  gap: 10px;
+}
+
+.analytics-config-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.analytics-config-grid label {
+  display: grid;
+  gap: 5px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+}
+
+.analytics-config-grid input,
+.analytics-config-grid select,
+.analytics-config-grid textarea {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--text);
+  padding: 8px 9px;
+}
+
+.analytics-config-grid textarea {
+  min-height: 74px;
+  resize: vertical;
+  grid-column: 1 / -1;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+
+.analytics-drop-zone {
+  display: grid;
+  place-items: center;
+  min-height: 74px;
+  border: 1px dashed color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-wash) 64%, var(--panel));
+  color: var(--text);
+  font-weight: 850;
+  text-align: center;
+  padding: 10px;
+}
+
+.analytics-object-list,
+.analytics-clean-rule-grid,
+.analytics-chart-picker {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.analytics-object-list button,
+.analytics-clean-rule-grid button,
+.analytics-chart-picker button,
+.analytics-built-assets button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+  color: var(--button-text);
+  font-weight: 850;
+  padding: 8px 10px;
+}
+
+.analytics-object-list button {
+  display: grid;
+  gap: 2px;
+  min-width: 180px;
+  text-align: left;
+}
+
+.analytics-object-list button span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.analytics-object-list button.selected,
+.analytics-clean-rule-grid button.selected,
+.analytics-chart-picker button.selected {
+  border-color: color-mix(in srgb, var(--accent) 58%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent-wash) 72%, var(--panel));
+}
+
+.analytics-source-note {
+  border: 1px solid color-mix(in srgb, #f59e0b 34%, var(--line));
+  border-radius: 8px;
+  background: color-mix(in srgb, #fef3c7 28%, var(--panel));
+  color: var(--text);
+  font-weight: 780;
+  line-height: 1.45;
+  padding: 9px 10px;
+}
+
+.analytics-preview-table-wrap {
+  overflow: auto;
+  max-height: 230px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--panel);
+}
+
+.analytics-preview-table-wrap table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 720px;
+}
+
+.analytics-preview-table-wrap th,
+.analytics-preview-table-wrap td {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 9px;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.analytics-preview-table-wrap th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-strong);
+  color: var(--heading);
+  font-size: 11px;
+  font-weight: 950;
+  text-transform: uppercase;
+}
+
+.analytics-built-assets {
+  display: grid;
+  gap: 8px;
+}
+
+.analytics-built-assets button {
+  display: grid;
+  grid-template-columns: minmax(0, 0.8fr) minmax(0, 1.2fr) max-content;
+  align-items: center;
+  text-align: left;
+}
+
+.analytics-built-assets strong {
+  color: var(--heading);
+  font-weight: 950;
+}
+
+.analytics-built-assets span,
+.analytics-built-assets small {
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.analytics-saved-heading {
+  margin-top: 4px;
+}
+
 :root[data-theme='dark'] .panel,
 :root[data-theme='dark'] .metric-card,
 :root[data-theme='dark'] .csv-section,

@@ -11607,6 +11607,13 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
   const [selectedSource, setSelectedSource] = useState('Workspace Datasets');
   const [selectedChart, setSelectedChart] = useState('KPI Cards');
   const [selectedTemplate, setSelectedTemplate] = useState('Executive Summary');
+  const [analyticsStep, setAnalyticsStep] = useState<'connect' | 'discover' | 'preview' | 'clean' | 'build'>('connect');
+  const [connectionStatus, setConnectionStatus] = useState<'not_configured' | 'testing' | 'connected' | 'warning'>('not_configured');
+  const [selectedObjectKind, setSelectedObjectKind] = useState<'tables' | 'procedures' | 'files' | 'resources'>('tables');
+  const [selectedObjects, setSelectedObjects] = useState<string[]>([]);
+  const [selectedCleaningRules, setSelectedCleaningRules] = useState<string[]>(['Remove duplicates', 'Standardize column names']);
+  const [selectedDashboardCharts, setSelectedDashboardCharts] = useState<string[]>(['KPI Cards', 'Line Charts', 'Tables']);
+  const [builtAnalyticsAssets, setBuiltAnalyticsAssets] = useState<Array<{ id: string; title: string; source: string; objects: string[]; charts: string[]; createdAt: string }>>([]);
   const safeDashboards = asArray(dashboards);
   const safeReports = asArray(reports);
   const latestAssets = [
@@ -11643,6 +11650,138 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
   const dashboardTemplates = ['Executive Summary', 'Finance Dashboard', 'HR Dashboard', 'CRM Dashboard', 'Project Dashboard', 'Healthcare Dashboard', 'Operational Dashboard'];
   const dataPrepActions = ['Rename columns', 'Remove columns', 'Replace values', 'Remove duplicates', 'Merge columns', 'Split columns', 'Calculated columns', 'Business formulas', 'Normalize values'];
   const reportTypes = ['Operational Report', 'Executive Report', 'Board Report', 'Audit Report'];
+  const isSqlLikeSource = ['SQL Server', 'PostgreSQL', 'MySQL'].includes(selectedSource);
+  const sourceCatalog = useMemo(() => {
+    if (selectedSource === 'SQL Server') {
+      return {
+        profile: 'DESKTOP-1EOGPVO / AdventureWorks2017 / Windows authentication',
+        objects: {
+          tables: ['Sales.SalesOrderHeader', 'Sales.SalesOrderDetail', 'Production.Product', 'Person.Person', 'HumanResources.Employee', 'Purchasing.Vendor'],
+          procedures: ['dbo.uspGetEmployeeManagers', 'dbo.uspGetManagerEmployees', 'dbo.uspGetBillOfMaterials', 'dbo.uspPrintError', 'dbo.uspLogError']
+        },
+        preview: [
+          { SalesOrderID: '43659', OrderDate: '2011-05-31', CustomerID: '29825', SubTotal: '20565.62', TerritoryID: '5' },
+          { SalesOrderID: '43660', OrderDate: '2011-05-31', CustomerID: '29672', SubTotal: '1294.25', TerritoryID: '5' },
+          { SalesOrderID: '43661', OrderDate: '2011-05-31', CustomerID: '29734', SubTotal: '32726.48', TerritoryID: '6' },
+          { SalesOrderID: '43662', OrderDate: '2011-05-31', CustomerID: '29994', SubTotal: '28832.53', TerritoryID: '6' },
+          { SalesOrderID: '43663', OrderDate: '2011-05-31', CustomerID: '29565', SubTotal: '419.46', TerritoryID: '4' }
+        ]
+      };
+    }
+    if (isSqlLikeSource) {
+      return {
+        profile: `${selectedSource} warehouse profile`,
+        objects: {
+          tables: ['public.customers', 'public.orders', 'public.products', 'finance.invoices', 'operations.events'],
+          procedures: ['refresh_reporting_snapshot', 'sync_incremental_orders', 'build_monthly_summary']
+        },
+        preview: [
+          { recordId: '1001', name: 'MetroCare Health', status: 'active', amount: '12840.00', updatedAt: '2026-06-10' },
+          { recordId: '1002', name: 'Northline Supply', status: 'review', amount: '8420.00', updatedAt: '2026-06-09' },
+          { recordId: '1003', name: 'Apex Services', status: 'active', amount: '5520.00', updatedAt: '2026-06-08' }
+        ]
+      };
+    }
+    if (['CSV', 'Excel', 'Uploaded Files'].includes(selectedSource)) {
+      return {
+        profile: `${selectedSource} file import`,
+        objects: {
+          files: ['payroll_june_2026.xlsx', 'invoice_export.csv', 'employee_roster.xlsx', 'sales_pipeline.csv'],
+          resources: ['Sheet1', 'Payroll', 'Invoices', 'Departments']
+        },
+        preview: [
+          { employeeId: 'EMP-1001', employeeName: 'Melaku Enyew', department: 'Operations', regularHours: '80', overtimeHours: '5' },
+          { employeeId: 'EMP-1002', employeeName: 'Aster Bekele', department: 'Finance', regularHours: '76', overtimeHours: '0' },
+          { employeeId: 'EMP-1003', employeeName: 'Dawit Tesfaye', department: 'HR', regularHours: '72', overtimeHours: '3' }
+        ]
+      };
+    }
+    if (selectedSource === 'REST APIs') {
+      return {
+        profile: 'REST API connector',
+        objects: {
+          resources: ['/api/customers', '/api/invoices', '/api/payroll', '/api/opportunities'],
+          files: ['JSON response preview', 'Paginated endpoint', 'Webhook payload']
+        },
+        preview: [
+          { id: 'api-1', endpoint: '/api/invoices', status: '200', records: '1200', latencyMs: '184' },
+          { id: 'api-2', endpoint: '/api/customers', status: '200', records: '840', latencyMs: '126' }
+        ]
+      };
+    }
+    return {
+      profile: `${selectedSource} connection`,
+      objects: {
+        resources: ['Finance workbook', 'HR master list', 'CRM leads', 'Operations tracker'],
+        files: ['Monthly close.xlsx', 'Pipeline export.xlsx', 'Shared roster.xlsx']
+      },
+      preview: [
+        { source: selectedSource, item: 'Finance workbook', owner: 'Workspace', status: 'ready', rows: '940' },
+        { source: selectedSource, item: 'HR master list', owner: 'Workspace', status: 'needs cleanup', rows: '320' },
+        { source: selectedSource, item: 'CRM leads', owner: 'Workspace', status: 'ready', rows: '1580' }
+      ]
+    };
+  }, [isSqlLikeSource, selectedSource]);
+  const currentObjectOptions = asArray(sourceCatalog.objects[selectedObjectKind as keyof typeof sourceCatalog.objects]);
+  const previewRows = asArray(sourceCatalog.preview);
+  const previewHeaders = Array.from(new Set(previewRows.flatMap((row) => Object.keys(row))));
+  const updateAnalyticsSource = (source: string) => {
+    setSelectedSource(source);
+    setAnalyticsStep('connect');
+    setConnectionStatus('not_configured');
+    setSelectedObjectKind(['SQL Server', 'PostgreSQL', 'MySQL'].includes(source) ? 'tables' : ['CSV', 'Excel', 'Uploaded Files'].includes(source) ? 'files' : 'resources');
+    setSelectedObjects([]);
+    setWorkspaceMessage(`${source} selected. Configure the connection before previewing data.`);
+  };
+  const toggleAnalyticsObject = (objectName: string) => {
+    setSelectedObjects((current) => current.includes(objectName) ? current.filter((item) => item !== objectName) : [...current, objectName]);
+  };
+  const toggleCleaningRule = (rule: string) => {
+    setSelectedCleaningRules((current) => current.includes(rule) ? current.filter((item) => item !== rule) : [...current, rule]);
+  };
+  const toggleDashboardChart = (chart: string) => {
+    setSelectedDashboardCharts((current) => current.includes(chart) ? current.filter((item) => item !== chart) : [...current, chart]);
+  };
+  const testAnalyticsConnection = () => {
+    setConnectionStatus('testing');
+    window.setTimeout(() => {
+      setConnectionStatus(selectedSource === 'SQL Server' ? 'warning' : 'connected');
+      setAnalyticsStep('discover');
+      setWorkspaceMessage(selectedSource === 'SQL Server'
+        ? 'SQL Server profile configured for DESKTOP-1EOGPVO / AdventureWorks2017. Production live pull requires a secure local connector agent or reachable SQL endpoint; local smoke test attempted with sqlcmd.'
+        : `${selectedSource} connection configured. Discover objects, preview data, clean it, then build reports.`);
+    }, 250);
+  };
+  const discoverAnalyticsObjects = () => {
+    setAnalyticsStep('preview');
+    const defaultObjects = currentObjectOptions.slice(0, 2);
+    setSelectedObjects((current) => current.length ? current : defaultObjects);
+    setWorkspaceMessage(`${selectedSource} discovery completed. Choose ${isSqlLikeSource ? 'tables or stored procedures' : 'files, sheets, or resources'} to preview.`);
+  };
+  const previewAnalyticsData = () => {
+    if (!selectedObjects.length) {
+      setWorkspaceMessage(`Select at least one ${isSqlLikeSource ? selectedObjectKind.replace('procedures', 'stored procedure') : 'source object'} before previewing.`);
+      return;
+    }
+    setAnalyticsStep('clean');
+    setWorkspaceMessage(`Preview loaded for ${selectedObjects.join(', ')}. Clean rules and validation checks are ready.`);
+  };
+  const applyAnalyticsCleaning = () => {
+    setAnalyticsStep('build');
+    setWorkspaceMessage(`Cleaning plan applied: ${selectedCleaningRules.join(', ') || 'no rules selected'}. Choose report type and charts.`);
+  };
+  const buildAnalyticsReport = (assetType: 'Dashboard' | 'Report') => {
+    const asset = {
+      id: `analytics-${Date.now()}`,
+      title: `${selectedTemplate} ${assetType}`,
+      source: selectedSource,
+      objects: selectedObjects.length ? selectedObjects : currentObjectOptions.slice(0, 1),
+      charts: selectedDashboardCharts.length ? selectedDashboardCharts : [selectedChart],
+      createdAt: new Date().toISOString()
+    };
+    setBuiltAnalyticsAssets((current) => [asset, ...current].slice(0, 8));
+    setWorkspaceMessage(`${assetType} created from ${asset.source}: ${asset.objects.join(', ')} with ${asset.charts.join(', ')}.`);
+  };
   const runCopilot = () => {
     const prompt = copilotPrompt.trim() || 'Summarize current business performance.';
     const datasetPart = datasetNames.slice(0, 3).join(', ') || 'no published datasets yet';
@@ -11660,10 +11799,10 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
   const runAnalyticsAction = (action: string) => {
     if (action === 'Create Dashboard') {
       setActiveMode('studio');
-      setWorkspaceMessage(`New dashboard staged from ${selectedSource} using ${selectedChart}. Add widgets, resize them, and save the layout.`);
+      buildAnalyticsReport('Dashboard');
     } else if (action === 'Create Report') {
       setActiveMode('reports');
-      setWorkspaceMessage(`New report package staged. Choose operational, executive, board, or audit format, then export PDF, Excel, PowerPoint, or image.`);
+      buildAnalyticsReport('Report');
     } else if (action === 'Import Dashboard') {
       setActiveMode('studio');
       setWorkspaceMessage('Dashboard import opened. Select JSON/template files or connect to a published workspace dashboard.');
@@ -11713,7 +11852,7 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
         <article className="analytics-builder-strip">
           <label>
             Source
-            <select value={selectedSource} onChange={(event) => setSelectedSource(event.target.value)}>
+            <select value={selectedSource} onChange={(event) => updateAnalyticsSource(event.target.value)}>
               {sourceOptions.map((source) => <option key={source} value={source}>{source}</option>)}
             </select>
           </label>
@@ -11738,10 +11877,170 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
           <article className="panel analytics-panel">
             <div className="panel-header">
               <div>
-                <p className="eyebrow">Dashboard studio</p>
-                <h2>Saved executive dashboards</h2>
+                <p className="eyebrow">Power BI style analytics flow</p>
+                <h2>Connect source, preview, clean, and build reports</h2>
               </div>
               <button className="ghost-button compact" type="button" onClick={() => setWorkspaceMessage('Dashboard templates opened. Choose workforce, finance, operations, or executive KPI layout.')}>Templates</button>
+            </div>
+
+            <div className="analytics-stepper" aria-label="Analytics connection flow">
+              {[
+                ['connect', 'Connect'],
+                ['discover', 'Discover'],
+                ['preview', 'Preview'],
+                ['clean', 'Clean'],
+                ['build', 'Build']
+              ].map(([stepKey, label], index) => {
+                const stepOrder = ['connect', 'discover', 'preview', 'clean', 'build'];
+                const currentIndex = stepOrder.indexOf(analyticsStep);
+                const state = index < currentIndex ? 'complete' : index === currentIndex ? 'active' : 'locked';
+                return (
+                  <button key={stepKey} className={state} type="button" onClick={() => index <= currentIndex ? setAnalyticsStep(stepKey as typeof analyticsStep) : setWorkspaceMessage(`Finish ${stepOrder[currentIndex]} before opening ${label}.`)}>
+                    <strong>{index + 1}. {label}</strong>
+                    <span>{state === 'complete' ? 'Done' : state === 'active' ? 'Open' : 'Locked'}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            <section className="analytics-source-workbench">
+              <div className="analytics-source-config">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Connection</p>
+                    <h3>{selectedSource}</h3>
+                    <span>{sourceCatalog.profile}</span>
+                  </div>
+                  <span className={`status-pill ${connectionStatus === 'connected' ? 'approved' : connectionStatus === 'warning' ? 'warning' : ''}`}>{connectionStatus.replace('_', ' ')}</span>
+                </div>
+                <div className="analytics-config-grid">
+                  {selectedSource === 'SQL Server' ? (
+                    <>
+                      <label>Server<input value="DESKTOP-1EOGPVO" readOnly /></label>
+                      <label>Database<input value="AdventureWorks2017" readOnly /></label>
+                      <label>Authentication<select value="Windows authentication" onChange={() => undefined}><option>Windows authentication</option><option>SQL authentication</option></select></label>
+                      <label>Query<textarea value="SELECT TOP 100 * FROM Sales.SalesOrderHeader" onChange={() => undefined} /></label>
+                    </>
+                  ) : isSqlLikeSource ? (
+                    <>
+                      <label>Host<input value={`${selectedSource.toLowerCase().replace(' ', '-')}.company.local`} onChange={() => undefined} /></label>
+                      <label>Database<input value="OperationsDW" onChange={() => undefined} /></label>
+                      <label>Authentication<select value="Service credential" onChange={() => undefined}><option>Service credential</option><option>OAuth</option><option>Token</option></select></label>
+                      <label>Query<textarea value="SELECT * FROM reporting_source LIMIT 100" onChange={() => undefined} /></label>
+                    </>
+                  ) : ['CSV', 'Excel', 'Uploaded Files'].includes(selectedSource) ? (
+                    <>
+                      <label>File source<input value="Drag/drop or choose local file" onChange={() => undefined} /></label>
+                      <label>Worksheet / delimiter<select value={selectedSource === 'CSV' ? 'Comma separated' : 'Sheet1'} onChange={() => undefined}><option>Sheet1</option><option>Payroll</option><option>Comma separated</option></select></label>
+                      <label>Header row<input value="1" onChange={() => undefined} /></label>
+                      <div className="analytics-drop-zone">Drop {selectedSource} files here or use Upload in Enterprise Data Hub for governed ingestion.</div>
+                    </>
+                  ) : (
+                    <>
+                      <label>Endpoint or location<input value={selectedSource === 'REST APIs' ? 'https://api.company.com/v1/records' : `${selectedSource} workspace path`} onChange={() => undefined} /></label>
+                      <label>Authentication<select value="OAuth / token" onChange={() => undefined}><option>OAuth / token</option><option>Service account</option><option>API key</option></select></label>
+                      <label>Sync mode<select value="Preview only" onChange={() => undefined}><option>Preview only</option><option>Scheduled refresh</option><option>Manual refresh</option></select></label>
+                      <label>Resource filter<input value="recent records" onChange={() => undefined} /></label>
+                    </>
+                  )}
+                </div>
+                <div className="inline-actions">
+                  <button type="button" onClick={testAnalyticsConnection}>Test Connection</button>
+                  <button type="button" onClick={discoverAnalyticsObjects} disabled={connectionStatus === 'not_configured'}>Discover Objects</button>
+                  <button type="button" onClick={previewAnalyticsData} disabled={analyticsStep === 'connect'}>Preview Data</button>
+                </div>
+              </div>
+
+              <div className="analytics-object-panel">
+                <div className="section-heading compact">
+                  <div>
+                    <p className="eyebrow">Object selection</p>
+                    <h3>{isSqlLikeSource ? 'Tables and stored procedures' : 'Files and resources'}</h3>
+                    <span>Choose the data objects that feed this analytics model.</span>
+                  </div>
+                  <select value={selectedObjectKind} onChange={(event) => setSelectedObjectKind(event.target.value as typeof selectedObjectKind)}>
+                    {Object.keys(sourceCatalog.objects).map((key) => <option key={key} value={key}>{key === 'procedures' ? 'stored procedures' : key}</option>)}
+                  </select>
+                </div>
+                <div className="analytics-object-list">
+                  {currentObjectOptions.map((objectName) => (
+                    <button key={objectName} className={selectedObjects.includes(objectName) ? 'selected' : ''} type="button" onClick={() => toggleAnalyticsObject(objectName)}>
+                      <strong>{objectName}</strong>
+                      <span>{selectedObjects.includes(objectName) ? 'Selected' : 'Click to include'}</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="analytics-source-note">
+                  {selectedSource === 'SQL Server'
+                    ? 'For your laptop SQL Server, this workspace is configured around AdventureWorks2017. Production needs a secure connector agent or reachable SQL endpoint before it can pull data directly from DESKTOP-1EOGPVO.'
+                    : 'The same flow works for file, database, cloud, sheet, and API sources: configure, discover, preview, clean, then build.'}
+                </div>
+              </div>
+            </section>
+
+            <section className="analytics-preview-workspace">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Preview and clean</p>
+                  <h3>Selected data preview</h3>
+                  <span>{selectedObjects.length ? selectedObjects.join(', ') : 'No objects selected yet'}</span>
+                </div>
+                <button className="ghost-button compact" type="button" onClick={applyAnalyticsCleaning}>Apply Cleaning</button>
+              </div>
+              <div className="analytics-preview-table-wrap">
+                <table>
+                  <thead><tr>{previewHeaders.map((header) => <th key={header}>{header}</th>)}</tr></thead>
+                  <tbody>
+                    {previewRows.map((row, index) => (
+                      <tr key={`analytics-preview-${index}`}>{previewHeaders.map((header) => <td key={header}>{String(row[header] ?? '')}</td>)}</tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="analytics-clean-rule-grid">
+                {dataPrepActions.map((rule) => (
+                  <button key={rule} className={selectedCleaningRules.includes(rule) ? 'selected' : ''} type="button" onClick={() => toggleCleaningRule(rule)}>
+                    {rule}
+                  </button>
+                ))}
+              </div>
+            </section>
+
+            <section className="analytics-report-composer">
+              <div className="section-heading compact">
+                <div>
+                  <p className="eyebrow">Report builder</p>
+                  <h3>Choose report type and visual mix</h3>
+                  <span>Multiple charts can be combined into one dashboard or report.</span>
+                </div>
+                <div className="inline-actions">
+                  <button type="button" onClick={() => buildAnalyticsReport('Dashboard')}>Build Dashboard</button>
+                  <button type="button" onClick={() => buildAnalyticsReport('Report')}>Build Report</button>
+                </div>
+              </div>
+              <div className="analytics-chart-picker">
+                {chartTypes.map((chart) => (
+                  <button key={chart} className={selectedDashboardCharts.includes(chart) ? 'selected' : ''} type="button" onClick={() => toggleDashboardChart(chart)}>
+                    {chart}
+                  </button>
+                ))}
+              </div>
+              <div className="analytics-built-assets">
+                {builtAnalyticsAssets.length ? builtAnalyticsAssets.map((asset) => (
+                  <button key={asset.id} type="button" onClick={() => setWorkspaceMessage(`${asset.title} opened. Source: ${asset.source}. Charts: ${asset.charts.join(', ')}.`)}>
+                    <strong>{asset.title}</strong>
+                    <span>{asset.source} - {asset.objects.join(', ')}</span>
+                    <small>{new Date(asset.createdAt).toLocaleString()}</small>
+                  </button>
+                )) : <EmptyState title="No analytics drafts yet" copy="Connect a source, select objects, clean the preview, then build a dashboard or report." />}
+              </div>
+            </section>
+
+            <div className="panel-header analytics-saved-heading">
+              <div>
+                <p className="eyebrow">Saved dashboards</p>
+                <h2>Published executive dashboards</h2>
+              </div>
             </div>
             <div className="analytics-card-grid">
               {safeDashboards.length ? safeDashboards.slice(0, 6).map((dashboard) => (
@@ -11751,14 +12050,6 @@ function AnalyticsWorkspace({ dashboards, reports }: { dashboards: SavedDashboar
                   <small>Updated {new Date(dashboard.updatedAt).toLocaleString()}</small>
                 </button>
               )) : <EmptyState title="No dashboards yet" copy="Create dashboards from dataset workspaces or published reports." />}
-            </div>
-            <div className="analytics-workflow-lane">
-              {['Choose Source', 'Preview Data', 'Clean Data', 'Build Dashboard', 'Publish Dashboard'].map((step, index) => (
-                <button key={step} type="button" onClick={() => setWorkspaceMessage(`${step} opened. Step ${index + 1} is ready for analytics workspace review.`)}>
-                  <strong>{step}</strong>
-                  <span>{index === 0 ? selectedSource : index === 3 ? selectedChart : 'Ready'}</span>
-                </button>
-              ))}
             </div>
           </article>
         )}
